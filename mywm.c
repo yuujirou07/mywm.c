@@ -2,6 +2,7 @@
 #include <assert.h>
 #include <getopt.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <time.h>
@@ -64,14 +65,31 @@
     //テクスチャ構造体
     struct wlr_texture *background_tex;
 
+    //ハードウェアカーソル
     struct wlr_pointer pointer;
 
+    //論理カーソル
     struct wlr_cursor *cursor;
 
     //マウスリスナー
     struct wl_listener  mouce_listener;
 
     struct wlr_xcursor_manager *cursor_mgr ;
+
+    //タスクバーピクセル
+    uint32_t *taskbar_pix;
+
+    //タスクバーテクスチャ
+    // (vramに移すためにtaskbar_pixを生のピクセルデータに変換したものをいれる変数)
+    struct wlr_texture *taskbar_tex;
+
+    //xdg_shell: wlrootsがそのリクエストを受け取り、
+    // struct wlr_xdg_toplevel という「型」のデータを作る。
+    struct wlr_xdg_shell *xdg_shell;
+
+    struct wl_list views; // 表示するウィンドウ（view）のリスト
+    
+    struct wl_listener new_xdg_toplevel; // 新しいウィンドウが作られた時のリスナー
 
     };
 
@@ -81,11 +99,32 @@ struct my_pointer {
     struct wl_listener motion;
 };
 
+//タスクバー関係
+struct taskbar {
+    bool taskbar_rend;
+    bool firsttaskbar;
+    //タスクバーの透明度
+    float taskbar_alpha;
+    //タスクバーの高さ
+    int taskbar_height;
+};
+
+struct view{
+    struct wl_list link;
+    struct wlr_xdg_toplevel *toplevel;
+    double x, y; // 画面上のどこに置くか
+};
+
 
 //面倒くさいからグローバル変数として扱う
 struct server s1 = {0};
 
-struct my_pointer *ptr ={0};
+struct taskbar taskbar_v1 ={0};
+
+//ハードウェアカーソルの許容個数
+struct my_pointer *ptr[10] ={0};
+
+int a=0;
 
 //h_keyのプロトタイプ宣言
 void h_key(struct wl_listener *listener,void *data);
@@ -104,9 +143,11 @@ void output_frame(struct wl_listener *listener,void *data);
 
 void newinput_mouce(struct wl_listener *listener,void *data);
 
-int a=0;
+void server_new_xdg_toplevel(struct wl_listener *listener, void *data);
 
-int main(void){
+
+int main(int argc,char *argv[]){
+    wlr_log_init(WLR_DEBUG,NULL);
 
     // 最初に初期化
     wl_list_init(&s1.new_input.link);
@@ -128,6 +169,9 @@ int main(void){
     GError *img_error = NULL;
 
     GdkPixbuf  *pixbuf = gdk_pixbuf_new_from_file("wp.jpg",&img_error);
+
+    // 1. xdg_shellの作成
+    s1.xdg_shell = wlr_xdg_shell_create(s1.display,3);
     
     if(!pixbuf){
         printf("NOWALLPAPER");
@@ -222,44 +266,33 @@ int main(void){
 
 
     // 1. まずリスナーを「登録した場所」から確実に外す
-    // if文でチェックすることで、デバイスが接続されなかった時のクラッシュを防ぐ
-    if (!wl_list_empty(&s1.new_input.link)) {
-        wl_list_remove(&s1.new_input.link);
-    }
-    if (!wl_list_empty(&s1.new_output.link)) {
-        wl_list_remove(&s1.new_output.link);
-    }
-    if (!wl_list_empty(&s1.frame.link)){
-        wl_list_remove(&s1.frame.link);
-    }
+    wl_list_remove(&s1.new_input.link);
+    
+    wl_list_remove(&s1.new_output.link);
+    wl_list_remove(&s1.frame.link);
     
     // キーボードとマウスは「デバイス」に紐付いているため、
-    // 本来はデバイス破棄時に消すべきですが、簡易的には以下のようにします
-    if (!wl_list_empty(&s1.key.link)) {
-        wl_list_remove(&s1.key.link);
-    }
-    if (ptr) {
-        if (!wl_list_empty(&ptr->motion.link)) {
-            wl_list_remove(&ptr->motion.link);
+    wl_list_remove(&s1.key.link);
+    for(int h=0;h<10;h++){
+        if (ptr[h] == NULL) {
+            continue; // マウスが登録されていない枠はスキップ
         }
-        free(ptr);
-        ptr = NULL; // 二重解放防止
+        // リストに繋がっているなら外す
+        if(!wl_list_empty(&ptr[h]->motion.link)){
+            wl_list_remove(&ptr[h]->motion.link);
+        }
+        free(ptr[h]);
+        ptr[h]=NULL;
     }
-
-    // 2. 重要：バックエンドを壊す前に「ディスプレイ」を止める
-    // wlr_backend_destroy は内部で全デバイスを release しようとします。
-    // その時にリスナーが残っているとアサーションに引っかかるので、
-    // 順番としては先にリスナーを外すのが正解です。
-    
-    wlr_backend_destroy(s1.backend);
+    wlr_xcursor_manager_destroy(s1.cursor_mgr);
+    wlr_cursor_destroy(s1.cursor);
+    wl_display_destroy_clients(s1.display);
 
     // 3. 残りのリソース解放
-    if (s1.background_tex) wlr_texture_destroy(s1.background_tex);
-    if (s1.cursor) wlr_cursor_destroy(s1.cursor);
-    if (s1.cursor_mgr) wlr_xcursor_manager_destroy(s1.cursor_mgr);
-    
+    wlr_texture_destroy(s1.background_tex);
     wlr_renderer_destroy(s1.renderer);
     wlr_allocator_destroy(s1.allocator);
+    wlr_backend_destroy(s1.backend);
     wl_display_destroy(s1.display);
 
     return 0;
@@ -317,21 +350,18 @@ void newinput_device(struct wl_listener *listener,void *data){
 
     //もしデバイスタイプがキーボードだったら
     if(device->type == WLR_INPUT_DEVICE_POINTER){
+        if(a>=10)return;
 
-        ptr = calloc(1,sizeof(*ptr));
-        ptr->device=device;
-        ptr->motion.notify = newinput_mouce;
+        ptr[a] = calloc(1,sizeof(*ptr[0]));
+        ptr[a]->device=device;
+        ptr[a]->motion.notify = newinput_mouce;
         wlr_cursor_attach_input_device(s1->cursor,device);
-        wl_signal_add(&s1->cursor->events.motion,&ptr->motion);
+        wl_signal_add(&s1->cursor->events.motion,&ptr[a]->motion);
+        a++;
         return;
     }
 
     if(device->type == WLR_INPUT_DEVICE_KEYBOARD){
-        if(!(a==0)){
-            return;
-        }
-        a++;
-
     
         //インプットデバイスからキーボード構造体を受け取る
         s1->keyboard = wlr_keyboard_from_input_device(device);
@@ -420,7 +450,11 @@ void function_set(){
 
     //描画可能シグナルとoutput_frame関数を実行する
     s1.frame.notify = output_frame;
+
+    // 新しいウィンドウが要求された時に呼ばれる関数を登録
+    s1.new_xdg_toplevel.notify = server_new_xdg_toplevel;
 }
+
 
 //描画関数
 void output_frame(struct wl_listener *listener,void *data){
@@ -449,9 +483,60 @@ void output_frame(struct wl_listener *listener,void *data){
     options.dst_box.width = output->width;   // モニタの横幅いっぱい
     options.dst_box.height = output->height; // モニタの縦幅いっぱい
 
-
-    //passにモニタに描画する物を追加する
+    //passにモニタに描画する物を追加する(これは壁紙の追加関数)
     wlr_render_pass_add_texture(pass,&options);
+
+    if(taskbar_v1.firsttaskbar == 0){
+        //ピクセルのデータをいれる変数を初期化
+        s1.taskbar_pix = calloc(options.dst_box.width*70,sizeof(uint32_t));
+        //タスクバーを表示したい範囲分forを回す
+        for(int i=0;i<options.dst_box.width*70;i++){
+            //黒色を代入
+            s1.taskbar_pix[i] = 0xFF000000;
+        } 
+        //一回しかif(firsttaskbar == 0)が回らないようにする
+        taskbar_v1.firsttaskbar = 1;
+        //メモリからvramに渡す
+        s1.taskbar_tex = wlr_texture_from_pixels(
+            s1.renderer,
+            DRM_FORMAT_ABGR8888,
+            output->width * sizeof(uint32_t),
+            output->width,
+            70,
+            s1.taskbar_pix
+        );
+        //メモリにあるピクセルデータを解放する
+        free(s1.taskbar_pix);
+    }
+
+    //タスクバーの出現設定
+    if(s1.cursor->y <= output->height-180){
+         if(taskbar_v1.taskbar_height>=0){
+            taskbar_v1.taskbar_height-=5;
+        }
+
+    }
+    else if(taskbar_v1.taskbar_height<=70){
+            taskbar_v1.taskbar_height+=5;
+    }
+
+    taskbar_v1.taskbar_alpha=0.4;
+
+    if (s1.taskbar_tex) {
+        //テクスチャをどの座標のピクセルから描くか
+        struct wlr_render_texture_options bar_opt = {
+            .texture = s1.taskbar_tex,//タスクバーのテクスチャ
+            .dst_box= {//座標
+                .x = 0, 
+                .y = output->height - taskbar_v1.taskbar_height, // 画面の下端に配置
+                .width = output->width, 
+                .height =  taskbar_v1.taskbar_height,
+            },
+            .alpha = &taskbar_v1.taskbar_alpha//透明度
+        };
+        //タスクバーの追加関数
+        wlr_render_pass_add_texture(pass, &bar_opt);
+    }
 
     //passをgpに送る
     wlr_render_pass_submit(pass);
@@ -463,10 +548,15 @@ void output_frame(struct wl_listener *listener,void *data){
 }
 
 void newinput_mouce(struct wl_listener *listener,void *data){
-    struct wlr_pointer_motion_event *mouce = data;
-    wlr_cursor_move(s1.cursor,&mouce->pointer->base,mouce->delta_x,mouce->delta_y);
-    wlr_cursor_set_xcursor(s1.cursor,s1.cursor_mgr,"left_ptr");       
 
-    
+    //dataをローカル変数に渡す
+    struct wlr_pointer_motion_event *mouce = data;
+
+    //前フレームからのマウスの移動量をカーソルの座標に反映させる
+    wlr_cursor_move(s1.cursor,&mouce->pointer->base,mouce->delta_x,mouce->delta_y);
+
+    //論理カーソルを描画する
+    wlr_cursor_set_xcursor(s1.cursor,s1.cursor_mgr,"left_ptr");  
 
 }
+ void server_new_xdg_toplevel(struct wl_listener *listener, void *data);
