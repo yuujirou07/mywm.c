@@ -44,9 +44,10 @@ gdk_pixbuf = dependency('gdk-pixbuf-2.0')
 
 # 実行ファイルの定義
 executable(
-    'mywm',              # [位置引数1] 生成されるファイル名
-    'mywm.c',            # [位置引数2] ソースファイル名（ここが dependencies より後ろだとエラー）
-    dependencies: [      # [キーワード引数] ここからは名前付き
+    'mywm',
+    ['mywm.c', xdg_shell_c, xdg_shell_h],  # ← xdg_shell_c と xdg_shell_h を追加
+    include_directories: xdg_shell_inc,
+    dependencies: [
         wlroots,
         wayland_server,
         xkbcommon,
