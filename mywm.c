@@ -33,6 +33,8 @@
 #include <wlr/render/pass.h>
 #include <wlr/types/wlr_linux_dmabuf_v1.h>
 #include<linux/input-event-codes.h>
+#include <libinput.h>
+#include <wlr/backend/libinput.h>
 #include <wlr/types/wlr_drm.h> 
 #include <signal.h>
   struct server {
@@ -102,6 +104,14 @@
     struct wlr_decoration_manager *decoration_manager; // ウィンドウの装飾を管理する構造体
 
     struct view *grabbed_view; // ドラッグ中のウィンドウを保持する構造体
+
+    struct view *resizing_view; //リサイズ中のウィンドウを保持する構造体
+
+    struct wl_listener key_modifier; // キーの修飾キーが変化したときのリスナー
+
+    char *cursor_image; // カーソルの画像名を保持する変数
+
+    int window_side;
     };
 
 //マウスの構造体
@@ -153,6 +163,8 @@ struct mouce_taskbar_pos {
 };
 struct mouce_taskbar_pos mtb_pos = {0};
 
+//キーの修飾キーが変化したときに呼ばれる関数のプロトタイプ宣言
+void modifire_key(struct wl_listener *listener, void *data);
 
 //マウスのボタンイベントが発生したときに呼ばれる関数のプロトタイプ宣言
 void newinput_moucebotton(struct wl_listener *listener,void *data);
@@ -379,6 +391,7 @@ int main(int argc,char *argv[]){
 
 //キーイベントが発生したときに呼ばれる関数
 void h_key(struct wl_listener *listener,void *data){
+      printf("h_key keyboard address: %p\n", s1.keyboard);
 
     //キーボード構造体を取得（グローバル変数s1を使っている前提）
     struct wlr_keyboard *keyboard = s1.keyboard;
@@ -388,9 +401,6 @@ void h_key(struct wl_listener *listener,void *data){
 
      //フォーカス中のクライアントにキーイベントを転送する関数です。引数は、シート、イベントの時間、キーコード、キーの状態（押されたか離されたか）です。
     wlr_seat_keyboard_notify_key(s1.seat, event->time_msec, event->keycode, event->state);
-
-    //Shift・Ctrl・Alt などの修飾キーの状態をクライアントに送る関数
-    wlr_seat_keyboard_notify_modifiers(s1.seat, &keyboard->modifiers);
 
     //もしキーが離されたときのイベントだったら、以降の処理をしない
     if (event->state != WL_KEYBOARD_KEY_STATE_PRESSED) {
@@ -419,7 +429,7 @@ void h_key(struct wl_listener *listener,void *data){
         // name[64]にいれる(文字コードのような概念)
         xkb_keysym_get_name(syms[i],name,sizeof(name));
         printf("%s\n",name);
-        if(strcmp(name,"p") == 0){
+        if(strcmp(name,"Escape") == 0){
             wl_display_terminate(s1.display);
         }
     }
@@ -443,8 +453,16 @@ void newinput_device(struct wl_listener *listener,void *data){
         ptr[a]->motion.notify = newinput_mouce;
         ptr[a]->button.notify = newinput_moucebotton;
 
+        //libinputデバイスか確認
+        if (wlr_input_device_is_libinput(ptr[a]->device)) {
+             //生のlibinput_deviceのポインタ取得
+            struct libinput_device *ldev =wlr_libinput_get_device_handle(ptr[a]->device);
+            //ポインタの中身のポインタデバイスのタップ機能を有効にする
+            libinput_device_config_tap_set_enabled(ldev,LIBINPUT_CONFIG_TAP_ENABLED);
+        }
+
         //カーソルと物理マウスを紐付ける関数
-        wlr_cursor_attach_input_device(s1->cursor,device);
+        wlr_cursor_attach_input_device(s1->cursor,ptr[a]->device);
 
         //マウスが動いたときに発火する
         wl_signal_add(&s1->cursor->events.motion,&ptr[a]->motion);
@@ -463,9 +481,17 @@ void newinput_device(struct wl_listener *listener,void *data){
         //コンテキスト（キーボードの状態などを扱うための作業領域）を確保する
         struct xkb_context *context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
 
+        //キーボードのレイアウトをjpにする
+        struct xkb_rule_names rules = {
+        .layout = "jp",
+        };
+
         //キーマップを作成する。物理キーコード(キーID（数値）)を論理キー（例えば A や Enter）に変換る
         //OS がどのキーを押したかを解釈するために必要
-        struct xkb_keymap *keymap = xkb_keymap_new_from_names(context, NULL, XKB_KEYMAP_COMPILE_NO_FLAGS);
+        struct xkb_keymap *keymap = xkb_keymap_new_from_names(context, &rules, XKB_KEYMAP_COMPILE_NO_FLAGS);
+
+        //キーボードの状態を管理する構造体を作成する。これがないと、OSはどのキーが押されているかを把握できない
+        xkb_state_new(keymap);
 
         //XKB keymap をキーボードに紐付ける関数
         wlr_keyboard_set_keymap(s1->keyboard, keymap);
@@ -477,6 +503,9 @@ void newinput_device(struct wl_listener *listener,void *data){
         // s1->key_event は signal に listener を登録すwlr_keyboard_set_keymap(s1.keyboard, keymap);る関数でアクセス
         wl_signal_add(&s1->keyboard->events.key,&s1->key);
 
+        s1->key_modifier.notify = modifire_key; 
+        wl_signal_add(&s1->keyboard->events.modifiers, &s1->key_modifier);
+
         // クライアントにこのseatはキーボードとマウスが使えるよ」と宣言する関数
         //Seat とは、マウスやキーボードなどの入力デバイスをひとまとめにした論理的なグループを指します。
         wlr_seat_set_capabilities(s1->seat, WL_SEAT_CAPABILITY_KEYBOARD | WL_SEAT_CAPABILITY_POINTER);
@@ -484,6 +513,15 @@ void newinput_device(struct wl_listener *listener,void *data){
         // seatの内部に「実際に使うキーボードはこれ」と登録する関数
         wlr_seat_set_keyboard(s1->seat, s1->keyboard);
     }
+}
+void modifire_key(struct wl_listener *listener, void *data) {
+    printf("modifire_key keyboard address: %p\n", s1.keyboard);
+    printf("modifiers updated!\n"); 
+
+    //キーボード構造体を取得グローバル変数よりdataのほうが新しい可能性があるため、dataから取得する
+    struct wlr_keyboard *keyboard = data;
+    // クライアントに修飾キーの状態を通知する関数
+    wlr_seat_keyboard_notify_modifiers(s1.seat, &keyboard->modifiers);
 }
     
 
@@ -688,11 +726,60 @@ void newinput_mouce(struct wl_listener *listener,void *data){
         s1.grabbed_view->x += s1.cursor->x - mtb_pos.x - s1.grabbed_view->x; // ドラッグ開始位置からの移動量を計算してウィンドウの位置に反映
         s1.grabbed_view->y += s1.cursor->y - mtb_pos.y - s1.grabbed_view->y;
     }
+    struct view *v;
+    //リストから順番に取り出す関数
+    wl_list_for_each(v, &s1.views, link) {
+        if(s1.cursor->x >= v->x && s1.cursor->x <= v->x + v->toplevel->base->surface->current.width && 
+            s1.cursor->y >= v->y && s1.cursor->y <= v->y + 15){
+            s1.cursor_image = "sb_v_double_arrow";
+            s1.window_side=1;
+            s1.resizing_view = v;
+            break;
+        }
+        else if(s1.cursor->x >= v->x && s1.cursor->x <= v->x + v->toplevel->base->surface->current.width && 
+            s1.cursor->y >= v->y + v->toplevel->base->surface->current.height - 15 && 
+            s1.cursor->y <= v->y + v->toplevel->base->surface->current.height){
+            s1.cursor_image = "sb_v_double_arrow";
+            s1.window_side=2;
+            s1.resizing_view = v;
+            break;
+        }
+        else if(s1.cursor->x >= v->x && s1.cursor->x <= v->x + 15 && 
+            s1.cursor->y >= v->y && s1.cursor->y <= v->y + v->toplevel->base->surface->current.height){
+            s1.cursor_image = "sb_h_double_arrow";
+            s1.resizing_view = v;
+            s1.window_side=3;
+            break;
+        }
+        else if(s1.cursor->x >= v->x + v->toplevel->base->surface->current.width - 15 
+            && s1.cursor->x <= v->x + v->toplevel->base->surface->current.width && 
+            s1.cursor->y >= v->y && s1.cursor->y <= v->y + v->toplevel->base->surface->current.height){
+            s1.cursor_image = "sb_h_double_arrow";
+            s1.window_side=4;
+            s1.resizing_view = v;
+            break;
+        }
+        else{
+            s1.cursor_image = "left_ptr";
+            continue;
+        }
+    }
 
+    if(bottunpressed && strcmp(s1.cursor_image,"left_ptr")!=0){
+        if(s1.window_side==1){
+            //マウスボタン押下（リサイズ開始）
+            wlr_xdg_toplevel_set_resizing(v->toplevel, true);
 
+            wlr_xdg_toplevel_set_size(s1.resizing_view->toplevel,s1.resizing_view->toplevel->base->surface->current.width,
+            s1.resizing_view->toplevel->base->surface->current.height+mouce->delta_x);
+            s1.resizing_view->x += mouce->delta_x; 
+
+            //リサイズ終了
+            wlr_xdg_toplevel_set_resizing(v->toplevel, false);
+        }
+    }
     //論理カーソルを描画する
-    wlr_cursor_set_xcursor(s1.cursor,s1.cursor_mgr,"left_ptr");  
-
+    wlr_cursor_set_xcursor(s1.cursor,s1.cursor_mgr,s1.cursor_image);  
 }
 //マウスのボタンイベントが発生したときに呼ばれる関数
 void newinput_moucebotton(struct wl_listener *listener,void *data){
@@ -714,13 +801,33 @@ void newinput_moucebotton(struct wl_listener *listener,void *data){
     }
      if(bottunpressed){
         struct view *v;
+        //リストから順番に取り出す関数
         wl_list_for_each(v, &s1.views, link) {
+            //カーソルがウィンドウのタイトルバーの範囲内にあるかの条件分岐。ここではタイトルバーの高さを40と仮定している
+            // タイトルバーの範囲をウィンドウの上部15ピクセルから40ピクセルまでと仮定
+            //15ピクセルはウィンドウを伸縮するための範囲とする
             if(s1.cursor->x >= v->x && s1.cursor->x <= v->x + v->toplevel->base->surface->current.width &&
-                s1.cursor->y >= v->y && s1.cursor->y <= v->y +30) {// タイトルバーの高さを30と仮定
+                s1.cursor->y >= v->y+15 && s1.cursor->y <= v->y +40) {// タイトルバーの高さを30と仮定
                 mtb_pos.x = s1.cursor->x - v->x; // ドラッグ開始位置のオフセットを保存  
                 mtb_pos.y = s1.cursor->y - v->y;
                 s1.grabbed_view = v; // ドラッグ中のウィンドウを保持
                 break;
+            }
+            if(s1.cursor->x >= v->x && s1.cursor->x <= v->x + v->toplevel->base->surface->current.width &&
+                s1.cursor->y >= v->y && s1.cursor->y <= v->y + v->toplevel->base->surface->current.height) {
+                // seat のキーボードフォーカスをこのサーフェスに設定する
+                struct wlr_keyboard *keyboard = wlr_seat_get_keyboard(s1.seat);
+
+                if(keyboard){
+                    //マウスクリックしたときにマウスが乗っているウィンドウにキーボードのフォーカスを当てる関数
+                    wlr_seat_keyboard_notify_enter(
+                    s1.seat,
+                    v->toplevel->base->surface,// フォーカスを当てるサーフェス
+                    keyboard->keycodes,      // 現在押されているキーの配列
+                    keyboard->num_keycodes,  // 押されているキーの数
+                    &keyboard->modifiers     // Shift/Ctrl などの修飾キーの状態
+                    );
+                }
             }
         }
     }
@@ -758,10 +865,10 @@ void checkcomit(struct wl_listener *listener, void *data){
    // リスナーから view 構造体を取り出す
     struct view *v = wl_container_of(listener, v, commit);
     if (v->toplevel->base->initial_commit) {
-    wlr_xdg_toplevel_set_size(v->toplevel, 800, 600);
+    wlr_xdg_toplevel_set_size(v->toplevel, 1000, 1000);
     wlr_xdg_surface_schedule_configure(v->toplevel->base);
     wlr_output_schedule_frame(s1.outputs);
-    printf("window requested");
+    printf("window requested\n");
     }
 }
 
@@ -779,7 +886,7 @@ void displaypush(struct wl_listener *listener, void *data){
      if(keyboard){
         wlr_seat_keyboard_notify_enter(
             s1.seat,
-            surface,
+            surface,// フォーカスを当てるサーフェス
             keyboard->keycodes,      // 現在押されているキーの配列
             keyboard->num_keycodes,  // 押されているキーの数
             &keyboard->modifiers     // Shift/Ctrl などの修飾キーの状態
