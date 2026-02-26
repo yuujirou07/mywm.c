@@ -33,6 +33,8 @@
 #include <wlr/render/pass.h>
 #include <wlr/types/wlr_linux_dmabuf_v1.h>
 #include<linux/input-event-codes.h>
+#include <libinput.h>
+#include <wlr/backend/libinput.h>
 #include <wlr/types/wlr_drm.h> 
 #include <signal.h>
   struct server {
@@ -102,6 +104,18 @@
     struct wlr_decoration_manager *decoration_manager; // ウィンドウの装飾を管理する構造体
 
     struct view *grabbed_view; // ドラッグ中のウィンドウを保持する構造体
+
+    struct view *resizing_view; //リサイズ中のウィンドウを保持する構造体
+
+    struct wl_listener key_modifier; // キーの修飾キーが変化したときのリスナー
+
+    char *cursor_image; // カーソルの画像名を保持する変数
+
+    int window_side;//ウィンドウのリサイズの方向を保持する変数
+
+    struct wlr_pointer_button_event *button; //マウスのボタンイベントを保持する構造体
+
+    struct view *focus_view; // フォーカス中のウィンドウを保持する構造体
     };
 
 //マウスの構造体
@@ -124,11 +138,15 @@ struct taskbar {
 struct view{
     struct wl_list link;
     struct wlr_xdg_toplevel *toplevel;
-    double x, y; // 画面上のどこに置くか
+    int32_t x, y,pending_x,pending_y,Bottom_pos_x,Bottom_pos_y; // 画面上のどこに置くか
+    int32_t width,pending_width;//画面の横の大きさ
+    int32_t height,pending_height;//画面の縦の多さ
     struct wl_listener map;   // アプリのwindowの描画要求時に呼ぶリスナー
     struct wl_listener unmap; // アプリが消去要求を出したときのためのリスナー
     struct wl_listener destroy; // アプリが閉じる要求を出したときのためのリスナー
     struct wl_listener commit;  //初期化が完了しているかのリスナー
+    uint32_t pending_serial;    //set_sizeが返したシリアル番号で、フレームのずれによるウィンドウ画面のサイズ変更時のがたつきを直すための同期に使う
+    int32_t absolute_width_pos; 
 };
 
 
@@ -144,8 +162,14 @@ struct my_pointer *ptr[10] ={0};
 //マウスの個数を数える変数
 int a=0;      
 
+bool mouce_focus = false; //マウスのフォーカスが当たっているかのフラグ
+
 //マウスのボタンが押されているかのフラグ
 bool bottunpressed = false;
+//リサイズ中かのフラグ
+bool now_resizing=false;
+
+bool surface_sort = true; //ウィンドウの重なり順を入れ替えるためのフラグ
 
 struct mouce_taskbar_pos {
     double x;
@@ -153,6 +177,12 @@ struct mouce_taskbar_pos {
 };
 struct mouce_taskbar_pos mtb_pos = {0};
 
+double absolute_delta_x={0}; //ウィンドウ画面のサイズ変更時の横の絶対移動量
+double absolute_delta_y={0}; //ウィンドウ画面のサイズ変更時の縦の絶対移動量
+
+
+//キーの修飾キーが変化したときに呼ばれる関数のプロトタイプ宣言
+void modifire_key(struct wl_listener *listener, void *data);
 
 //マウスのボタンイベントが発生したときに呼ばれる関数のプロトタイプ宣言
 void newinput_moucebotton(struct wl_listener *listener,void *data);
@@ -300,6 +330,7 @@ int main(int argc,char *argv[]){
     }
 
     setenv("WAYLAND_DISPLAY",socket_name,1);
+
     pid_t pid = fork();
 
     if (pid == 0) {
@@ -317,6 +348,7 @@ int main(int argc,char *argv[]){
         printf("forkerror/n");
         return 1;
     }
+    
 
     // 3. GPUへの「アップロード」
     // ここで初めて CPU(RAM) -> GPU(VRAM) のコピーが行われます
@@ -379,6 +411,7 @@ int main(int argc,char *argv[]){
 
 //キーイベントが発生したときに呼ばれる関数
 void h_key(struct wl_listener *listener,void *data){
+      printf("h_key keyboard address: %p\n", s1.keyboard);
 
     //キーボード構造体を取得（グローバル変数s1を使っている前提）
     struct wlr_keyboard *keyboard = s1.keyboard;
@@ -388,9 +421,6 @@ void h_key(struct wl_listener *listener,void *data){
 
      //フォーカス中のクライアントにキーイベントを転送する関数です。引数は、シート、イベントの時間、キーコード、キーの状態（押されたか離されたか）です。
     wlr_seat_keyboard_notify_key(s1.seat, event->time_msec, event->keycode, event->state);
-
-    //Shift・Ctrl・Alt などの修飾キーの状態をクライアントに送る関数
-    wlr_seat_keyboard_notify_modifiers(s1.seat, &keyboard->modifiers);
 
     //もしキーが離されたときのイベントだったら、以降の処理をしない
     if (event->state != WL_KEYBOARD_KEY_STATE_PRESSED) {
@@ -414,14 +444,21 @@ void h_key(struct wl_listener *listener,void *data){
     for(int i= 0; i<nsyms;i++){
         //キーネームを格納する変数
         char name[64];
+        char name2[64]={0};
 
         //syms[i]から数値を取り出し数値に対応する文字列を
         // name[64]にいれる(文字コードのような概念)
         xkb_keysym_get_name(syms[i],name,sizeof(name));
         printf("%s\n",name);
-        if(strcmp(name,"p") == 0){
+        //もし押されたキーがEscapeだったら、サーバを終了する
+        if(strcmp(name,"Escape") == 0){
             wl_display_terminate(s1.display);
         }
+        //もし押されたキーがSuper_LとReturnだったら、起動ソフト選択画面を表示する
+        if(strcmp(name,"Super_L") == 0 && strcmp(name2,"Return") == 0){
+
+        }
+        strcpy(name2, name);
     }
 }
 
@@ -443,8 +480,18 @@ void newinput_device(struct wl_listener *listener,void *data){
         ptr[a]->motion.notify = newinput_mouce;
         ptr[a]->button.notify = newinput_moucebotton;
 
+        //libinputデバイスか確認
+        if (wlr_input_device_is_libinput(ptr[a]->device)) {
+             //生のlibinput_deviceのポインタ取得
+            struct libinput_device *ldev =wlr_libinput_get_device_handle(ptr[a]->device);
+             libinput_device_config_accel_set_profile(ldev, LIBINPUT_CONFIG_ACCEL_PROFILE_FLAT);
+            libinput_device_config_accel_set_speed(ldev, 0.0);
+            //ポインタの中身のポインタデバイスのタップ機能を有効にする
+            libinput_device_config_tap_set_enabled(ldev,LIBINPUT_CONFIG_TAP_ENABLED);
+        }
+
         //カーソルと物理マウスを紐付ける関数
-        wlr_cursor_attach_input_device(s1->cursor,device);
+        wlr_cursor_attach_input_device(s1->cursor,ptr[a]->device);
 
         //マウスが動いたときに発火する
         wl_signal_add(&s1->cursor->events.motion,&ptr[a]->motion);
@@ -463,9 +510,17 @@ void newinput_device(struct wl_listener *listener,void *data){
         //コンテキスト（キーボードの状態などを扱うための作業領域）を確保する
         struct xkb_context *context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
 
+        //キーボードのレイアウトをjpにする
+        struct xkb_rule_names rules = {
+        .layout = "jp",
+        };
+
         //キーマップを作成する。物理キーコード(キーID（数値）)を論理キー（例えば A や Enter）に変換る
         //OS がどのキーを押したかを解釈するために必要
-        struct xkb_keymap *keymap = xkb_keymap_new_from_names(context, NULL, XKB_KEYMAP_COMPILE_NO_FLAGS);
+        struct xkb_keymap *keymap = xkb_keymap_new_from_names(context, &rules, XKB_KEYMAP_COMPILE_NO_FLAGS);
+
+        //キーボードの状態を管理する構造体を作成する。これがないと、OSはどのキーが押されているかを把握できない
+        xkb_state_new(keymap);
 
         //XKB keymap をキーボードに紐付ける関数
         wlr_keyboard_set_keymap(s1->keyboard, keymap);
@@ -477,6 +532,9 @@ void newinput_device(struct wl_listener *listener,void *data){
         // s1->key_event は signal に listener を登録すwlr_keyboard_set_keymap(s1.keyboard, keymap);る関数でアクセス
         wl_signal_add(&s1->keyboard->events.key,&s1->key);
 
+        s1->key_modifier.notify = modifire_key; 
+        wl_signal_add(&s1->keyboard->events.modifiers, &s1->key_modifier);
+
         // クライアントにこのseatはキーボードとマウスが使えるよ」と宣言する関数
         //Seat とは、マウスやキーボードなどの入力デバイスをひとまとめにした論理的なグループを指します。
         wlr_seat_set_capabilities(s1->seat, WL_SEAT_CAPABILITY_KEYBOARD | WL_SEAT_CAPABILITY_POINTER);
@@ -484,6 +542,15 @@ void newinput_device(struct wl_listener *listener,void *data){
         // seatの内部に「実際に使うキーボードはこれ」と登録する関数
         wlr_seat_set_keyboard(s1->seat, s1->keyboard);
     }
+}
+void modifire_key(struct wl_listener *listener, void *data) {
+    printf("modifire_key keyboard address: %p\n", s1.keyboard);
+    printf("modifiers updated!\n"); 
+
+    //キーボード構造体を取得グローバル変数よりdataのほうが新しい可能性があるため、dataから取得する
+    struct wlr_keyboard *keyboard = data;
+    // クライアントに修飾キーの状態を通知する関数
+    wlr_seat_keyboard_notify_modifiers(s1.seat, &keyboard->modifiers);
 }
     
 
@@ -592,7 +659,7 @@ void output_frame(struct wl_listener *listener,void *data){
 
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now); // 現在時刻を取得
-    wl_list_for_each(v, &s1.views, link) {//リストから順番に取り出す関数
+    wl_list_for_each_reverse(v, &s1.views, link) {//リストから順番に取り出す関数
         if (!v->toplevel->base->surface->mapped) {//surfaceが描画可能かの条件分岐
         continue; 
     }
@@ -611,60 +678,6 @@ void output_frame(struct wl_listener *listener,void *data){
         wlr_render_pass_add_texture(pass, &opts);//passに描画する物を追加する関数
         wlr_surface_send_frame_done(surface, &now);
     }
-
-
-    if(taskbar_v1.firsttaskbar == 0){
-        //ピクセルのデータをいれる変数を初期化
-        s1.taskbar_pix = calloc(options.dst_box.width*70,sizeof(uint32_t));
-        //タスクバーを表示したい範囲分forを回す
-        for(int i=0;i<options.dst_box.width*70;i++){
-            //黒色を代入
-            s1.taskbar_pix[i] = 0xFF000000;
-        } 
-        //一回しかif(firsttaskbar == 0)が回らないようにする
-        taskbar_v1.firsttaskbar = 1;
-        //メモリからvramに渡す
-        s1.taskbar_tex = wlr_texture_from_pixels(
-            s1.renderer,
-            DRM_FORMAT_ABGR8888,
-            output->width * sizeof(uint32_t),
-            output->width,
-            70,
-            s1.taskbar_pix
-        );
-        //メモリにあるピクセルデータを解放する
-        free(s1.taskbar_pix);
-    }
-
-    //タスクバーの出現設定
-    if(s1.cursor->y <= output->height-180){
-         if(taskbar_v1.taskbar_height>=0){
-            taskbar_v1.taskbar_height-=5;
-        }
-
-    }
-    else if(taskbar_v1.taskbar_height<=70){
-            taskbar_v1.taskbar_height+=5;
-    }
-
-    taskbar_v1.taskbar_alpha=0.4;
-
-    if (s1.taskbar_tex) {
-        //テクスチャをどの座標のピクセルから描くか
-        struct wlr_render_texture_options bar_opt = {
-            .texture = s1.taskbar_tex,//タスクバーのテクスチャ
-            .dst_box= {//座標
-                .x = 0, 
-                .y = output->height - taskbar_v1.taskbar_height, // 画面の下端に配置
-                .width = output->width, 
-                .height =  taskbar_v1.taskbar_height,
-            },
-            .alpha = &taskbar_v1.taskbar_alpha//透明度
-        };
-        //タスクバーの追加関数
-        wlr_render_pass_add_texture(pass, &bar_opt);
-    }
-
     //passをgpuに送る
     wlr_render_pass_submit(pass);
 
@@ -684,46 +697,232 @@ void newinput_mouce(struct wl_listener *listener,void *data){
     //前フレームからのマウスの移動量をカーソルの座標に反映させる
     wlr_cursor_move(s1.cursor,&mouce->pointer->base,mouce->delta_x,mouce->delta_y);
 
-     if(s1.grabbed_view != NULL){
+    if(now_resizing==false){
+
+        struct view *v;
+        //リストから順番に取り出す関数
+        wl_list_for_each(v, &s1.views, link) {
+
+            //もしクリックされた状態でリサイズする範囲にカーソルが侵入してきたときに、リサイズを無効にする
+            if(bottunpressed == true && strcmp(s1.cursor_image,"left_ptr")==0){
+                break;
+            }
+            //上面を掴んでリサイズする場合
+            else if(s1.cursor->x >= v->x && s1.cursor->x <= v->x + v->toplevel->base->surface->current.width && 
+                s1.cursor->y >= v->y && s1.cursor->y <= v->y + 15){
+                s1.cursor_image = "sb_v_double_arrow";
+                s1.window_side=1;
+                s1.resizing_view = v;
+                break;
+            }
+            //底面を掴んでリサイズする場合
+            else if(s1.cursor->x >= v->x && s1.cursor->x <= v->x + v->toplevel->base->surface->current.width && 
+                s1.cursor->y >= v->y + v->toplevel->base->surface->current.height - 15 && 
+                s1.cursor->y <= v->y + v->toplevel->base->surface->current.height){
+                s1.cursor_image = "sb_v_double_arrow";
+                s1.window_side=2;
+                s1.resizing_view = v;
+                break;
+            }
+            //左面を掴んでリサイズする場合 
+            else if(s1.cursor->x >= v->x && s1.cursor->x <= v->x + 15 && 
+                s1.cursor->y >= v->y && s1.cursor->y <= v->y + v->toplevel->base->surface->current.height){
+                s1.cursor_image = "sb_h_double_arrow";
+                s1.resizing_view = v;
+                s1.window_side=3;
+                break;
+            }
+            //右面を掴んでリサイズする場合 
+            else if(s1.cursor->x >= v->x + v->toplevel->base->surface->current.width - 15 
+                && s1.cursor->x <= v->x + v->toplevel->base->surface->current.width && 
+                s1.cursor->y >= v->y && s1.cursor->y <= v->y + v->toplevel->base->surface->current.height){
+                s1.cursor_image = "sb_h_double_arrow";
+                s1.window_side = 4;
+                s1.resizing_view = v;
+                break;
+            }
+            else{
+                s1.cursor_image = "left_ptr";
+                s1.window_side=0;
+                s1.resizing_view=NULL;
+                continue;
+            }
+
+        }
+    } 
+    //マウスボタンが押されていて、リサイズ対象のウィンドウがあって、リサイズ要求がまだ送られていないときの条件分岐
+    if(bottunpressed && s1.resizing_view != NULL && s1.resizing_view->pending_serial == 0){
+        //リサイズ開始前のウィンドウの右下の座標を保存する。これを基準にリサイズする
+         if(now_resizing==false){
+            //window_sideの値によって、リサイズの基準となる座標を保存する
+            //s1.resizing_view->Bottom_pos_yはウィンドウの下端のy座標、s1.resizing_view->Bottom_pos_xはウィンドウの右端のx座標を保存する
+            //absolute_delta_yはカーソルからウィンドウの下端までの距離、absolute_delta_xはカーソルからウィンドウの左端までの距離を保存する
+            if(s1.window_side == 1){
+                s1.resizing_view->Bottom_pos_y = s1.resizing_view->y + s1.resizing_view->toplevel->base->surface->current.height;
+                s1.resizing_view->Bottom_pos_x = s1.resizing_view->x + s1.resizing_view->toplevel->base->surface->current.width;
+                absolute_delta_y = s1.cursor->y - s1.resizing_view->y;
+                absolute_delta_x = s1.cursor->x - s1.resizing_view->x;
+            }
+            else if(s1.window_side == 2){
+                s1.resizing_view->Bottom_pos_y = s1.resizing_view->y + s1.resizing_view->toplevel->base->surface->current.height;
+                s1.resizing_view->Bottom_pos_x = s1.resizing_view->x + s1.resizing_view->toplevel->base->surface->current.width;
+                absolute_delta_y = s1.resizing_view->height - s1.cursor->y;
+                absolute_delta_x = s1.cursor->x - s1.resizing_view->x;
+            }
+            else if(s1.window_side == 3){
+                s1.resizing_view->Bottom_pos_y = s1.resizing_view->y + s1.resizing_view->toplevel->base->surface->current.height;
+                s1.resizing_view->Bottom_pos_x = s1.resizing_view->x + s1.resizing_view->toplevel->base->surface->current.width;
+                absolute_delta_y = s1.cursor->y - s1.resizing_view->y;
+                absolute_delta_x = s1.resizing_view->x - s1.cursor->x;
+                //ウィンドウの右辺のx座標
+                s1.resizing_view->absolute_width_pos = s1.resizing_view->x + s1.resizing_view->toplevel->base->surface->current.width;;
+            }
+            else if(s1.window_side == 4){
+                s1.resizing_view->Bottom_pos_y = s1.resizing_view->y + s1.resizing_view->toplevel->base->surface->current.height;
+                s1.resizing_view->Bottom_pos_x = s1.resizing_view->x + s1.resizing_view->toplevel->base->surface->current.width;
+                absolute_delta_y = s1.cursor->y - s1.resizing_view->y;
+                absolute_delta_x = s1.resizing_view->width - s1.cursor->x; 
+            }
+        }
+        //マウスボタン押下（リサイズ開始）
+        wlr_xdg_toplevel_set_resizing(s1.resizing_view->toplevel, true);
+        now_resizing=true;
+            //リサイズ処理
+        if(s1.window_side ==1 ){
+            //カーソルからウィンドウの上端までの距離を基準にリサイズする
+            s1.resizing_view->pending_y=(int32_t)s1.cursor->y-(int32_t)absolute_delta_y;
+            s1.resizing_view->pending_width = s1.resizing_view->width;
+            s1.resizing_view->pending_x = s1.resizing_view->x;
+            s1.resizing_view->pending_height = (int32_t)s1.resizing_view->Bottom_pos_y - (int32_t)s1.resizing_view->pending_y;
+        }
+        else if(s1.window_side == 2){
+            s1.resizing_view->pending_height = s1.cursor->y+absolute_delta_y;
+            s1.resizing_view->pending_width =  s1.resizing_view->width;
+            s1.resizing_view->pending_x = s1.resizing_view->x;
+            s1.resizing_view->pending_y = s1.resizing_view->y;
+        }
+        else if(s1.window_side == 3){
+            s1.resizing_view->pending_x = s1.cursor->x - absolute_delta_x;
+            s1.resizing_view->pending_y = s1.resizing_view->y;
+            s1.resizing_view->pending_height = s1.resizing_view->height;
+            s1.resizing_view->pending_width = s1.resizing_view->absolute_width_pos - s1.resizing_view->pending_x;
+        }
+        else if(s1.window_side == 4){
+            s1.resizing_view->pending_x = s1.resizing_view->x;
+            s1.resizing_view->pending_y = s1.resizing_view->y;
+            s1.resizing_view->pending_width = s1.cursor->x + absolute_delta_x;
+            s1.resizing_view->pending_height =  s1.resizing_view->height;
+        }
+        if(s1.resizing_view->pending_height <= 80){
+            s1.resizing_view->pending_height = 81;
+            s1.resizing_view->pending_width = s1.resizing_view->width;
+            s1.resizing_view->pending_x = s1.resizing_view->x;
+            s1.resizing_view->pending_y = s1.resizing_view->y;
+        }
+        if(s1.resizing_view->pending_width <= 80){
+            s1.resizing_view->pending_width= 81;
+            s1.resizing_view->pending_height = s1.resizing_view->height;
+            s1.resizing_view->pending_x = s1.resizing_view->x;
+            s1.resizing_view->pending_y = s1.resizing_view->y;
+        }
+        s1.resizing_view->pending_serial = wlr_xdg_toplevel_set_size(s1.resizing_view->toplevel,
+            s1.resizing_view->pending_width,
+            s1.resizing_view->pending_height);
+    }
+    if(bottunpressed==0 && now_resizing==true){
+            //リサイズ終了
+            wlr_xdg_toplevel_set_resizing(s1.resizing_view->toplevel, false);
+            now_resizing=false;
+        }
+    //マウスの移動イベントをクライアントに転送する関数
+    if(mouce_focus){
+       wlr_seat_pointer_notify_motion(
+                        s1.seat,
+                        s1.button->time_msec,
+                        s1.cursor->x - s1.focus_view->x,
+                        s1.cursor->y - s1.focus_view->y
+                    );
+    }
+       if(s1.grabbed_view != NULL && strcmp(s1.cursor_image,"left_ptr")==0){
         s1.grabbed_view->x += s1.cursor->x - mtb_pos.x - s1.grabbed_view->x; // ドラッグ開始位置からの移動量を計算してウィンドウの位置に反映
         s1.grabbed_view->y += s1.cursor->y - mtb_pos.y - s1.grabbed_view->y;
     }
 
-
     //論理カーソルを描画する
-    wlr_cursor_set_xcursor(s1.cursor,s1.cursor_mgr,"left_ptr");  
-
+    wlr_cursor_set_xcursor(s1.cursor,s1.cursor_mgr,s1.cursor_image); 
 }
+
+
 //マウスのボタンイベントが発生したときに呼ばれる関数
 void newinput_moucebotton(struct wl_listener *listener,void *data){
     struct wlr_pointer_button_event *button = data;
 
-    //マウスのボタンイベントをクライアントに転送する関数
+    //グローバル変数にマウスのボタンイベントを代入する
+    s1.button = button;
+
+    if(button->state == WL_POINTER_BUTTON_STATE_PRESSED){
+        bottunpressed = true;
+    }
+    else if(button->state == WL_POINTER_BUTTON_STATE_RELEASED){
+        bottunpressed = false;
+        surface_sort = true;
+        s1.grabbed_view = NULL; // ドラッグを終了するために grabbed_view をリセット
+    }
+     if(bottunpressed){
+        struct view *v;
+        //リストから順番に取り出す関数
+        wl_list_for_each(v, &s1.views, link) {
+            //カーソルがウィンドウのタイトルバーの範囲内にあるかの条件分岐。ここではタイトルバーの高さを40と仮定している
+            // タイトルバーの範囲をウィンドウの上部15ピクセルから40ピクセルまでと仮定
+            //15ピクセルはウィンドウを伸縮するための範囲とする
+            if(s1.cursor->x >= v->x && s1.cursor->x <= v->x + v->toplevel->base->surface->current.width &&
+                s1.cursor->y >= v->y+15 && s1.cursor->y <= v->y +40) {// タイトルバーの高さを30と仮定
+                mtb_pos.x = s1.cursor->x - v->x; // ドラッグ開始位置のオフセットを保存  
+                mtb_pos.y = s1.cursor->y - v->y;
+                s1.grabbed_view = v; // ドラッグ中のウィンドウを保持
+                break;
+            }
+            if(s1.cursor->x >= v->x && s1.cursor->x <= v->x + v->toplevel->base->surface->current.width &&
+                s1.cursor->y >= v->y && s1.cursor->y <= v->y + v->toplevel->base->surface->current.height) {
+                //リサイズするウィンドウを一番上にする。これをしないと、リサイズしているウィンドウの下に別のウィンドウがあって、リサイズしているウィンドウが隠れてしまうことがある
+                //surfece_sortはリサイズ終了時にtrueにする
+                if(surface_sort){
+                    wl_list_remove(&v->link);
+                    wl_list_insert(&s1.views, &v->link);
+                    surface_sort = false;
+                }
+                // seat のキーボードフォーカスをこのサーフェスに設定する
+                struct wlr_keyboard *keyboard = wlr_seat_get_keyboard(s1.seat);
+
+                s1.focus_view = v; // フォーカスされたウィンドウを保存
+
+                if(keyboard){
+                    //マウスクリックしたときにマウスが乗っているウィンドウにキーボードのフォーカスを当てる関数
+                    wlr_seat_keyboard_notify_enter(
+                    s1.seat,
+                    v->toplevel->base->surface,// フォーカスを当てるサーフェス
+                    keyboard->keycodes,      // 現在押されているキーの配列
+                    keyboard->num_keycodes,  // 押されているキーの数
+                    &keyboard->modifiers     // Shift/Ctrl などの修飾キーの状態
+                    );
+                }
+                wlr_seat_pointer_notify_enter(
+                    s1.seat,
+                    v->toplevel->base->surface,
+                    s1.cursor->x - v->x,
+                    s1.cursor->y - v->y
+                    );
+                    mouce_focus=true;
+            }
+        }
+    }
+     //マウスのボタンイベントをクライアントに転送する関数
     wlr_seat_pointer_notify_button(
         s1.seat,
         button->time_msec,
         button->button,
         button->state
     );
-    if(button->state == WL_POINTER_BUTTON_STATE_PRESSED){
-        bottunpressed = true;
-    }
-    else if(button->state == WL_POINTER_BUTTON_STATE_RELEASED){
-        bottunpressed = false;
-        s1.grabbed_view = NULL; // ドラッグを終了するために grabbed_view をリセット
-    }
-     if(bottunpressed){
-        struct view *v;
-        wl_list_for_each(v, &s1.views, link) {
-            if(s1.cursor->x >= v->x && s1.cursor->x <= v->x + v->toplevel->base->surface->current.width &&
-                s1.cursor->y >= v->y && s1.cursor->y <= v->y +30) {// タイトルバーの高さを30と仮定
-                mtb_pos.x = s1.cursor->x - v->x; // ドラッグ開始位置のオフセットを保存  
-                mtb_pos.y = s1.cursor->y - v->y;
-                s1.grabbed_view = v; // ドラッグ中のウィンドウを保持
-                break;
-            }
-        }
-    }
 }
 //新しいウィンドウが要求された時に呼ばれる関数
 void server_new_xdg_toplevel(struct wl_listener *listener, void *data){
@@ -739,7 +938,7 @@ void server_new_xdg_toplevel(struct wl_listener *listener, void *data){
     v->x = 50;
     v->y = 50;
 
-    // 2. マップ（表示開始）時のハンドラを登録
+    // マップ（表示開始）時のハンドラを登録
     v->map.notify = displaypush; // ここでサイズ指定などを行うように変更する
     wl_signal_add(&toplevel->base->surface->events.map, &v->map);
 
@@ -758,14 +957,23 @@ void checkcomit(struct wl_listener *listener, void *data){
    // リスナーから view 構造体を取り出す
     struct view *v = wl_container_of(listener, v, commit);
     if (v->toplevel->base->initial_commit) {
-    wlr_xdg_toplevel_set_size(v->toplevel, 800, 600);
+    wlr_xdg_toplevel_set_size(v->toplevel, 1000, 1000);
     wlr_xdg_surface_schedule_configure(v->toplevel->base);
-    wlr_output_schedule_frame(s1.outputs);
-    printf("window requested");
+    printf("window requested\n");
     }
+    //もしリサイズ要求が完了したら実際にoutput_frameで描画に使われているウィンドウ情報に代入する
+     if(v->pending_serial != 0 &&
+        v->toplevel->base->current.configure_serial == v->pending_serial){
+        v->width = v->pending_width;
+        v->height = v->pending_height;
+        v->y = v->pending_y;
+        v->x = v->pending_x;
+        v->pending_serial = 0;
+    }
+    wlr_output_schedule_frame(s1.outputs);
 }
 
-
+//マップ（表示開始）じに実行する関数
 void displaypush(struct wl_listener *listener, void *data){
     // リスナーから view 構造体を逆算して取り出す
     struct view *v = wl_container_of(listener, v, map);
@@ -773,13 +981,15 @@ void displaypush(struct wl_listener *listener, void *data){
     //取り出したview構造体からsurface構造体を取り出す
     struct wlr_surface *surface = v->toplevel->base->surface;
 
+    v->width = v->toplevel->base->surface->current.width;
+    v->height = v->toplevel->base->surface->current.height;
     // seat のキーボードフォーカスをこのサーフェスに設定する
     struct wlr_keyboard *keyboard = wlr_seat_get_keyboard(s1.seat);
 
      if(keyboard){
         wlr_seat_keyboard_notify_enter(
             s1.seat,
-            surface,
+            surface,// フォーカスを当てるサーフェス
             keyboard->keycodes,      // 現在押されているキーの配列
             keyboard->num_keycodes,  // 押されているキーの数
             &keyboard->modifiers     // Shift/Ctrl などの修飾キーの状態

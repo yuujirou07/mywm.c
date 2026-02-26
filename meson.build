@@ -41,6 +41,7 @@ wlroots = dependency('wlroots-0.19')
 wayland_server = dependency('wayland-server')
 xkbcommon = dependency('xkbcommon')
 gdk_pixbuf = dependency('gdk-pixbuf-2.0')
+libinput_dep = dependency('libinput')   # pkg-config で libinput を探す
 
 # 実行ファイルの定義
 executable(
@@ -51,6 +52,7 @@ executable(
         wlroots,
         wayland_server,
         xkbcommon,
-        gdk_pixbuf
+        gdk_pixbuf,
+        libinput_dep, 
     ],
 )
