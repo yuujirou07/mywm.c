@@ -1,7 +1,6 @@
 # mywm.c
-waylandコンポジタの試作品です。
-ほぼすべてにコメントしてるのでコンポジタを作りたい人のチュートリアルにもなるかもです
-
+WM my tutoial
+HAY
 
 code --ozone-platform=wayland
 

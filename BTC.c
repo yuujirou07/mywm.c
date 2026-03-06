@@ -1,14 +1,7 @@
 #include <ncurses.h>
+#include<stdio.h>
+int main(int argc,char**argv){
+    
 
-int main()
-{
-    int x, y;
-
-    initscr();
-    while (getch() != 'q') {
-        printw("(%3d %3d)\n", LINES, COLS);
-        refresh();
-    }
-    endwin();
-    return 0;
+    return 0; 
 }

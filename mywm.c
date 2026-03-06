@@ -26,19 +26,19 @@
 #include <wlr/types/wlr_xcursor_manager.h>
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/util/log.h>
+#include <xkbcommon/xkbcommon-keysyms.h>
 #include <xkbcommon/xkbcommon.h>
 #include <gdk-pixbuf-2.0/gdk-pixbuf/gdk-pixbuf.h>
 #include <glib.h>
 #include <drm_fourcc.h>
 #include <wlr/render/pass.h>
 #include <wlr/types/wlr_linux_dmabuf_v1.h>
-#include<linux/input-event-codes.h>
+#include <linux/input-event-codes.h>
 #include <libinput.h>
 #include <wlr/backend/libinput.h>
 #include <wlr/types/wlr_drm.h> 
 #include <signal.h>
-  struct server {
-    
+struct server {
     //バックエンド構造体の定義
     struct wlr_backend *backend;
 
@@ -331,23 +331,6 @@ int main(int argc,char *argv[]){
 
     setenv("WAYLAND_DISPLAY",socket_name,1);
 
-    pid_t pid = fork();
-
-    if (pid == 0) {
-    // 子プロセスの処理
-        execlp("foot", "foot", NULL);
-        perror("exec failed");
-        _exit(1);
-    }
-    else if (pid > 0) {
-    // 親プロセスの処理
-
-    }
-    else {
-        //エラー
-        printf("forkerror/n");
-        return 1;
-    }
     
 
     // 3. GPUへの「アップロード」
@@ -419,6 +402,7 @@ void h_key(struct wl_listener *listener,void *data){
     //送られてきたデータをeventに代入する
     struct wlr_keyboard_key_event *event = data;
 
+    xkb_state_update_key(keyboard->xkb_state, event->keycode, XKB_KEY_Up);
      //フォーカス中のクライアントにキーイベントを転送する関数です。引数は、シート、イベントの時間、キーコード、キーの状態（押されたか離されたか）です。
     wlr_seat_keyboard_notify_key(s1.seat, event->time_msec, event->keycode, event->state);
 
@@ -439,12 +423,18 @@ void h_key(struct wl_listener *listener,void *data){
     //symsポインタにいれる。（返り値は押されたキーの個数
     int nsyms = xkb_state_key_get_syms(keyboard->xkb_state,keycode,&syms);
 
-    
+    xkb_mod_mask_t mods =
+    xkb_state_serialize_mods(keyboard->xkb_state, XKB_STATE_MODS_EFFECTIVE);
+    xkb_mod_index_t super_index =
+    xkb_keymap_mod_get_index(keyboard->keymap, "Mod4");
+
+    xkb_mod_mask_t super_mask = 1 << super_index;
+
+    //キーネームを格納する変数
+    char name[64];
     //押されたキーの個数回ループする
     for(int i= 0; i<nsyms;i++){
-        //キーネームを格納する変数
-        char name[64];
-        char name2[64]={0};
+       
 
         //syms[i]から数値を取り出し数値に対応する文字列を
         // name[64]にいれる(文字コードのような概念)
@@ -455,10 +445,31 @@ void h_key(struct wl_listener *listener,void *data){
             wl_display_terminate(s1.display);
         }
         //もし押されたキーがSuper_LとReturnだったら、起動ソフト選択画面を表示する
-        if(strcmp(name,"Super_L") == 0 && strcmp(name2,"Return") == 0){
+        if((mods & super_mask) && syms[i] == XKB_KEY_Return){
+           pid_t pid = fork();
 
+            if (pid == 0) {
+                // 子プロセスの処理
+                 execlp("printenv", "printenv", NULL); // footの代わりに一時的に
+            }
+            else if (pid > 0) {
+            // 親プロセスの処理
+
+            }
+            else {
+            //エラー
+            printf("forkerror/n");
+            } 
         }
-        strcpy(name2, name);
+        else {
+            
+            printf("super_index: %u\n", super_index);
+            printf("XKB_MOD_INVALID: %u\n", XKB_MOD_INVALID);
+            printf("mods: %u\n", mods);
+            printf("super_mask: %u\n", super_mask);
+            printf("AND result: %u\n", mods & super_mask);
+        }
+
     }
 }
 
@@ -748,6 +759,9 @@ void newinput_mouce(struct wl_listener *listener,void *data){
                 continue;
             }
 
+        }
+        if (wl_list_empty(&s1.views)) {
+            s1.cursor_image = "left_ptr";
         }
     } 
     //マウスボタンが押されていて、リサイズ対象のウィンドウがあって、リサイズ要求がまだ送られていないときの条件分岐
