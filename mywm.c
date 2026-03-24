@@ -41,80 +41,50 @@
 struct server {
     //バックエンド構造体の定義
     struct wlr_backend *backend;
-
     //リスナーを定義
     struct wl_listener new_input;
-
     //キーイベントの構造体を定義
     struct wlr_keyboard *keyboard;
-
     //キーイベントの構造体を定義
     struct wl_listener key;
-
     //アウトプットリスナーの定義
     struct wl_listener new_output;
     //サーバ本体の構造体の定義
     struct wl_display  *display;
-
     //レンダラーの定義（描画バッファ構造体）
     struct wlr_renderer *renderer;
     //GPUメモリ確保（確保した領域にレンダラーで描画バッファを保持することができる）
     struct wlr_allocator *allocator;
-
     struct wlr_output_layout *output_layout;
-
     //フレームリスナー
     struct wl_listener frame;
-
     //テクスチャ構造体
     struct wlr_texture *background_tex;
-
     //ハードウェアカーソル
     struct wlr_pointer pointer;
-
     //論理カーソル
     struct wlr_cursor *cursor;
-
     //マウスリスナー
     struct wl_listener  mouce_listener;
-
     struct wlr_xcursor_manager *cursor_mgr ;
-
-    //タスクバーピクセル
-    uint32_t *taskbar_pix;
-
     //タスクバーテクスチャ
     // (vramに移すためにtaskbar_pixを生のピクセルデータに変換したものをいれる変数)
     struct wlr_texture *taskbar_tex;
-
     //xdg_shell: wlrootsがそのリクエストを受け取り、
     // struct wlr_xdg_toplevel という「型」のデータを作る。
     struct wlr_xdg_shell *xdg_shell;
-
     struct wl_list views; // 表示するウィンドウ（view）のリスト
-    
     struct wl_listener new_xdg_toplevel; // 新しいウィンドウが作られた時のリスナー
-
     struct wlr_compositor *compositor; // コンポジタの構造体
-
     struct wlr_seat *seat; // シートの構造体
-
     struct wlr_output *outputs; // 出力デバイスのリスト
-
     struct wlr_decoration_manager *decoration_manager; // ウィンドウの装飾を管理する構造体
-
     struct view *grabbed_view; // ドラッグ中のウィンドウを保持する構造体
-
     struct view *resizing_view; //リサイズ中のウィンドウを保持する構造体
-
     struct wl_listener key_modifier; // キーの修飾キーが変化したときのリスナー
-
     char *cursor_image; // カーソルの画像名を保持する変数
-
     int window_side;//ウィンドウのリサイズの方向を保持する変数
-
     struct wlr_pointer_button_event *button; //マウスのボタンイベントを保持する構造体
-
     struct view *focus_view; // フォーカス中のウィンドウを保持する構造体
     };
 
@@ -125,15 +95,6 @@ struct my_pointer {
     struct wl_listener button;
 };
 
-//タスクバー関係
-struct taskbar {
-    bool taskbar_rend;
-    bool firsttaskbar;
-    //タスクバーの透明度
-    float taskbar_alpha;
-    //タスクバーの高さ
-    int taskbar_height;
-};
 //ウィンドウの構造体
 struct view{
     struct wl_list link;
@@ -152,9 +113,7 @@ struct view{
 
 //面倒くさいからグローバル変数として扱う
 //サーバ構造体の定義と初期化
-struct server s1 = {0};
-//タスクバーの構造体の定義と初期化
-struct taskbar taskbar_v1 ={0};
+struct server s1={0};
 
 //ハードウェアカーソルの許容個数
 struct my_pointer *ptr[10] ={0};
@@ -180,7 +139,10 @@ struct mouce_taskbar_pos mtb_pos = {0};
 double absolute_delta_x={0}; //ウィンドウ画面のサイズ変更時の横の絶対移動量
 double absolute_delta_y={0}; //ウィンドウ画面のサイズ変更時の縦の絶対移動量
 
-
+//デバッグ時のファイル
+FILE *dbf;
+//wiinキーとenterキーの同時押し判定
+bool super_pressed=0;
 //キーの修飾キーが変化したときに呼ばれる関数のプロトタイプ宣言
 void modifire_key(struct wl_listener *listener, void *data);
 
@@ -219,7 +181,7 @@ void server_new_xdg_toplevel(struct wl_listener *listener, void *data);
 int main(int argc,char *argv[]){
     //ログレベルと出力先を指定する関数
     wlr_log_init(WLR_INFO,NULL);
-
+    dbf=fopen("debuglogfile.log","w");
     // 最初に初期化
     wl_list_init(&s1.new_input.link);
     wl_list_init(&s1.new_output.link);
@@ -327,7 +289,7 @@ int main(int argc,char *argv[]){
     if(!wlr_backend_start(s1.backend)){
         fprintf(stderr, "Failed to start backend\n");
         return 1;
-    }
+    } 
 
     setenv("WAYLAND_DISPLAY",socket_name,1);
 
@@ -352,14 +314,12 @@ int main(int argc,char *argv[]){
     // GPUにコピーし終わったので、CPU側のデータ（pixbuf）はもう不要です
     g_object_unref(pixbuf);
 
- 
      //無限ループでクライアントからのイベントを処理する
     wl_display_run(s1.display);
 
 
     // 1. まずリスナーを「登録した場所」から確実に外す
     wl_list_remove(&s1.new_input.link);
-    
     wl_list_remove(&s1.new_output.link);
     wl_list_remove(&s1.frame.link);
     
@@ -398,21 +358,14 @@ void h_key(struct wl_listener *listener,void *data){
 
     //キーボード構造体を取得（グローバル変数s1を使っている前提）
     struct wlr_keyboard *keyboard = s1.keyboard;
-
     //送られてきたデータをeventに代入する
     struct wlr_keyboard_key_event *event = data;
 
-    xkb_state_update_key(keyboard->xkb_state, event->keycode, XKB_KEY_Up);
-     //フォーカス中のクライアントにキーイベントを転送する関数です。引数は、シート、イベントの時間、キーコード、キーの状態（押されたか離されたか）です。
-    wlr_seat_keyboard_notify_key(s1.seat, event->time_msec, event->keycode, event->state);
+    dbf = fopen("debuglogfile.log", "a");
+    fprintf(dbf, "h_key called: keycode=%u state=%u\n", event->keycode, event->state);
+    fclose(dbf);
 
-    //もしキーが離されたときのイベントだったら、以降の処理をしない
-    if (event->state != WL_KEYBOARD_KEY_STATE_PRESSED) {
-        return;
-        }
-
-
-    //libxkbcommonの仕様上メンバのキーコードの値＋８をする
+      //libxkbcommonの仕様上メンバのキーコードの値＋８をする
     uint32_t keycode = event->keycode + 8;
 
     //文字コードをいれる変数
@@ -422,20 +375,25 @@ void h_key(struct wl_listener *listener,void *data){
     // 押された物理キー番号からどのキーが押されたかを計算し、
     //symsポインタにいれる。（返り値は押されたキーの個数
     int nsyms = xkb_state_key_get_syms(keyboard->xkb_state,keycode,&syms);
+    for (int i = 0; i < nsyms; i++) {
+        if (syms[i] == XKB_KEY_Super_L || syms[i] == XKB_KEY_Super_R) {
+            super_pressed = (event->state == WL_KEYBOARD_KEY_STATE_PRESSED);
+        }
+    }
 
-    xkb_mod_mask_t mods =
-    xkb_state_serialize_mods(keyboard->xkb_state, XKB_STATE_MODS_EFFECTIVE);
-    xkb_mod_index_t super_index =
-    xkb_keymap_mod_get_index(keyboard->keymap, "Mod4");
-
-    xkb_mod_mask_t super_mask = 1 << super_index;
+    //修飾キーを取り出す
+    wlr_keyboard_get_modifiers(keyboard);
+    //フォーカス中のクライアントにキーイベントを転送する関数です。引数は、シート、イベントの時間、キーコード、キーの状態（押されたか離されたか）です。
+    wlr_seat_keyboard_notify_key(s1.seat, event->time_msec, event->keycode, event->state);
+    //もしキーが離されたときのイベントだったら、以降の処理をしない
+    if (event->state != WL_KEYBOARD_KEY_STATE_PRESSED) {
+        return;
+    }
 
     //キーネームを格納する変数
     char name[64];
     //押されたキーの個数回ループする
     for(int i= 0; i<nsyms;i++){
-       
-
         //syms[i]から数値を取り出し数値に対応する文字列を
         // name[64]にいれる(文字コードのような概念)
         xkb_keysym_get_name(syms[i],name,sizeof(name));
@@ -445,31 +403,29 @@ void h_key(struct wl_listener *listener,void *data){
             wl_display_terminate(s1.display);
         }
         //もし押されたキーがSuper_LとReturnだったら、起動ソフト選択画面を表示する
-        if((mods & super_mask) && syms[i] == XKB_KEY_Return){
-           pid_t pid = fork();
+        if(super_pressed && syms[i] == XKB_KEY_Return){
+            pid_t pid = fork();
 
             if (pid == 0) {
                 // 子プロセスの処理
-                 execlp("printenv", "printenv", NULL); // footの代わりに一時的に
+                if(execlp("GLFW_PLATFORM=wayland ./settings_window","foot",NULL)==-1){
+                    perror("execlp");
+                    exit(1); 
+                } 
+                
             }
             else if (pid > 0) {
             // 親プロセスの処理
 
             }
             else {
-            //エラー
-            printf("forkerror/n");
+                //エラー
+                printf("forkerror/n");
+                wl_display_terminate(s1.display);
             } 
         }
         else {
-            
-            printf("super_index: %u\n", super_index);
-            printf("XKB_MOD_INVALID: %u\n", XKB_MOD_INVALID);
-            printf("mods: %u\n", mods);
-            printf("super_mask: %u\n", super_mask);
-            printf("AND result: %u\n", mods & super_mask);
         }
-
     }
 }
 
@@ -543,7 +499,7 @@ void newinput_device(struct wl_listener *listener,void *data){
         // s1->key_event は signal に listener を登録すwlr_keyboard_set_keymap(s1.keyboard, keymap);る関数でアクセス
         wl_signal_add(&s1->keyboard->events.key,&s1->key);
 
-        s1->key_modifier.notify = modifire_key; 
+        //修飾キーを登録する
         wl_signal_add(&s1->keyboard->events.modifiers, &s1->key_modifier);
 
         // クライアントにこのseatはキーボードとマウスが使えるよ」と宣言する関数
@@ -555,11 +511,11 @@ void newinput_device(struct wl_listener *listener,void *data){
     }
 }
 void modifire_key(struct wl_listener *listener, void *data) {
-    printf("modifire_key keyboard address: %p\n", s1.keyboard);
-    printf("modifiers updated!\n"); 
-
     //キーボード構造体を取得グローバル変数よりdataのほうが新しい可能性があるため、dataから取得する
-    struct wlr_keyboard *keyboard = data;
+     struct wlr_keyboard *keyboard = data;
+       // xkbが直接何を「押された」と認識しているか確認する
+    xkb_state_serialize_mods(keyboard->xkb_state,
+         XKB_STATE_MODS_DEPRESSED);
     // クライアントに修飾キーの状態を通知する関数
     wlr_seat_keyboard_notify_modifiers(s1.seat, &keyboard->modifiers);
 }
@@ -631,6 +587,8 @@ void function_set(){
 
     // 新しいウィンドウが要求された時に呼ばれる関数を登録
     s1.new_xdg_toplevel.notify = server_new_xdg_toplevel;
+
+    s1.key_modifier.notify = modifire_key; 
 }
 
 
@@ -1019,3 +977,28 @@ void displaypush(struct wl_listener *listener, void *data){
  void displaypull(struct wl_listener *listener, void *data){
 
  }
+void server_destroy(struct server *s) {
+    // テクスチャ（VRAMのデータ）を先に解放
+    if (s->background_tex) wlr_texture_destroy(s->background_tex);
+    if (s->taskbar_tex)    wlr_texture_destroy(s->taskbar_tex);
+
+    // カーソルマネージャとカーソル
+    wlr_xcursor_manager_destroy(s->cursor_mgr);
+    wlr_cursor_destroy(s->cursor);
+
+    // アロケータ・レンダラー・バックエンド
+    wlr_allocator_destroy(s->allocator);
+    wlr_renderer_destroy(s->renderer);
+    wlr_backend_destroy(s->backend);
+
+    // ★これが最後。ディスプレイを破棄すると
+    // wl_listener や wlr_seat など登録済みのものが
+    // 連鎖的に全部解放される
+    wl_display_destroy(s->display);
+
+    struct view *v, *tmp;
+    wl_list_for_each_safe(v, tmp, &s->views, link) {
+        free(v);
+    }
+}
+ 
