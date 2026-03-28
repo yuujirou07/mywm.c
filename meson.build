@@ -2,6 +2,11 @@ project('mywm', 'c')
 
 add_project_arguments('-DWLR_USE_UNSTABLE', language: 'c')
 
+export CC=/opt/aocc/bin/clang
+export CXX=/opt/aocc/bin/clang++
+export CFLAGS="-O3 -march=znver3"
+export CXXFLAGS="-O3 -march=znver3"
+
 # 依存関係
 wlroots = dependency('wlroots-0.19')
 wayland_server = dependency('wayland-server')

@@ -4,6 +4,7 @@
 int main(int argc,char *argv[]){
     int screen_x=500;
     int screen_y=500;
+
     InitWindow(screen_x,screen_y,"hello");
     SetTargetFPS(60);
     while(!WindowShouldClose()){

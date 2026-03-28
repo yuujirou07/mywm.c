@@ -37,42 +37,23 @@
 #include <libinput.h>
 #include <wlr/backend/libinput.h>
 #include <wlr/types/wlr_drm.h> 
-#include <signal.h>
 struct server {
     //バックエンド構造体の定義
     struct wlr_backend *backend;
-    //リスナーを定義
-    struct wl_listener new_input;
-    //キーイベントの構造体を定義
-    struct wlr_keyboard *keyboard;
-    //キーイベントの構造体を定義
-    struct wl_listener key;
-    //アウトプットリスナーの定義
-    struct wl_listener new_output;
-    //サーバ本体の構造体の定義
-    struct wl_display  *display;
-    //レンダラーの定義（描画バッファ構造体）
-    struct wlr_renderer *renderer;
-    //GPUメモリ確保（確保した領域にレンダラーで描画バッファを保持することができる）
-    struct wlr_allocator *allocator;
+    struct wl_listener new_input;//デバイス検知判定用のリスナーを定義
+    struct wlr_keyboard *keyboard;//キーイベントの構造体を定義
+    struct wl_listener key; //キーイベント時のリスナーの定義
+    struct wl_listener new_output; //アウトプットリスナーの定義
+    struct wl_display  *display;//サーバ本体の構造体の定義
+    struct wlr_renderer *renderer; //レンダラーの定義（描画バッファ構造体）
+    struct wlr_allocator *allocator; //GPUメモリ確保（確保した領域にレンダラーで描画バッファを保持することができる）
     struct wlr_output_layout *output_layout;
-    //フレームリスナー
-    struct wl_listener frame;
-    //テクスチャ構造体
-    struct wlr_texture *background_tex;
-    //ハードウェアカーソル
-    struct wlr_pointer pointer;
-    //論理カーソル
-    struct wlr_cursor *cursor;
-    //マウスリスナー
-    struct wl_listener  mouce_listener;
+    struct wl_listener frame;//フレームリスナー
+    struct wlr_pointer pointer;//ハードウェアカーソル
+    struct wlr_cursor *cursor;//論理カーソル
     struct wlr_xcursor_manager *cursor_mgr ;
-    //タスクバーテクスチャ
-    // (vramに移すためにtaskbar_pixを生のピクセルデータに変換したものをいれる変数)
-    struct wlr_texture *taskbar_tex;
-    //xdg_shell: wlrootsがそのリクエストを受け取り、
-    // struct wlr_xdg_toplevel という「型」のデータを作る。
-    struct wlr_xdg_shell *xdg_shell;
+    struct wlr_texture *taskbar_tex;  //タスクバーテクスチャ(vramに移すためにtaskbar_pixを生のピクセルデータに変換したものをいれる変数)
+    struct wlr_xdg_shell *xdg_shell;//xdg_shell: wlrootsがそのリクエストを受け取り、struct wlr_xdg_toplevel という「型」のデータを作る。
     struct wl_list views; // 表示するウィンドウ（view）のリスト
     struct wl_listener new_xdg_toplevel; // 新しいウィンドウが作られた時のリスナー
     struct wlr_compositor *compositor; // コンポジタの構造体
@@ -86,7 +67,12 @@ struct server {
     int window_side;//ウィンドウのリサイズの方向を保持する変数
     struct wlr_pointer_button_event *button; //マウスのボタンイベントを保持する構造体
     struct view *focus_view; // フォーカス中のウィンドウを保持する構造体
+    struct focus_xdg_toplevel_histoly *histoly;//アクティブにされたサーフェス管理用の履歴
+    struct wlr_scene *scene;//シーン構造ｃｃ
+    struct wlr_buffer *wallpaper_buf;//壁紙画像返還後のバッファ
+    struct wlr_scene_output *scene_output; //シーン用のアウトプットデバイスなどの情報の構造体
     };
+
 
 //マウスの構造体
 struct my_pointer {
@@ -94,6 +80,11 @@ struct my_pointer {
     struct wl_listener motion;
     struct wl_listener button;
 };
+//forcus_xdg_toplevelの履歴
+struct focus_xdg_toplevel_histoly{
+    struct wlr_xdg_toplevel *now;
+    struct wlr_xdg_toplevel *old;
+    };
 
 //ウィンドウの構造体
 struct view{
@@ -114,62 +105,53 @@ struct view{
 //面倒くさいからグローバル変数として扱う
 //サーバ構造体の定義と初期化
 struct server s1={0};
-
 //ハードウェアカーソルの許容個数
 struct my_pointer *ptr[10] ={0};
-
 //マウスの個数を数える変数
 int a=0;      
-
 bool mouce_focus = false; //マウスのフォーカスが当たっているかのフラグ
-
 //マウスのボタンが押されているかのフラグ
 bool bottunpressed = false;
 //リサイズ中かのフラグ
 bool now_resizing=false;
-
 bool surface_sort = true; //ウィンドウの重なり順を入れ替えるためのフラグ
 
 struct mouce_taskbar_pos {
     double x;
     double y;
 };
-struct mouce_taskbar_pos mtb_pos = {0};
 
+struct mouce_taskbar_pos mtb_pos = {0};
 double absolute_delta_x={0}; //ウィンドウ画面のサイズ変更時の横の絶対移動量
 double absolute_delta_y={0}; //ウィンドウ画面のサイズ変更時の縦の絶対移動量
-
-//デバッグ時のファイル
-FILE *dbf;
 //wiinキーとenterキーの同時押し判定
 bool super_pressed=0;
+
+
+//特定のウィンドウにマウスをフォーカスする関数
+static void focus_mouce(struct wlr_surface *focus_surface,struct wlr_seat *focus_seat,struct wlr_cursor *cursor,struct view *v);
+//特定のウィンドウにキーボードをフォーカスする関数
+static void focus_window(struct wlr_surface *focused_surface,struct  wlr_seat *focus_seat,struct view *v);
+//終了時にメモリを開放する関数
+void server_destroy(struct server *s);
 //キーの修飾キーが変化したときに呼ばれる関数のプロトタイプ宣言
 void modifire_key(struct wl_listener *listener, void *data);
-
 //マウスのボタンイベントが発生したときに呼ばれる関数のプロトタイプ宣言
 void newinput_moucebotton(struct wl_listener *listener,void *data);
-
 //commitの確認のためのリスナーのプロトタイプ宣言
 void checkcomit(struct wl_listener *listener, void *data);
-
 // windowの描画要求時に呼ばれる関数のプロトタイプ宣言
 void displaypush(struct wl_listener *listener, void *data);
-
 // windowの消去要求時に呼ばれる関数のプロトタイプ宣言
 void displaypull(struct wl_listener *listener, void *data);
-
 //h_keyのプロトタイプ宣言
 void h_key(struct wl_listener *listener,void *data);
-
 //newinput_keyboardのプロトタイプ宣言
 void newinput_device(struct wl_listener *listener,void *data);
-
 //new_outputのプロトタイプ宣言
 void new_output(struct wl_listener *listener,void *data);
-
 //function_setのプロトタイプ宣言
 void function_set();
-
 //描画用関数のプロトタイプ宣言
 void output_frame(struct wl_listener *listener,void *data);
 //newinput_mouceのプロトタイプ宣言
@@ -181,7 +163,6 @@ void server_new_xdg_toplevel(struct wl_listener *listener, void *data);
 int main(int argc,char *argv[]){
     //ログレベルと出力先を指定する関数
     wlr_log_init(WLR_INFO,NULL);
-    dbf=fopen("debuglogfile.log","w");
     // 最初に初期化
     wl_list_init(&s1.new_input.link);
     wl_list_init(&s1.new_output.link);
@@ -189,68 +170,21 @@ int main(int argc,char *argv[]){
     wl_list_init(&s1.key.link);
     wl_list_init(&s1.new_xdg_toplevel.link);  
     wl_list_init(&s1.views);
+    wl_list_init(&s1.key_modifier.link);
 
     //waylandサーバ(display)構造体の定義と初期化
     s1.display = wl_display_create();
 
-    //モニターのデータを定義
-    s1.output_layout = wlr_output_layout_create(s1.display);
-
-    s1.cursor = wlr_cursor_create();
-
-    wlr_cursor_attach_output_layout(s1.cursor, s1.output_layout);
-
+    
     //waylandサーバ構造体からloopのメンバ部分だけ抜き取り
     // 構造体としてloopを定義する
     struct wl_event_loop *loop =wl_display_get_event_loop(s1.display);
-    GError *img_error = NULL;
-    //壁紙の画像を読み込む。失敗したらimg_errorにエラー情報が入る
-    GdkPixbuf  *pixbuf = gdk_pixbuf_new_from_file("wp.jpg",&img_error);
 
-    // 1. xdg_shellの作成
-    s1.xdg_shell = wlr_xdg_shell_create(s1.display,3);
-
-    // 2. 壁紙の読み込み
-    if(!pixbuf){
-        printf("NOWALLPAPER");
-        if(img_error){
-            fprintf(stderr,
-            "domain=%s\ncode=%d\nmessage=%s\n",
-            g_quark_to_string(img_error->domain),
-            img_error->code,
-            img_error->message);
-
-            g_error_free(img_error);
-        }
-        return 0;
-    }
-    // 1. Pixbufから情報の「抽出」
-    // GdkPixbufは「ただのメモリの塊」なので、幅、高さ、1行のデータサイズ(stride)を聞き出します
-    int width = gdk_pixbuf_get_width(pixbuf);
-    int height = gdk_pixbuf_get_height(pixbuf);
-    int stride = gdk_pixbuf_get_rowstride(pixbuf);
-    guchar *pixels = gdk_pixbuf_get_pixels(pixbuf);
-    bool has_alpha = gdk_pixbuf_get_has_alpha(pixbuf);
-
-    // 2. フォーマットの「翻訳」
-    // GdkPixbufのメモリ並び順 (R, G, B, A) を、wlrootsが理解できる「DRMフォーマット」に変換します
-    // ※リトルエンディアン環境では、バイト順 R,G,B,A は 0xAABBGGRR となり、これは ABGR8888 に相当します
-    uint32_t drm_format = has_alpha ? DRM_FORMAT_ABGR8888 : DRM_FORMAT_BGR888;
-    
-    const char *socket_name;
-    //もしdisplayに接続するソケットが自動で追加できなければ終了する
-    if((socket_name = wl_display_add_socket_auto(s1.display)) == NULL){
-        fprintf(stderr,"socket error\n");
-        return 0;
-    }
-    
-    
     //バックエンド生成
     s1.backend = wlr_backend_autocreate(loop, NULL);
 
     //取得したバックエンドから適切なレンダラーを生成する
     s1.renderer = wlr_renderer_autocreate(s1.backend);
-
     //Wayland ディスプレイ (wl_display) にレンダラーを登録する
     wlr_renderer_init_wl_display(s1.renderer, s1.display);
 
@@ -259,31 +193,34 @@ int main(int argc,char *argv[]){
 
     //アプリたちの要求を受け付け、管理するための窓口（帳簿）であるコンポジタを作成する
     s1.compositor = wlr_compositor_create(s1.display,6,s1.renderer);
-
     //サブコンポジタの作成。サブコンポジタは、クライアントがサブサーフェスを作成するためのインターフェースを提供します。
     //これを呼び出すことで、クライアント（アプリケーション）は一つのウィンドウの中に、
     // 独立して更新・制御できる複数の「子画面（サブサーフェス）」を持てるようになる
     wlr_subcompositor_create(s1.display);
-
-    //データデバイスマネージャの作成。データデバイスマネージャは、クリップボードやドラッグアンドドロップなどのデータ転送機能を提供します。
+     //データデバイスマネージャの作成。データデバイスマネージャは、
+     // クリップボードやドラッグアンドドロップなどのデータ転送機能を提供します。
     wlr_data_device_manager_create(s1.display);
+    s1.output_layout=wlr_output_layout_create(s1.display);
+    s1.scene=wlr_scene_create();
+    s1.cursor = wlr_cursor_create();
+    wlr_cursor_attach_output_layout(s1.cursor, s1.output_layout);
+
+    const char *socket_name;
+    //もしdisplayに接続するソケットが自動で追加できなければ終了する
+    if((socket_name = wl_display_add_socket_auto(s1.display)) == NULL){
+        fprintf(stderr,"socket error\n");
+        return 0;
+    }
 
     s1.seat = wlr_seat_create(s1.display, "seat0");
-
-
-
     //メンバに関数ポインタをセット
     function_set();
-    
     //s1.backend->events.new_inputが発火したらs1.new_input.notifyを実行する(関数)
     wl_signal_add(&s1.backend->events.new_input,&s1.new_input);
-
     //出力デバイスが追加されたらnew_outputの関数を実行する
     wl_signal_add(&s1.backend->events.new_output,&s1.new_output);
-
     //クライアントが新しいxdg_toplevelウィンドウを要求したときに発火する
     wl_signal_add(&s1.xdg_shell->events.new_toplevel,&s1.new_xdg_toplevel);
-
 
     //バックエンドのイベント監視ループ開始
     if(!wlr_backend_start(s1.backend)){
@@ -293,77 +230,21 @@ int main(int argc,char *argv[]){
 
     setenv("WAYLAND_DISPLAY",socket_name,1);
 
-    
-
-    // 3. GPUへの「アップロード」
-    // ここで初めて CPU(RAM) -> GPU(VRAM) のコピーが行われます
-    // ※ s1.renderer は事前に作成されている必要があります
-
-        s1.background_tex = wlr_texture_from_pixels(
-        s1.renderer,
-        drm_format,
-        stride,
-        width,
-        height,
-        pixels
-    );
-
-  
-    
-    // 4. 後始末
-    // GPUにコピーし終わったので、CPU側のデータ（pixbuf）はもう不要です
-    g_object_unref(pixbuf);
-
      //無限ループでクライアントからのイベントを処理する
     wl_display_run(s1.display);
 
-
-    // 1. まずリスナーを「登録した場所」から確実に外す
-    wl_list_remove(&s1.new_input.link);
-    wl_list_remove(&s1.new_output.link);
-    wl_list_remove(&s1.frame.link);
-    
-    // キーボードとマウスは「デバイス」に紐付いているため、
-    wl_list_remove(&s1.key.link);
-    for(int h=0;h<10;h++){
-        if (ptr[h] == NULL) {
-            continue; // マウスが登録されていない枠はスキップ
-        }
-        // リストに繋がっているなら外す
-        if(!wl_list_empty(&ptr[h]->motion.link)){
-            wl_list_remove(&ptr[h]->motion.link);
-        }
-        free(ptr[h]);
-        ptr[h]=NULL;
-    }
-    // 2. 次に、リスナーが紐付いている構造体を破棄する
-    wlr_xcursor_manager_destroy(s1.cursor_mgr);
-    wlr_cursor_destroy(s1.cursor);
-    wl_display_destroy_clients(s1.display);
-
-    // 3. 残りのリソース解放
-    wlr_texture_destroy(s1.background_tex);
-    wlr_renderer_destroy(s1.renderer);
-    wlr_allocator_destroy(s1.allocator);
-    wlr_backend_destroy(s1.backend);
-    wl_display_destroy(s1.display);
-
+    //メモリ解放
+    server_destroy(&s1);
     return 0;
 }
 
-
 //キーイベントが発生したときに呼ばれる関数
 void h_key(struct wl_listener *listener,void *data){
-      printf("h_key keyboard address: %p\n", s1.keyboard);
 
     //キーボード構造体を取得（グローバル変数s1を使っている前提）
     struct wlr_keyboard *keyboard = s1.keyboard;
     //送られてきたデータをeventに代入する
     struct wlr_keyboard_key_event *event = data;
-
-    dbf = fopen("debuglogfile.log", "a");
-    fprintf(dbf, "h_key called: keycode=%u state=%u\n", event->keycode, event->state);
-    fclose(dbf);
 
       //libxkbcommonの仕様上メンバのキーコードの値＋８をする
     uint32_t keycode = event->keycode + 8;
@@ -408,7 +289,7 @@ void h_key(struct wl_listener *listener,void *data){
 
             if (pid == 0) {
                 // 子プロセスの処理
-                if(execlp("GLFW_PLATFORM=wayland ./settings_window","foot",NULL)==-1){
+                if(execlp("foot","foot",NULL)==-1){
                     perror("execlp");
                     exit(1); 
                 } 
@@ -451,7 +332,7 @@ void newinput_device(struct wl_listener *listener,void *data){
         if (wlr_input_device_is_libinput(ptr[a]->device)) {
              //生のlibinput_deviceのポインタ取得
             struct libinput_device *ldev =wlr_libinput_get_device_handle(ptr[a]->device);
-             libinput_device_config_accel_set_profile(ldev, LIBINPUT_CONFIG_ACCEL_PROFILE_FLAT);
+            libinput_device_config_accel_set_profile(ldev, LIBINPUT_CONFIG_ACCEL_PROFILE_FLAT);
             libinput_device_config_accel_set_speed(ldev, 0.0);
             //ポインタの中身のポインタデバイスのタップ機能を有効にする
             libinput_device_config_tap_set_enabled(ldev,LIBINPUT_CONFIG_TAP_ENABLED);
@@ -529,6 +410,16 @@ void new_output(struct wl_listener *listener,void *data){
     //outputに構造体を紐づけて描画可能にする
     wlr_output_init_render(output,s1.allocator,s1.renderer);
 
+    s1.scene_output = wlr_scene_output_create(s1.scene,output);
+    //s1.sceneに壁紙用のツリーを生成する
+    struct wlr_scene_tree *wallpaler= wlr_scene_tree_create(&s1.scene->tree);
+    //作製したツリーのメンバのバッファに壁紙のデータを入れる
+    wlr_scene_buffer_create(wallpaler,s1.wallpaper_buf);
+    //レンダリングの座標を決める
+    wlr_scene_node_set_position(&wallpaler->node, 0, 0);
+
+    //このモニターは、仮想キャンバスの (1920, 0) の位置から右側を映し出す */
+    wlr_scene_output_set_position(s1.scene_output, 1920, 0);
     // 状態（stat)構造体を定義する
     struct wlr_output_state state;
 
@@ -594,75 +485,19 @@ void function_set(){
 
 //描画関数
 void output_frame(struct wl_listener *listener,void *data){
-    //outputに代入する 
-    struct wlr_output *output = data;
-
-    //statの定義
-    struct wlr_output_state state;
-    //statの初期化
-    wlr_output_state_init(&state);
-
-    //モニタに対して、今から絵を描くための専用レーン（パス）を確保する
-    struct wlr_render_pass *pass = wlr_output_begin_render_pass(output,&state,NULL);
-
-    struct wlr_render_texture_options options = {0};
-    
-    //何を描くか指定 
-    options.texture=s1.background_tex;
-
-    //透明度の指定1.0は不透明、0.0は完全に透明
-    float alpha =1.0;
-    options.alpha = &alpha;
-
-    // これを指定しないと、サイズ 0 で描画されるため何も見えません。
-    options.dst_box.x = 0;
-    options.dst_box.y = 0;
-    options.dst_box.width = output->width;   // モニタの横幅いっぱい
-    options.dst_box.height = output->height; // モニタの縦幅いっぱい
-
-    //passにモニタに描画する物を追加する(これは壁紙の追加関数)
-    wlr_render_pass_add_texture(pass,&options);
-
-    //描画するウィンドウをリストから順番に取り出して描画する
-    struct view *v;
-
+    wlr_scene_output_commit(s1.scene_output,NULL);
+    //現在時刻の取得
     struct timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now); // 現在時刻を取得
-    wl_list_for_each_reverse(v, &s1.views, link) {//リストから順番に取り出す関数
-        if (!v->toplevel->base->surface->mapped) {//surfaceが描画可能かの条件分岐
-        continue; 
-    }
+    // 描画が終わった時刻をアプリ（Waylandクライアント）に通知する
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    wlr_scene_output_send_frame_done(s1.scene_output, &now);
 
-        struct wlr_surface *surface = v->toplevel->base->surface;//surface構造体を定義して、toplevel->base->surfaceを代入する
-
-        struct wlr_render_texture_options opts = {0};//描画する物の指定をする構造体を定義して初期化する
-        opts.texture = wlr_surface_get_texture(surface);//surfaceからテクスチャを取得してopts.textureに代入する
-        if (!opts.texture) continue;
-        opts.dst_box.x = v->x;//どこに描くかの指定。今回はv->x,v->yに描く
-        opts.dst_box.y = v->y;//surfaceの幅と高さをopts.dst_boxに代入する
-        opts.dst_box.width = surface->current.width;//surfaceの幅をopts.dst_box.widthに代入する
-        opts.dst_box.height = surface->current.height;//surfaceの高さをopts.dst_box.heightに代入する
-        opts.alpha = &alpha;//透明度の指定
-
-        wlr_render_pass_add_texture(pass, &opts);//passに描画する物を追加する関数
-        wlr_surface_send_frame_done(surface, &now);
-    }
-    //passをgpuに送る
-    wlr_render_pass_submit(pass);
-
-    //passのメモリを解放する
-    wlr_output_commit_state(output,&state);
-    wlr_output_state_finish(&state);
-    wlr_output_schedule_frame(output);
 }
 
 //マウスイベントが発生したときに呼ばれる関数
 void newinput_mouce(struct wl_listener *listener,void *data){
-
     //dataをローカル変数に渡す
     struct wlr_pointer_motion_event *mouce = data;
-
-
     //前フレームからのマウスの移動量をカーソルの座標に反映させる
     wlr_cursor_move(s1.cursor,&mouce->pointer->base,mouce->delta_x,mouce->delta_y);
 
@@ -762,10 +597,10 @@ void newinput_mouce(struct wl_listener *listener,void *data){
             //リサイズ処理
         if(s1.window_side ==1 ){
             //カーソルからウィンドウの上端までの距離を基準にリサイズする
-            s1.resizing_view->pending_y=(int32_t)s1.cursor->y-(int32_t)absolute_delta_y;
+            s1.resizing_view->pending_y=s1.cursor->y-absolute_delta_y;
             s1.resizing_view->pending_width = s1.resizing_view->width;
             s1.resizing_view->pending_x = s1.resizing_view->x;
-            s1.resizing_view->pending_height = (int32_t)s1.resizing_view->Bottom_pos_y - (int32_t)s1.resizing_view->pending_y;
+            s1.resizing_view->pending_height = s1.resizing_view->Bottom_pos_y - s1.resizing_view->pending_y;
         }
         else if(s1.window_side == 2){
             s1.resizing_view->pending_height = s1.cursor->y+absolute_delta_y;
@@ -797,6 +632,7 @@ void newinput_mouce(struct wl_listener *listener,void *data){
             s1.resizing_view->pending_x = s1.resizing_view->x;
             s1.resizing_view->pending_y = s1.resizing_view->y;
         }
+        //サーフェスに設定後のウィンドウサイズ情報を送る
         s1.resizing_view->pending_serial = wlr_xdg_toplevel_set_size(s1.resizing_view->toplevel,
             s1.resizing_view->pending_width,
             s1.resizing_view->pending_height);
@@ -863,28 +699,11 @@ void newinput_moucebotton(struct wl_listener *listener,void *data){
                     wl_list_insert(&s1.views, &v->link);
                     surface_sort = false;
                 }
-                // seat のキーボードフォーカスをこのサーフェスに設定する
-                struct wlr_keyboard *keyboard = wlr_seat_get_keyboard(s1.seat);
-
-                s1.focus_view = v; // フォーカスされたウィンドウを保存
-
-                if(keyboard){
-                    //マウスクリックしたときにマウスが乗っているウィンドウにキーボードのフォーカスを当てる関数
-                    wlr_seat_keyboard_notify_enter(
-                    s1.seat,
-                    v->toplevel->base->surface,// フォーカスを当てるサーフェス
-                    keyboard->keycodes,      // 現在押されているキーの配列
-                    keyboard->num_keycodes,  // 押されているキーの数
-                    &keyboard->modifiers     // Shift/Ctrl などの修飾キーの状態
-                    );
-                }
-                wlr_seat_pointer_notify_enter(
-                    s1.seat,
-                    v->toplevel->base->surface,
-                    s1.cursor->x - v->x,
-                    s1.cursor->y - v->y
-                    );
-                    mouce_focus=true;
+                focus_window(v->toplevel->base->surface,
+                            s1.seat,v);
+                          
+                focus_mouce(v->toplevel->base->surface,
+                    s1.seat,s1.cursor,v);
             }
         }
     }
@@ -899,21 +718,23 @@ void newinput_moucebotton(struct wl_listener *listener,void *data){
 //新しいウィンドウが要求された時に呼ばれる関数
 void server_new_xdg_toplevel(struct wl_listener *listener, void *data){
     struct wlr_xdg_toplevel *toplevel = data;
+    //callocでポインタを使いまわす
     struct view *v = calloc(1, sizeof(struct view));
-
     v->toplevel = toplevel;
-
-    // --- ここではまだ configure や size 指定はしない ---
-
-    // 1. リストへの挿入などはOK
-    wl_list_insert(&s1.views, &v->link);
+    wl_list_insert(&s1.views, &v->link);//サーフェスリストの先頭に置く
     v->x = 50;
     v->y = 50;
-
+    //新しくツリーを生成する
+    struct wlr_scene_tree *sarface_tree = wlr_scene_tree_create(&s1.scene->tree);
+    //取得したview構造体のポインタをツリーに格納しポインタの違いでサーフェスを区別する
+    sarface_tree->node.data=(void*)v;
+    //xdg_surfaceをsceneのツリーに紐ずける
+    wlr_scene_xdg_surface_create(&s1.scene->tree,toplevel->base);
+    /* 親ツリーの座標を変更（子である scene_surface も自動的に移動する） */
+    wlr_scene_node_set_position(&s1.scene->tree.node, 100, 200);
     // マップ（表示開始）時のハンドラを登録
     v->map.notify = displaypush; // ここでサイズ指定などを行うように変更する
     wl_signal_add(&toplevel->base->surface->events.map, &v->map);
-
     // 3. アンマップ（非表示）時のハンドラ
     v->unmap.notify = displaypull;
     wl_signal_add(&toplevel->base->surface->events.unmap, &v->unmap);
@@ -921,7 +742,6 @@ void server_new_xdg_toplevel(struct wl_listener *listener, void *data){
     v->commit.notify = checkcomit;
     wl_signal_add(&toplevel->base->surface->events.commit, &v->commit);
 
-    printf("new toplevel (initialized but not yet mapped)\n");
 }
 
 //ウィンドウの描画要求が来たときに呼ばれる関数
@@ -978,27 +798,108 @@ void displaypush(struct wl_listener *listener, void *data){
 
  }
 void server_destroy(struct server *s) {
-    // テクスチャ（VRAMのデータ）を先に解放
-    if (s->background_tex) wlr_texture_destroy(s->background_tex);
-    if (s->taskbar_tex)    wlr_texture_destroy(s->taskbar_tex);
+    wlr_seat_destroy(s->seat);
+    // リスナーを外す
+    if (s->new_input.link.next) { // NULLチェック（念のため）
+        wl_list_remove(&s->new_input.link);
+        wl_list_init(&s->new_input.link); // 重要：ここでもう一度初期化する
+    }
+    if (s->new_output.link.next) { // NULLチェック（念のため）
+        wl_list_remove(&s->new_output.link);
+        wl_list_init(&s->new_output.link); // 重要：ここでもう一度初期化する
+    }
+    if (s->frame.link.next) { // NULLチェック（念のため）
+        wl_list_remove(&s->frame.link);
+        wl_list_init(&s->frame.link); // 重要：ここでもう一度初期化する
+    }
+    if (s->key.link.next) { // NULLチェック（念のため）
+        wl_list_remove(&s->key.link);
+        wl_list_init(&s->key.link); // 重要：ここでもう一度初期化する
+    }
+    if (s->key_modifier.link.next) { // NULLチェック（念のため）
+        wl_list_remove(&s->key_modifier.link);
+        wl_list_init(&s->key_modifier.link); // 重要：ここでもう一度初期化する
+    }
+    if (s->new_xdg_toplevel.link.next) { // NULLチェック（念のため）
+        wl_list_remove(&s->new_xdg_toplevel.link);
+        wl_list_init(&s->new_xdg_toplevel.link); // 重要：ここでもう一度初期化する
+    }
+    // マウスのptr[]を解放
+    for (int h = 0; h < 10; h++) {
+        if (ptr[h] == NULL) continue;
+        // motionリスナーの解除
+        if (ptr[h]->motion.link.next && ptr[h]->motion.link.next != &ptr[h]->motion.link) {
+            wl_list_remove(&ptr[h]->motion.link);
+            wl_list_init(&ptr[h]->motion.link);
+        }
+        // buttonリスナーの解除
+        if (ptr[h]->button.link.next && ptr[h]->button.link.next != &ptr[h]->button.link) {
+            wl_list_remove(&ptr[h]->button.link);
+            wl_list_init(&ptr[h]->button.link);
+        }
 
-    // カーソルマネージャとカーソル
-    wlr_xcursor_manager_destroy(s->cursor_mgr);
-    wlr_cursor_destroy(s->cursor);
-
-    // アロケータ・レンダラー・バックエンド
-    wlr_allocator_destroy(s->allocator);
-    wlr_renderer_destroy(s->renderer);
-    wlr_backend_destroy(s->backend);
-
-    // ★これが最後。ディスプレイを破棄すると
-    // wl_listener や wlr_seat など登録済みのものが
-    // 連鎖的に全部解放される
-    wl_display_destroy(s->display);
-
+        free(ptr[h]);
+        ptr[h] = NULL;
+    }
+    // viewリストを解放
     struct view *v, *tmp;
     wl_list_for_each_safe(v, tmp, &s->views, link) {
+        wl_list_remove(&v->link);
+        wl_list_remove(&v->map.link);
+        wl_list_remove(&v->unmap.link);
+        wl_list_remove(&v->destroy.link);
+        wl_list_remove(&v->commit.link);
         free(v);
+        v = NULL;
     }
+    // クライアントを切断してからリソース解放
+    wl_display_destroy_clients(s->display);
+
+    wlr_xcursor_manager_destroy(s->cursor_mgr);
+    wlr_allocator_destroy(s->allocator);
+    wlr_renderer_destroy(s->renderer);
+    wl_display_destroy(s->display);
 }
- 
+
+static void focus_window(struct wlr_surface *focus_surface,struct  wlr_seat *focus_seat,struct view *v){
+    // seat からキーボード構造体をを抜き出す
+    struct wlr_keyboard *keyboard = wlr_seat_get_keyboard(focus_seat);
+    //すでにフォーカスされてるウィンドウ
+    struct wlr_surface *focused_surface =
+        focus_seat->keyboard_state.focused_surface;
+
+    //フォーカスするサーフェスがすでにフォーカスされてたら戻る
+    if(focus_surface==focused_surface){
+        return;
+    }
+    if(keyboard){
+        //マウスクリックしたときにマウスが乗っているウィンドウにキーボードのフォーカスを当てる関数
+        wlr_seat_keyboard_notify_enter(
+        focus_seat,
+        focus_surface,// フォーカスを当てるサーフェス
+        keyboard->keycodes,      // 現在押されているキーの配列
+        keyboard->num_keycodes,  // 押されているキーの数
+        &keyboard->modifiers     // Shift/Ctrl などの修飾キーの状態
+        );
+    }
+
+}
+
+static void focus_mouce(struct wlr_surface *focus_surface,struct  
+    wlr_seat *focus_seat,struct wlr_cursor *cursor,struct view *v){
+    //フォーカスされているサーフェスの取得
+    struct wlr_surface *focused_surface =
+        focus_seat->pointer_state.focused_surface;
+    /*もしすでにフォーカスされているウィンドウと
+    これからするウィンドウが同じなら戻る*/
+    if(focus_surface==focused_surface){
+        return;
+    }
+    /*マウスカーソルがサーフェスに入ったことをクライアントに通知す。*/
+    wlr_seat_pointer_notify_enter(
+        focus_seat,
+        focus_surface,
+        cursor->x - v->x,
+        cursor->y - v->y
+    );
+}
