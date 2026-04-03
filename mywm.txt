@@ -237,10 +237,6 @@ int main(int argc,char *argv[]){
     s1->output_layout=wlr_output_layout_create(s1->display);
     //シーンの作成。シーンは、ウィンドウやレイヤーなどの描画要素を管理するための構造体です。
     s1->scene=wlr_scene_create();
-     // カーソル画像（NULLならデフォルト）とサイズ（24など）を指定
-     s1->mouce_structure.cursor_mgr = wlr_xcursor_manager_create(NULL, 24);
-     //カーソル画像をロード
-    wlr_xcursor_manager_load(s1->mouce_structure.cursor_mgr,2.0);
     //カーソルの作成。カーソルは、マウスポインタの位置や画像を管理するための構造体です。
     s1->mouce_structure.cursor = wlr_cursor_create();    
      //カーソルと出力レイアウトを紐付ける関数。これにより、カーソルの位置がどの出力にあるかを管理できるようになる
@@ -381,6 +377,7 @@ static void newinput_device(struct wl_listener *listener,void *data){
             //ポインタの中身のポインタデバイスのタップ機能を有効にする
             libinput_device_config_tap_set_enabled(ldev,LIBINPUT_CONFIG_TAP_ENABLED);
         }
+        wlr_xcursor_manager_load(s1->mouce_structure.cursor_mgr, 1);
         //カーソルと物理マウスを紐付ける関数
         wlr_cursor_attach_input_device(s1->mouce_structure.cursor,ptr[a]->device);
 
@@ -481,7 +478,11 @@ static void new_output(struct wl_listener *listener,void *data){
     wallpaper_create_sucsess=new_wallpaper_criant_create();
     //出力レイアウトにoutputを追加する関数。これにより、出力レイアウトはこのoutputを管理できるようになる
     wlr_output_layout_add_auto(s1->output_layout,output);
+     // カーソル画像（NULLならデフォルト）とサイズ（24など）を指定
+    s1->mouce_structure.cursor_mgr = wlr_xcursor_manager_create(NULL,32);
 
+    //カーソル画像をロード
+    wlr_xcursor_manager_load(s1->mouce_structure.cursor_mgr,2.0);
 
     //sateの設定をoutputに反映させる
     wlr_output_commit_state(output,&state);
@@ -601,10 +602,6 @@ static void newinput_mouce(struct wl_listener *listener,void *data){
         );
     }
     else {
-        //もしサーフェス外にカーソルがいるがリサイズ中だった場合
-        if(s1->now_surface_request_resize==1){
-            wlr_cursor_set_xcursor(s1->mouce_structure.cursor,s1->mouce_structure.cursor_mgr,"");
-        }
         wlr_seat_pointer_clear_focus(s1->seat);
         wlr_cursor_set_xcursor(s1->mouce_structure.cursor,s1->mouce_structure.cursor_mgr,"left_ptr");
     }
@@ -799,14 +796,12 @@ static bool new_wallpaper_criant_create() {
 }
 
 static void wallpaper_create(struct wl_listener *listener,void *data){
-    struct wlr_layer_surface_v1 *wallpaler_data=data;
-    s1->wallpaper.surface_v1=wallpaler_data;
+    s1->wallpaper.surface_v1=data;
+    s1->wallpaper.surface_v1->output = s1->output;
      //s1.sceneに壁紙用のツリーを生成する
     struct wlr_scene_tree *wallpaler= wlr_scene_tree_create(&s1->scene->tree);
     //ツリーにs1.sceneにlayer_surface_v1を作って紐ずける
     s1->wallpaper.scene_layer_surface_v1=wlr_scene_layer_surface_v1_create(wallpaler,s1->wallpaper.surface_v1);
-    struct wlr_box full_area;
-    wlr_output_layout_get_box(s1->output_layout, s1->output, &full_area);
     //コンポジタが指定した最終的なサイズをクライアント（壁紙やパネルなど）に通知するための関数
     wl_signal_add(&s1->wallpaper.surface_v1->surface->events.commit,
         &s1->wallpaper.wallpaper_manage_listner.commit_listener);
@@ -816,14 +811,14 @@ static void surface_request_resize(struct wl_listener *listener,void *data){
     //リサイズ開始のbool値更新
     s1->now_surface_request_resize=1;
     struct wlr_xdg_toplevel_resize_event *resize_data=data ;
-    s1->mouce_structure.cursor_mgr->name=(char*)wlr_xcursor_get_resize_name(resize_data->edges);
+    
+    const char *get_cursur_naeme=wlr_xcursor_get_resize_name(resize_data->edges);
     s1->resizing_view=wl_container_of(listener,s1->resizing_view,request_resize_listener);
     if(s1->resizing_view==NULL){
-        //リサイズ開始のbool値更新
-        s1->now_surface_request_resize=0;
+
     }
     //論理カーソルのテクスチャを描画する
-    wlr_cursor_set_xcursor(s1->mouce_structure.cursor,s1->mouce_structure.cursor_mgr,s1->mouce_structure.cursor_mgr->name);
+    wlr_cursor_set_xcursor(s1->mouce_structure.cursor,s1->mouce_structure.cursor_mgr,get_cursur_naeme);
 }
 
 
@@ -915,20 +910,18 @@ static const char* get_resize_cursur_name(struct wlr_scene_node* resiz_scene_nod
     if (check_resiz_scene_node == NULL){
         return "left_ptr";
     }
-    else{
-        struct wlr_xdg_toplevel *check_toplevel=conversion_wlr_scene_node_to_wlr_xdg_toplevel(check_resiz_scene_node);
-        struct wlr_xdg_toplevel *check_same_surface = conversion_wlr_scene_node_to_wlr_xdg_toplevel(resiz_scene_node);
-        if(check_same_surface != NULL && check_toplevel!=check_same_surface &&check_toplevel!=NULL){
-            switch (resize_check_counter){
-                case (0):
-                case (2):
-                    return "sb_v_double_arrow";
-                    break;
-                case (1):
-                case (3):
-                    return "sb_h_double_arrow";
-                    break;
-            }
+    struct wlr_xdg_toplevel *check_toplevel=conversion_wlr_scene_node_to_wlr_xdg_toplevel(check_resiz_scene_node);
+    struct wlr_xdg_toplevel *check_same_surface = conversion_wlr_scene_node_to_wlr_xdg_toplevel(resiz_scene_node);
+    if(check_same_surface != NULL && check_toplevel!=check_same_surface &&check_toplevel!=NULL){
+        switch (resize_check_counter){
+            case (0):
+            case (2):
+               return "sb_v_double_arrow";
+               break;
+            case (1):
+            case (3):
+                return "sb_h_double_arrow";
+                break;
         }
     }
     return "left_ptr";

@@ -2,10 +2,6 @@ project('mywm', 'c')
 
 add_project_arguments('-DWLR_USE_UNSTABLE', language: 'c')
 
-export CC=/opt/aocc/bin/clang
-export CXX=/opt/aocc/bin/clang++
-export CFLAGS="-O3 -march=znver3"
-export CXXFLAGS="-O3 -march=znver3"
 
 # 依存関係
 wlroots = dependency('wlroots-0.19')
@@ -34,6 +30,19 @@ xdg_shell_c = custom_target(
   command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
 )
 
+wlr_protocols = dependency('wlr-protocols')
+wlr_protocols_dir = wlr_protocols.get_variable('pkgdatadir')
+
+
+layer_shell_xml =wlr_protocols_dir/'unstable/wlr-layer-shell-unstable-v1.xml'
+layer_shell_server_h = custom_target(
+  'layer-shell_server-h',
+  input: layer_shell_xml,
+  output: 'wlr-layer-shell-unstable-v1-protocol.h',
+  command: [wayland_scanner, 'server-header', '@INPUT@', '@OUTPUT@'],
+)
+
+
 # ビルドディレクトリをインクルードパスに追加
 xdg_shell_inc = include_directories('.')
 
@@ -51,7 +60,7 @@ libinput_dep = dependency('libinput')   # pkg-config で libinput を探す
 # 実行ファイルの定義
 executable(
     'mywm',
-    ['mywm.c', xdg_shell_c, xdg_shell_h],  # ← xdg_shell_c と xdg_shell_h を追加
+    ['mywm.c', xdg_shell_c, xdg_shell_h,layer_shell_server_h],  # ← xdg_shell_c と xdg_shell_h を追加
     include_directories: xdg_shell_inc,
     dependencies: [
         wlroots,
