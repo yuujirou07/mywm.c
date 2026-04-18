@@ -50,6 +50,7 @@ struct pos_int{
     int pos_x;
     int pos_y;
 };
+
 struct wallpaper_listner{
     struct wl_listener  wallpaper_listner;//wlr_layer_shell_v1のクライアントシグナルのリスナー
     struct wl_listener  commit_listener;  //描画要求リスナー
@@ -83,16 +84,21 @@ struct mouce_structure_mem_mgr{
     bool surface_move_state;
     
 };
+
+struct server_output{
+     struct wlr_output_layout *output_layout;
+     struct wlr_output *output;      // 出力デバイスのリスト
+};
 struct server {
     struct wlr_backend *backend;    //バックエンド構造体の定義
     struct wl_listener new_input;   //デバイス検知判定用のリスナーを定義
     struct wlr_keyboard *keyboard;  //キーイベントの構造体を定義
     struct wl_listener key;         //キーイベント時のリスナーの定義
+    struct server_output s_output_struct;
     struct wl_listener new_output;  //アウトプットリスナーの定義
     struct wl_display  *display;    //サーバ本体の構造体の定義
     struct wlr_renderer *renderer;  //レンダラーの定義（描画バッファ構造体）
     struct wlr_allocator *allocator;//GPUメモリ確保（確保した領域にレンダラーで描画バッファを保持することができる）
-    struct wlr_output_layout *output_layout;
     struct wl_listener frame;       //フレームリスナー
     struct wlr_texture *taskbar_tex;//タスクバーテクスチャ(vramに移すためにtaskbar_pixを生のピクセルデータに変換したものをいれる変数)
     struct wlr_xdg_shell *xdg_shell;//xdg_shell: wlrootsがそのリクエストを受け取り、struct wlr_xdg_toplevel という「型」のデータを作る。
@@ -100,7 +106,6 @@ struct server {
     struct wl_listener new_xdg_toplevel;// 新しいウィンドウが作られた時のリスナー
     struct wlr_compositor *compositor; // コンポジタの構造体
     struct wlr_seat *seat;          // シートの構造体
-    struct wlr_output *output;      // 出力デバイスのリスト
     struct wlr_decoration_manager *decoration_manager; // ウィンドウの装飾を管理する構造体
     struct view *grabbed_view;      // ドラッグ中のウィンドウを保持する構造体
     struct view *resizing_view;     //リサイズ中のウィンドウを保持する構造体
@@ -139,6 +144,12 @@ struct view{
     struct wlr_box *surface_box;//サーフェスの座標と大きさのデータが入る構造体
     struct wlr_box temporary_set_resize_box;//リサイズ用の仮のwlr_box構造体
     struct wlr_scene_tree *scene_tree;
+    struct {//サーフェスのサイズの規定
+        int max_height;
+        int min_height;
+        int max_width;
+        int min_width;
+    } surface_size_value;
     uint32_t pending_serial;    //set_sizeが返したシリアル番号で、フレームのずれによるウィンドウ画面のサイズ変更時のがたつきを直すための同期に使う
 };
 
@@ -157,6 +168,8 @@ struct mouce_taskbar_pos {
     double x;
     double y;
 };
+//サーフェスの規定サイズを設定します
+static void put_surface_size_value(struct view* put_size_view);
 //サーフェス移動時に実行する関数
 static void request_surface_move(struct wl_listener*,void *data);
 //スクロール量変数チェック
@@ -264,7 +277,7 @@ int main(int argc,char *argv[]){
     //xdg_shellの作成。xdg_shellは、クライアントがウィンドウを作成・管理するためのプロトコルを提供します。
     s1->xdg_shell=wlr_xdg_shell_create(s1->display, 1);
     //出力レイアウトの作成。出力レイアウトは、複数の物理モニターを仮想的なキャンバス上に配置するための構造体です。
-    s1->output_layout=wlr_output_layout_create(s1->display);
+    s1->s_output_struct.output_layout=wlr_output_layout_create(s1->display);
     //シーンの作成。シーンは、ウィンドウやレイヤーなどの描画要素を管理するための構造体です。
     s1->scene=wlr_scene_create();
      // カーソル画像（NULLならデフォルト）とサイズ（24など）を指定
@@ -274,7 +287,7 @@ int main(int argc,char *argv[]){
     //カーソルの作成。カーソルは、マウスポインタの位置や画像を管理するための構造体です。
     s1->mouce_structure.cursor = wlr_cursor_create();    
      //カーソルと出力レイアウトを紐付ける関数。これにより、カーソルの位置がどの出力にあるかを管理できるようになる
-    wlr_cursor_attach_output_layout(s1->mouce_structure.cursor, s1->output_layout);
+    wlr_cursor_attach_output_layout(s1->mouce_structure.cursor, s1->s_output_struct.output_layout);
     //
     s1->wallpaper.wallpaper_shell = wlr_layer_shell_v1_create(s1->display,1);
 
@@ -482,7 +495,7 @@ static void modifire_key(struct wl_listener *listener, void *data) {
 static void new_output(struct wl_listener *listener,void *data){
     //生成されたoutput構造体にdataを代入する
     struct wlr_output *output = data;
-    s1->output = output;
+    s1->s_output_struct.output = output;
     //outputに構造体を紐づけて描画可能にする
     wlr_output_init_render(output,s1->allocator,s1->renderer);
     //取得したoutput（物理モニター）構造体とs1.scene構造体を紐ずける
@@ -492,7 +505,6 @@ static void new_output(struct wl_listener *listener,void *data){
 
     //stateを初期化する
     wlr_output_state_init(&state);
-    
     // 画面を有効化
     wlr_output_state_set_enabled(&state, true);
     //output->modeにデータが入っているかの条件分岐
@@ -513,7 +525,7 @@ static void new_output(struct wl_listener *listener,void *data){
     //swaybgへの壁紙要求
     wallpaper_create_sucsess=new_wallpaper_criant_create();
     //出力レイアウトにoutputを追加する関数。これにより、出力レイアウトはこのoutputを管理できるようになる
-    wlr_output_layout_add_auto(s1->output_layout,output);
+    wlr_output_layout_add_auto(s1->s_output_struct.output_layout,output);
 
 
     //sateの設定をoutputに反映させる
@@ -594,61 +606,111 @@ static void newinput_mouce(struct wl_listener *listener,void *data){
         temporary_set_resize_view->temporary_set_resize_box.y = s1->resizing_view->scene_tree->node.y;
         temporary_set_resize_view->temporary_set_resize_box.width = s1->resizing_view->surface_box->width;
         temporary_set_resize_view->temporary_set_resize_box.height = s1->resizing_view->surface_box->height;
-        
         //リサイズ処理
         uint32_t resize_num=s1->mouce_structure.resize_edges;
+
+        int bottom_y;
+        int new_y;
+        int new_height;
         switch(resize_num){
             case WLR_EDGE_TOP:
                 //上辺  
                 //座標の定義
-                //もしクライアントが決めた指定できるサイズないだたら
-                if(temporary_set_resize_view->temporary_set_resize_box.height < 
-                    temporary_set_resize_view->toplevel->current.min_height &&
-                    temporary_set_resize_view->temporary_set_resize_box.height >
-                    temporary_set_resize_view->toplevel->current.min_height){
-                        
-                temporary_set_resize_view->temporary_set_resize_box.y =
-                    s1->mouce_structure.cursor->y + 
-                    s1->diff_resize_cur_surf_pos.diff_cur_surf_pos.pos_y;
+                //もしクライアントが決めた指定できるサイズ内だだったら
+                bottom_y = s1->diff_resize_cur_surf_pos.left_bottom_absolute_pos.pos_y;
+                new_y = s1->mouce_structure.cursor->y + s1->diff_resize_cur_surf_pos.diff_cur_surf_pos.pos_y;
+                new_height= bottom_y-new_y;
 
-                temporary_set_resize_view->temporary_set_resize_box.height =
-                    s1->diff_resize_cur_surf_pos.left_bottom_absolute_pos.pos_y - 
-                    temporary_set_resize_view->temporary_set_resize_box.y;
+                if (new_height < temporary_set_resize_view->surface_size_value.min_height) {
+                    new_height = temporary_set_resize_view->surface_size_value.min_height;
                 }
+                if (new_height > temporary_set_resize_view->surface_size_value.max_height) {
+                    new_height = temporary_set_resize_view->surface_size_value.max_height;
+                }
+                new_y = bottom_y - new_height;
+                
+                    //仮変数を使うことで誤差をなくす
+                // 最後に構造体へ代入する
+                temporary_set_resize_view->temporary_set_resize_box.y = new_y;
+                temporary_set_resize_view->temporary_set_resize_box.height = new_height;
                 break;
 
             case WLR_EDGE_RIGHT:
                 //右辺
                 if(temporary_set_resize_view->temporary_set_resize_box.width < 
-                    temporary_set_resize_view->toplevel->current.max_width && 
+                    temporary_set_resize_view->surface_size_value.max_width && 
                     temporary_set_resize_view->temporary_set_resize_box.width >
-                    temporary_set_resize_view->toplevel->current.min_width){
-                temporary_set_resize_view->temporary_set_resize_box.width = 
-                    s1->mouce_structure.cursor->x - 
-                    s1->diff_resize_cur_surf_pos.right_bottom_pos.pos_x;
-                    }
+                    temporary_set_resize_view->surface_size_value.min_width){
+
+                    temporary_set_resize_view->temporary_set_resize_box.width = 
+                        s1->mouce_structure.cursor->x - 
+                        s1->diff_resize_cur_surf_pos.right_bottom_pos.pos_x;
+                }
+
+                if(temporary_set_resize_view->temporary_set_resize_box.width >
+                    temporary_set_resize_view->surface_size_value.max_width){
+                    temporary_set_resize_view->temporary_set_resize_box.width =
+                        temporary_set_resize_view->surface_size_value.max_width - 1;
+                }
+                else if(temporary_set_resize_view->temporary_set_resize_box.width < 
+                    temporary_set_resize_view->surface_size_value.min_width){
+                    temporary_set_resize_view->temporary_set_resize_box.width = 
+                        temporary_set_resize_view->surface_size_value.min_width + 1;
+                }
                 break;
 
             case WLR_EDGE_BOTTOM:
                 //下辺
-                temporary_set_resize_view->temporary_set_resize_box.height =
-                    s1->mouce_structure.cursor->y + 
-                    s1->diff_resize_cur_surf_pos.left_bottom_pos.pos_y;
+                if(temporary_set_resize_view->temporary_set_resize_box.height < 
+                    temporary_set_resize_view->surface_size_value.max_height &&
+                    temporary_set_resize_view->temporary_set_resize_box.height > 
+                    temporary_set_resize_view->surface_size_value.min_height){
+
+                    temporary_set_resize_view->temporary_set_resize_box.height =
+                        s1->mouce_structure.cursor->y + 
+                        s1->diff_resize_cur_surf_pos.left_bottom_pos.pos_y;
+                }
+                if(temporary_set_resize_view->temporary_set_resize_box.height > 
+                    temporary_set_resize_view->surface_size_value.max_height){
+                    temporary_set_resize_view->temporary_set_resize_box.height = 
+                        temporary_set_resize_view->surface_size_value.max_height-1;
+                }
+                else if(temporary_set_resize_view->temporary_set_resize_box.height < 
+                    temporary_set_resize_view->surface_size_value.min_height){
+                    temporary_set_resize_view->temporary_set_resize_box.height = 
+                        temporary_set_resize_view->surface_size_value.min_height + 1;
+                    }
                 break;
 
             case WLR_EDGE_LEFT:
                 //左辺
-                temporary_set_resize_view->temporary_set_resize_box.x = 
-                    s1->mouce_structure.cursor->x - 
-                    s1->diff_resize_cur_surf_pos.diff_cur_surf_pos.pos_x;
-            
-                temporary_set_resize_view->temporary_set_resize_box.width = 
-                    s1->diff_resize_cur_surf_pos.right_bottom_absolute_pos.pos_x - 
-                    temporary_set_resize_view->temporary_set_resize_box.x;
+                if(temporary_set_resize_view->temporary_set_resize_box.width < 
+                    temporary_set_resize_view->surface_size_value.max_width && 
+                    temporary_set_resize_view->temporary_set_resize_box.width > 
+                    temporary_set_resize_view->surface_size_value.min_width){
+
+                    temporary_set_resize_view->temporary_set_resize_box.x = 
+                        s1->mouce_structure.cursor->x - 
+                        s1->diff_resize_cur_surf_pos.diff_cur_surf_pos.pos_x;
+                
+                    temporary_set_resize_view->temporary_set_resize_box.width = 
+                        s1->diff_resize_cur_surf_pos.right_bottom_absolute_pos.pos_x - 
+                        temporary_set_resize_view->temporary_set_resize_box.x;
+                
+                if(temporary_set_resize_view->temporary_set_resize_box.width > 
+                    temporary_set_resize_view->surface_size_value.max_width){
+                    temporary_set_resize_view->temporary_set_resize_box.width = 
+                        temporary_set_resize_view->surface_size_value.max_width-1;
+                }
+                else if(temporary_set_resize_view->temporary_set_resize_box.width <
+                    temporary_set_resize_view->surface_size_value.min_width){
+                    temporary_set_resize_view->temporary_set_resize_box.width =
+                        temporary_set_resize_view->surface_size_value.min_width+1;
+                }
+                }
                 break;
 
             case WLR_EDGE_NONE:
-                s1->resizing_view->pending_serial=0;
                 break;
         }
         //サーフェスに設定後のウィンドウサイズ情報を送る
@@ -714,17 +776,17 @@ static void newinput_moucebotton(struct wl_listener *listener,void *data){
         }
     }
     else if(button->state == WL_POINTER_BUTTON_STATE_RELEASED){
-        if(s1->mouce_structure.surface_move_state){
+        if(s1->mouce_structure.surface_move_state==1){
             s1->mouce_structure.surface_move_state=0;
+            s1->grabbed_view = NULL; // ドラッグを終了するために grabbed_view をリセット
         }
-        s1->mouce_structure.resize_edges=0;
-        s1->grabbed_view = NULL; // ドラッグを終了するために grabbed_view をリセット
         //リサイズ開始判定はあるが、終了判定がないのでマウスボタンが戻されたときにリサイズ状態をを更新する
         if(s1->now_surface_request_resize==1){
             //リサイズ終了
             wlr_xdg_toplevel_set_resizing(s1->resizing_view->toplevel, false);
             s1->now_surface_request_resize=0;
 
+             s1->resizing_view->pending_serial = 0;
         }
     }
     //もしフォーカス中のクライアントがなければしない
@@ -791,7 +853,7 @@ static void checkcomit(struct wl_listener *listener, void *data){
         *v->surface_box =geom;
         v->pending_serial = 0;
     }
-    wlr_output_schedule_frame(s1->output);
+    wlr_output_schedule_frame(s1->s_output_struct.output);
 }
 
 //ウィンドウの最初の表示準備完了時に実行する関数
@@ -907,7 +969,7 @@ static void wallpaper_create(struct wl_listener *listener,void *data){
     //ツリーにs1.sceneにlayer_surface_v1を作って紐ずける
     s1->wallpaper.scene_layer_surface_v1=wlr_scene_layer_surface_v1_create(wallpaler,s1->wallpaper.surface_v1);
     struct wlr_box full_area;
-    wlr_output_layout_get_box(s1->output_layout, s1->output, &full_area);
+    wlr_output_layout_get_box(s1->s_output_struct.output_layout, s1->s_output_struct.output, &full_area);
     //コンポジタが指定した最終的なサイズをクライアント（壁紙やパネルなど）に通知するための関数
     wl_signal_add(&s1->wallpaper.surface_v1->surface->events.commit,
         &s1->wallpaper.wallpaper_manage_listner.commit_listener);
@@ -924,6 +986,9 @@ static void surface_request_resize(struct wl_listener *listener,void *data){
     s1->mouce_structure.now_cursor_name=wlr_xcursor_get_resize_name(resize_data->edges);
     struct view *v=wl_container_of(listener,v,request_resize_listener);
     s1->resizing_view=v;
+    printf("surface_resize_requested\n");
+    //サーフェスの大きさを設定
+    put_surface_size_value(s1->resizing_view);
     ////サーフェス座標とマウスカーソル座標との座の値
     switch(resize_data->edges){
         case WLR_EDGE_TOP:
@@ -957,6 +1022,7 @@ static void surface_request_resize(struct wl_listener *listener,void *data){
                 s1->mouce_structure.cursor->x;
             break;
         }
+    
     //右辺の絶対座標
     s1->diff_resize_cur_surf_pos.right_bottom_absolute_pos.pos_x =
         s1->resizing_view->scene_tree->node.x+s1->resizing_view->surface_box->width;        
@@ -965,6 +1031,8 @@ static void surface_request_resize(struct wl_listener *listener,void *data){
     s1->diff_resize_cur_surf_pos.left_bottom_absolute_pos.pos_y = 
         s1->resizing_view->scene_tree->node.y + 
         s1->resizing_view->surface_box->height;
+    
+
     
     wlr_xdg_toplevel_set_resizing(s1->resizing_view->toplevel, true);
     //リサイズ中はクライアントの管理外なのでコンポジタが論理カーソルのテクスチャを描画する
@@ -1006,7 +1074,7 @@ static void server_destroy(struct server *s){
 static void wallpaper_commit(struct wl_listener *listener,void *data){
     struct wlr_box full_area;
     //モニターの横縦取得
-    wlr_output_layout_get_box(s1->output_layout,s1->output,&full_area);
+    wlr_output_layout_get_box(s1->s_output_struct.output_layout,s1->s_output_struct.output,&full_area);
     struct wlr_box usable_area=full_area;
     wlr_scene_layer_surface_v1_configure(s1->wallpaper.scene_layer_surface_v1,
         &full_area,&usable_area);
@@ -1086,4 +1154,42 @@ static void request_surface_move(struct wl_listener *listener,void *data){
 
     s1->mouce_structure.diff_cursor_surface_pos.diff_cur_surf_pos.pos_y = 
     v->scene_tree->node.y - s1->mouce_structure.cursor->y;
+}
+
+
+//サーフェスの規定サイズを設定します
+static void put_surface_size_value(struct view* put_size_view){
+    struct wlr_box sr_box;
+        wlr_output_layout_get_box(s1->s_output_struct.output_layout,
+            s1->s_output_struct.output,
+            &sr_box);
+    //縦の大きさ制限設定
+        //後からモニターの大きさを取得してそれにそろえる
+        if(put_size_view->toplevel->current.max_height <= 0){
+            put_size_view->surface_size_value.max_height = sr_box.height;
+        }
+        else {
+            put_size_view->surface_size_value.max_height = put_size_view->toplevel->current.max_height;
+        }
+
+        if(put_size_view->toplevel->current.min_height <= 0){
+            put_size_view->surface_size_value.min_height=100;
+        }
+        else {
+            put_size_view->surface_size_value.min_height= put_size_view->toplevel->current.min_height;
+        }
+
+        if(put_size_view->toplevel->current.max_width <= 0){
+            put_size_view->surface_size_value.max_width = sr_box.width;
+        }
+        else {
+            put_size_view->surface_size_value.max_width = put_size_view->toplevel->current.max_width;
+        }
+
+        if(put_size_view->toplevel->current.min_width <= 0){
+            put_size_view->surface_size_value.min_width = 300;
+        }
+        else {
+            put_size_view->surface_size_value.min_width = put_size_view->toplevel->current.min_width;
+        }
 }
