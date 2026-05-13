@@ -1,6 +1,7 @@
 #include "raylib.h"
 #include <bits/types/siginfo_t.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <linux/input-event-codes.h>
 #include <pty.h>
 #include <stddef.h>
@@ -12,12 +13,22 @@
 #include <unistd.h>
 #include<sys/ioctl.h>
 #define ESC_PAL_MAX 32
+#define cur_font_load_max 32
+struct pos{
+  int w;
+  int h;
+};
+struct cur_mgr{
+  char *cur_font;
+  int load_cur_font_n;
+};
 struct cursor{
     char *shape;
     int color;
     struct {
       bool blinking;
       double speed_ms;
+      bool now_right;
     }lighting;
     struct{
       int w;
@@ -42,20 +53,30 @@ enum esc_state{
   ESC_UNIT,//ESC単体コマンド
   OSC//ターミナルの設定系
 };
-
+enum visiavle_chr{
+  YES,
+  NO
+};
 struct data{
   enum parse_state parce_state;
   enum esc_state esc_state;
   unsigned char esc_pal[32];//ESC内パラメーター
   unsigned char last_char;//終了文字
 };
+enum visiavle_chr check_visible_chr(char buff);
+void cur_font_set(struct cursor *cur,struct cur_mgr *cur_mgr,int n);
+void cur_set_default(struct cur_mgr *cur_mgr);
+void cur_mgr_free(struct cur_mgr *cur_mgr);
+int init_cur_mgr(struct cur_mgr *cur_mgr);
+void load_cur_font(struct cur_mgr *cur_mgr);
 bool IsAnyKeyReleased(void);
-void draw_cursor(struct cursor *cur);
-char* bash_str_parse(char *buf,ssize_t buf_size,unsigned int **change_line_pos,int *cols,int *w,int *h);
+void draw_cursor(struct cursor *cur,double *current_time);
+char* bash_str_parse(char *buf,ssize_t buf_size,unsigned int **change_line_pos,int *cols,struct pos *reading_pos);
 char ** split_line(int cols,char *buff_str);
 char *mymemcpy(char *start,char*end,enum last_chr_mode mode);
 char input_bash(char *n);
 int check_key();
+enum parse_state buff_state_check(char buff,enum parse_state now_state);
 unsigned int bash_line_total_ciunt=0;
 int main(void){
   int master_fd,slave_fd;
@@ -121,34 +142,41 @@ int main(void){
   }
   //readを非ブロッキングにする
   fcntl(master_fd, F_SETFL, O_NONBLOCK);
-  char kb_buf[total];
-  kb_buf[0]='\0';
-  int n=0;
+  struct cursor cur;
+  struct cur_mgr cur_mg;
+  struct pos now_reading_chr_pos={0,0};
   Vector2 str_pos;
-  str_pos.x=str_start_pos_x;
-  str_pos.y=0;
-  char *read_buf=malloc(sizeof(unsigned char)*total);
-  char *clean_buff=malloc(sizeof(char)*total);
+  unsigned int *line_down_pos=NULL;
+  int n=0;
+  int clean_buff_counter=0;
+  double current_time=0;
+  char **clean_buff_line_splited=NULL;
+  char *read_buf=malloc(total);
+  char *clean_buff=malloc(total);
+  char **temp=realloc(clean_buff_line_splited,sizeof(char*)*rows);
   if(read_buf ==NULL || clean_buff==NULL){
     printf("read buff or clean buff error");
     return 0;
   }
-  int clean_buff_counter=0;
-  int w=0;
-  int h=0;
-  unsigned int *line_down_pos=NULL;
-  char **clean_buff_line_splited=NULL;
-  struct cursor cur;
-  char **temp=realloc(clean_buff_line_splited,sizeof(char*)*rows);
   if(temp==NULL){
     printf("change_line_pos realloc error");
     return 0;
   }
+  str_pos.x=str_start_pos_x;
+  str_pos.y=0;
   clean_buff_line_splited=temp;
-  cur.shape="|";
+  cur.shape=malloc(2);
   cur.lighting.blinking=false;
   cur.lighting.speed_ms=500;
   cur.font=myfont;
+  cur.lighting.now_right=0;
+  int result=init_cur_mgr(&cur_mg);
+  if(result==1){
+    perror("can not init cur_mgr");
+    return 0;
+  }
+  load_cur_font(&cur_mg);
+  cur_font_set(&cur,&cur_mg,1);
   while(!WindowShouldClose()){
     Vector2 current_pos = { (float)str_start_pos_x, (float)(0) };
     // 入力処理
@@ -157,20 +185,12 @@ int main(void){
       if(IsAnyKeyReleased())break;
       char c=n;
       write(master_fd,&c, 1);
+      printf("%d\n",n);
     }    
-    if (IsKeyPressed(KEY_ENTER)) {
-      char c = '\r'; // PTYドライバが自動で \n に変換するため、\r のみ送信する
-      write(master_fd, &c, 1);
-    }
-    if (IsKeyPressed(KEY_BACKSPACE)) {
-      char c = 0x7f; // ASCII DEL
-      write(master_fd, &c, 1);
-    }
-    
     while(1){
       ssize_t buf_size = read(master_fd, read_buf, total - 1);
       if(buf_size>0){
-        char *temp_str=bash_str_parse(read_buf,buf_size,&line_down_pos,&cols,&w,&h);
+        char *temp_str=bash_str_parse(read_buf,buf_size,&line_down_pos,&cols,&now_reading_chr_pos);
         size_t temp_size=strlen(temp_str);
         clean_buff_counter+=temp_size;
         if(clean_buff_counter>=total){
@@ -179,26 +199,20 @@ int main(void){
         }
         memcpy(clean_buff+clean_buff_counter-temp_size,temp_str,temp_size);
         clean_buff[clean_buff_counter+1]='\0';
-        printf("[DEBUG Read] PTY received: %s\n", read_buf); // ← 追加
-        printf("%s\n", temp_str); // Bashから来た文字列をそのまま出力（余分な改行を避ける）
-        fflush(stdout); // バッファに溜めず即座にコンソールに反映させる
         free(temp_str);
       }
       else break;
     }
-    if(h>=rows){
+    if(now_reading_chr_pos.h>=rows){
       unsigned int first_line_len = line_down_pos[0]; 
       memmove(clean_buff, &clean_buff[first_line_len], clean_buff_counter - first_line_len + 1);
-      memmove(line_down_pos, &line_down_pos[1], sizeof(line_down_pos[0]) * (h - 1));
-
-      for(int i = 0; i < h - 1; i++){
-          line_down_pos[i] -= first_line_len;
-      }
+      memmove(line_down_pos, &line_down_pos[1], sizeof(line_down_pos[0]) * (now_reading_chr_pos.h - 1));
+      for(int i = 0; i <now_reading_chr_pos.h - 1; i++)line_down_pos[i] -= first_line_len; 
       clean_buff_counter -= first_line_len;
       bash_line_total_ciunt -= first_line_len;
-      h--;
+      now_reading_chr_pos.h--;
     }
-    for(int i=0;i<h;i++){
+    for(int i=0;i<now_reading_chr_pos.h;i++){
       int str_len =(i==0) ? 0:line_down_pos[i-1];
       clean_buff_line_splited[i]=mymemcpy(clean_buff + str_len, clean_buff + line_down_pos[i],line_down);
     }
@@ -214,17 +228,13 @@ int main(void){
       ioctl(slave_fd, TIOCSWINSZ, &ws);
       SetWindowSize(cols,rows);
     }
-
-
-
-
-    int last_start = (h==0) ? 0 : line_down_pos[h-1];
-    clean_buff_line_splited[h] = mymemcpy(clean_buff + last_start, clean_buff + clean_buff_counter, none);
+    int last_start = (now_reading_chr_pos.h==0) ? 0 : line_down_pos[now_reading_chr_pos.h-1];
+    clean_buff_line_splited[now_reading_chr_pos.h] = mymemcpy(clean_buff + last_start, clean_buff + clean_buff_counter, none);
     Vector2 draw_pos={current_pos.x,0};
     BeginDrawing();
     ClearBackground(BLACK);
     //bash受信文字
-    for(int i=0;i<=h;i++){
+    for(int i=0;i<=now_reading_chr_pos.h;i++){
       draw_pos.y=i*16;
       DrawTextEx(
         myfont,
@@ -234,72 +244,51 @@ int main(void){
         0, 
         WHITE
       );
-      if(i>=h)break;
+      if(i>=now_reading_chr_pos.h)break;
     }
     //クライアント実装エフェクト
-    int pos_x=strlen(clean_buff_line_splited[h]);
+    int pos_x=strlen(clean_buff_line_splited[now_reading_chr_pos.h]);
     cur.cur_pos.w=pos_x*8+1;
     cur.cur_pos.h=draw_pos.y;
-    draw_cursor(&cur);
+    draw_cursor(&cur,&current_time);
     EndDrawing();
-
+    fflush(stdout); // バッファに溜めず即座にコンソールに反映させる
   }
   free(clean_buff);
   close(master_fd);
   CloseWindow();
 }
-char *bash_str_parse(char *buff,ssize_t size,unsigned int **change_line_pos,int *cols,int *w,int *h){
+char *bash_str_parse(char *buff,ssize_t size,unsigned int **change_line_pos,int *cols,struct pos *reading_pos){
   char *return_buff=malloc(size+1);
+  if(return_buff==NULL){
+    perror("return_buff malloc error");
+    exit(1);
+  }
   int buff_counter=0;
   static enum parse_state state=GROUND;
   for(int i=0;i<size;i++){
-    if(state==GROUND && buff[i]=='\x1b'){
-      state=SQE_START;
-      continue;
-    }
-    else if(state==SQE_START){
-      if(buff[i]==']'){
-        state=OSC_MODE;
-        continue;
-      }
-      else if(buff[i]=='['){
-        state=CSI_MODE;
-        continue;
-      }
-      else state = GROUND;
-    }
-    else if(state==CSI_MODE){
-      if(buff[i]>=0x40&&buff[i]<=0x7E){
-        state=GROUND;
-        continue;
-      }
-    }
-    else if(state==OSC_MODE){
-      if(buff[i]=='\a'){
-        state=GROUND;
-        continue;
-      }
-    }
-    else if(state==GROUND){
-      if(buff[i]==0x08||buff[i]==0x7f)continue;
-      if(buff[i]=='\r')continue;
-      else if(buff[i]=='\n'|| *w > *cols){
-        unsigned int *temp = realloc(*change_line_pos, sizeof(unsigned int) * (*h+1));
+    printf("%c ",buff[i]);
+    enum parse_state old_state=state;
+    state=buff_state_check(buff[i],state);
+    if(!(old_state==GROUND && state==GROUND))continue;
+    enum visiavle_chr result=check_visible_chr(buff[i]);
+    if(result==NO)continue;
+    //改行か、壁まで文字が入力されたら
+    if(buff[i]=='\n' || reading_pos->w > *cols){
+        unsigned int *temp = realloc(*change_line_pos, sizeof(unsigned int) * (reading_pos->h+1));
         if(temp == NULL){
           printf("change_line_pos realloc error\n");
           exit(EXIT_FAILURE);
         }
-        *change_line_pos = temp; // main側の line_down_pos がここで更新される
-        // 配列の h 番目に改行位置を記録する
-        (*change_line_pos)[*h] = bash_line_total_ciunt;
-        (*w)=0;
-        (*h)++;
+        *change_line_pos = temp;
+        (*change_line_pos)[reading_pos->h] = bash_line_total_ciunt;
+        (reading_pos->w)=0;
+        (reading_pos->h)++;
         if(buff[i]=='\n')continue;
-      }
-      return_buff[buff_counter++]=buff[i];
-      bash_line_total_ciunt++;
-      (*w)++;
     }
+    return_buff[buff_counter++]=buff[i];
+    bash_line_total_ciunt++;
+    (reading_pos->w)++;
   }
   return_buff[buff_counter]='\0';
   return return_buff;
@@ -328,15 +317,13 @@ char *mymemcpy(char *start, char *end, enum last_chr_mode mode){
   }
   return cpy;
 }
-void draw_cursor(struct cursor *cur){
-  static bool lighting=true;
-  static double start_time=0;
+void draw_cursor(struct cursor *cur,double *current_time){
   double now_time=GetTime();
-  if(now_time-start_time>=cur->lighting.speed_ms/1000){
-    start_time=now_time;
-    lighting=!lighting;
+  if(now_time-*current_time>=cur->lighting.speed_ms/1000){
+    *current_time=now_time;
+    cur->lighting.now_right=!cur->lighting.now_right;
   }
-  if(lighting){
+  if(cur->lighting.now_right){
     DrawTextEx(
       cur->font,
       cur->shape,
@@ -346,19 +333,6 @@ void draw_cursor(struct cursor *cur){
       WHITE
     );
   }
-  else{
-    DrawTextEx(
-      cur->font,
-      " ",
-      (Vector2){cur->cur_pos.w,cur->cur_pos.h},
-      16, 
-      0, 
-      WHITE
-    );
-  }
-}
-char input_bash(char *n){
-
 }
 bool IsAnyKeyReleased(void) {
     for (int i = 32; i <= 126; i++) {
@@ -366,4 +340,70 @@ bool IsAnyKeyReleased(void) {
     }
     if (IsKeyReleased(KEY_ENTER) || IsKeyReleased(KEY_BACKSPACE)) return true;
     return false;
+}
+void load_cur_font(struct cur_mgr *cur_mgr){
+  if(cur_mgr==NULL){
+    printf("cur_mgr is not init");
+    exit(1);
+  }
+  FILE *cur_load=fopen("cur_font.txt","r");
+  if(cur_load==NULL){
+    cur_set_default(cur_mgr);
+    return;
+  }
+  for(int i=0;i<cur_font_load_max;i++){
+    cur_mgr->load_cur_font_n=i;
+    int in=fgetc(cur_load);
+    if(in==EOF)break;
+    char c=(char)in;
+    cur_mgr->cur_font[i]=c;
+  }
+}
+int init_cur_mgr(struct cur_mgr *cur_mgr){
+  cur_mgr->cur_font=malloc(sizeof(char)*cur_font_load_max);
+  if(cur_mgr->cur_font==NULL){
+    printf("cur_mgr malloc error");
+    exit(1);
+  }
+  return 0;
+}
+void cur_mgr_free(struct cur_mgr *cur_mgr){
+  free(cur_mgr);
+}
+void cur_set_default(struct cur_mgr *cur_mgr){
+  cur_mgr->load_cur_font_n=2;
+  cur_mgr->cur_font[0]='|';
+  cur_mgr->cur_font[1]='/';
+}
+void cur_font_set(struct cursor *cur,struct cur_mgr *cur_mgr,int n){
+  if(n>cur_mgr->load_cur_font_n){
+    printf("your chose cur font nonber is big then cur_font_load_max");
+    exit(1);
+  }
+  cur->shape[0]=cur_mgr->cur_font[n-1];
+  cur->shape[1]='\0';
+}
+enum parse_state buff_state_check(char buff,enum parse_state now_state){
+  enum parse_state return_state=now_state;
+  if(now_state==GROUND){
+    if(buff=='\x1b')return_state=SQE_START;
+  }
+  else if(return_state==SQE_START){
+    if(buff==']')return_state=OSC_MODE;
+    else if(buff=='[')return_state=CSI_MODE;
+    else return_state = GROUND;
+  }
+  else if(return_state==CSI_MODE){
+    if(buff>=0x40 && buff<=0x7E)return_state=GROUND;
+  }
+  else if(return_state==OSC_MODE){
+    if(buff=='\a')return_state=GROUND;
+  }
+  return return_state;
+}
+enum visiavle_chr check_visible_chr(char buff){
+  enum visiavle_chr chr_state=YES;
+  if(buff==0x08||buff==0x7f)chr_state=NO;
+  else if(buff=='\r')chr_state=NO;
+  return chr_state;
 }
