@@ -2,7 +2,6 @@
 #include <bits/types/siginfo_t.h>
 #include <fcntl.h>
 #include <limits.h>
-#include <linux/input-event-codes.h>
 #include <pty.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -55,7 +54,8 @@ enum esc_state{
 };
 enum visiavle_chr{
   YES,
-  NO
+  NO,
+  NO_AND_BS_IS_CAME
 };
 struct data{
   enum parse_state parce_state;
@@ -64,6 +64,7 @@ struct data{
   unsigned char last_char;//終了文字
 };
 enum visiavle_chr check_visible_chr(char buff);
+void back_space(struct pos *pos,char *buff,int cols,int *buff_counter);
 void cur_font_set(struct cursor *cur,struct cur_mgr *cur_mgr,int n);
 void cur_set_default(struct cur_mgr *cur_mgr);
 void cur_mgr_free(struct cur_mgr *cur_mgr);
@@ -71,7 +72,7 @@ int init_cur_mgr(struct cur_mgr *cur_mgr);
 void load_cur_font(struct cur_mgr *cur_mgr);
 bool IsAnyKeyReleased(void);
 void draw_cursor(struct cursor *cur,double *current_time);
-char* bash_str_parse(char *buf,ssize_t buf_size,unsigned int **change_line_pos,int *cols,struct pos *reading_pos);
+char *bash_str_parse(char *buff,ssize_t size,unsigned int **change_line_pos,int *cols,struct pos *reading_pos);
 char ** split_line(int cols,char *buff_str);
 char *mymemcpy(char *start,char*end,enum last_chr_mode mode);
 char input_bash(char *n);
@@ -90,8 +91,8 @@ int main(void){
     printf("window error");
     return 0;
   }
-  scr_h=GetScreenHeight();
-  scr_w=GetScreenWidth();
+  scr_h=500;
+  scr_w=500;
   SetTargetFPS(60);
   Font myfont = LoadFontEx("/usr/share/fonts/TTF/TerminusTTF.ttf",256, NULL, 0);
   SetTextureFilter(myfont.texture, TEXTURE_FILTER_POINT);
@@ -146,15 +147,15 @@ int main(void){
   struct cur_mgr cur_mg;
   struct pos now_reading_chr_pos={0,0};
   Vector2 str_pos;
-  unsigned int *line_down_pos=NULL;
   int n=0;
   int clean_buff_counter=0;
   double current_time=0;
   char **clean_buff_line_splited=NULL;
   char *read_buf=malloc(total);
   char *clean_buff=malloc(total);
-  char **temp=realloc(clean_buff_line_splited,sizeof(char*)*rows);
-  if(read_buf ==NULL || clean_buff==NULL){
+  char **temp=realloc(clean_buff_line_splited,sizeof(char*)*(rows+1));
+  unsigned int *line_down_pos=calloc(rows+1,sizeof(unsigned int));
+  if(read_buf ==NULL || clean_buff==NULL || line_down_pos==NULL){
     printf("read buff or clean buff error");
     return 0;
   }
@@ -182,11 +183,16 @@ int main(void){
     // 入力処理
     //英字、英数字、記号処理
     while((n=GetCharPressed())>0){
-      if(IsAnyKeyReleased())break;
+      if(n == 13 || n == 10)continue; 
+      else if(IsAnyKeyReleased())break;
       char c=n;
       write(master_fd,&c, 1);
       printf("%d\n",n);
-    }    
+    } 
+    if(IsKeyPressed(KEY_ENTER)){
+      char enter_key=13;
+      write(master_fd,&enter_key,1);
+    }
     while(1){
       ssize_t buf_size = read(master_fd, read_buf, total - 1);
       if(buf_size>0){
@@ -198,7 +204,7 @@ int main(void){
           break;
         }
         memcpy(clean_buff+clean_buff_counter-temp_size,temp_str,temp_size);
-        clean_buff[clean_buff_counter+1]='\0';
+        clean_buff[clean_buff_counter]='\0';
         free(temp_str);
       }
       else break;
@@ -231,6 +237,7 @@ int main(void){
     int last_start = (now_reading_chr_pos.h==0) ? 0 : line_down_pos[now_reading_chr_pos.h-1];
     clean_buff_line_splited[now_reading_chr_pos.h] = mymemcpy(clean_buff + last_start, clean_buff + clean_buff_counter, none);
     Vector2 draw_pos={current_pos.x,0};
+    int pos_x=0;
     BeginDrawing();
     ClearBackground(BLACK);
     //bash受信文字
@@ -244,10 +251,13 @@ int main(void){
         0, 
         WHITE
       );
-      if(i>=now_reading_chr_pos.h)break;
+      if(i>=now_reading_chr_pos.h){
+        pos_x=strlen(clean_buff_line_splited[i]);
+        break;
+      }
+      free(clean_buff_line_splited[i]);
     }
     //クライアント実装エフェクト
-    int pos_x=strlen(clean_buff_line_splited[now_reading_chr_pos.h]);
     cur.cur_pos.w=pos_x*8+1;
     cur.cur_pos.h=draw_pos.y;
     draw_cursor(&cur,&current_time);
@@ -260,10 +270,6 @@ int main(void){
 }
 char *bash_str_parse(char *buff,ssize_t size,unsigned int **change_line_pos,int *cols,struct pos *reading_pos){
   char *return_buff=malloc(size+1);
-  if(return_buff==NULL){
-    perror("return_buff malloc error");
-    exit(1);
-  }
   int buff_counter=0;
   static enum parse_state state=GROUND;
   for(int i=0;i<size;i++){
@@ -273,17 +279,13 @@ char *bash_str_parse(char *buff,ssize_t size,unsigned int **change_line_pos,int 
     if(!(old_state==GROUND && state==GROUND))continue;
     enum visiavle_chr result=check_visible_chr(buff[i]);
     if(result==NO)continue;
+    else if(result==NO_AND_BS_IS_CAME){
+      back_space(reading_pos,return_buff,*cols,&buff_counter);
+    }
     //改行か、壁まで文字が入力されたら
     if(buff[i]=='\n' || reading_pos->w > *cols){
-        unsigned int *temp = realloc(*change_line_pos, sizeof(unsigned int) * (reading_pos->h+1));
-        if(temp == NULL){
-          printf("change_line_pos realloc error\n");
-          exit(EXIT_FAILURE);
-        }
-        *change_line_pos = temp;
-        (*change_line_pos)[reading_pos->h] = bash_line_total_ciunt;
+        (*change_line_pos)[reading_pos->h++]=bash_line_total_ciunt;
         (reading_pos->w)=0;
-        (reading_pos->h)++;
         if(buff[i]=='\n')continue;
     }
     return_buff[buff_counter++]=buff[i];
@@ -291,6 +293,12 @@ char *bash_str_parse(char *buff,ssize_t size,unsigned int **change_line_pos,int 
     (reading_pos->w)++;
   }
   return_buff[buff_counter]='\0';
+  char *temp_buff=realloc(return_buff,buff_counter+1);
+  if(temp_buff==NULL){
+    perror("shrunk_buff malloc error");
+    exit(1);
+  }
+  return_buff=temp_buff;
   return return_buff;
 }
 char *mymemcpy(char *start, char *end, enum last_chr_mode mode){
@@ -403,7 +411,22 @@ enum parse_state buff_state_check(char buff,enum parse_state now_state){
 }
 enum visiavle_chr check_visible_chr(char buff){
   enum visiavle_chr chr_state=YES;
-  if(buff==0x08||buff==0x7f)chr_state=NO;
+  if(buff==0x08){
+    chr_state=NO_AND_BS_IS_CAME;
+  }
+  else if(buff==0x7f)chr_state=NO;
   else if(buff=='\r')chr_state=NO;
   return chr_state;
+}
+void back_space(struct pos *pos,char *buff,int cols,int *buff_counter){
+  if (*buff_counter <= 0) return;
+  if(pos->w>0){
+    (*buff_counter)--;
+    pos->w--;
+  }
+  else if(pos->h>0){
+    pos->h--;
+    pos->w=cols;
+    (*buff_counter)--;
+  }
 }
