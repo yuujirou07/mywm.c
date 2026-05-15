@@ -45,7 +45,8 @@ enum parse_state{
   ESC_MODE,//ESC (0x1b) を受信直後	次の文字を見て、CSI（[）かOSC（]）かを判断する。
   CSI_MODE,//引数を収集中	数字やセミコロンをメモリに溜める。
   OSC_MODE,//終端文字を受信	溜めた引数を使って、実際の命令（色変更など）を実行する。
-  SQE_START
+  SQE_START,
+  PRV_MODE
 };
 enum esc_state{
   CSI,//画面制御系([)文字
@@ -55,7 +56,9 @@ enum esc_state{
 enum visiavle_chr{
   YES,
   NO,
-  NO_AND_BS_IS_CAME
+  BS_ST1,
+  BS_ST2,
+  BS_ST3
 };
 struct data{
   enum parse_state parce_state;
@@ -64,7 +67,7 @@ struct data{
   unsigned char last_char;//終了文字
 };
 enum visiavle_chr check_visible_chr(char buff);
-void back_space(struct pos *pos,char *buff,int cols,int *buff_counter);
+void bs_st1(struct pos *pos,char *buff,int cols,int *buff_counter,unsigned int *bash_line_total_ciunt);
 void cur_font_set(struct cursor *cur,struct cur_mgr *cur_mgr,int n);
 void cur_set_default(struct cur_mgr *cur_mgr);
 void cur_mgr_free(struct cur_mgr *cur_mgr);
@@ -72,13 +75,12 @@ int init_cur_mgr(struct cur_mgr *cur_mgr);
 void load_cur_font(struct cur_mgr *cur_mgr);
 bool IsAnyKeyReleased(void);
 void draw_cursor(struct cursor *cur,double *current_time);
-char *bash_str_parse(char *buff,ssize_t size,unsigned int **change_line_pos,int *cols,struct pos *reading_pos);
+char *bash_str_parse(char *buff,ssize_t size,unsigned int **change_line_pos,int *cols,struct pos *reading_pos,unsigned int *bash_line_total_ciunt,enum visiavle_chr *vis_state);
 char ** split_line(int cols,char *buff_str);
 char *mymemcpy(char *start,char*end,enum last_chr_mode mode);
 char input_bash(char *n);
 int check_key();
 enum parse_state buff_state_check(char buff,enum parse_state now_state);
-unsigned int bash_line_total_ciunt=0;
 int main(void){
   int master_fd,slave_fd;
   char slavename[256];
@@ -155,6 +157,7 @@ int main(void){
   char *clean_buff=malloc(total);
   char **temp=realloc(clean_buff_line_splited,sizeof(char*)*(rows+1));
   unsigned int *line_down_pos=calloc(rows+1,sizeof(unsigned int));
+  unsigned int bash_line_total_ciunt=0;
   if(read_buf ==NULL || clean_buff==NULL || line_down_pos==NULL){
     printf("read buff or clean buff error");
     return 0;
@@ -178,6 +181,7 @@ int main(void){
   }
   load_cur_font(&cur_mg);
   cur_font_set(&cur,&cur_mg,1);
+  enum visiavle_chr vis_state=YES;
   while(!WindowShouldClose()){
     Vector2 current_pos = { (float)str_start_pos_x, (float)(0) };
     // 入力処理
@@ -193,10 +197,14 @@ int main(void){
       char enter_key=13;
       write(master_fd,&enter_key,1);
     }
+    if(IsKeyPressed(KEY_BACKSPACE)){
+      char c=0x7f;
+      write(master_fd,&c,1);
+    }
     while(1){
       ssize_t buf_size = read(master_fd, read_buf, total - 1);
       if(buf_size>0){
-        char *temp_str=bash_str_parse(read_buf,buf_size,&line_down_pos,&cols,&now_reading_chr_pos);
+        char *temp_str=bash_str_parse(read_buf,buf_size,&line_down_pos,&cols,&now_reading_chr_pos,&bash_line_total_ciunt,&vis_state);
         size_t temp_size=strlen(temp_str);
         clean_buff_counter+=temp_size;
         if(clean_buff_counter>=total){
@@ -214,8 +222,8 @@ int main(void){
       memmove(clean_buff, &clean_buff[first_line_len], clean_buff_counter - first_line_len + 1);
       memmove(line_down_pos, &line_down_pos[1], sizeof(line_down_pos[0]) * (now_reading_chr_pos.h - 1));
       for(int i = 0; i <now_reading_chr_pos.h - 1; i++)line_down_pos[i] -= first_line_len; 
-      clean_buff_counter -= first_line_len;
-      bash_line_total_ciunt -= first_line_len;
+      clean_buff_counter-=first_line_len;
+      bash_line_total_ciunt-= first_line_len;
       now_reading_chr_pos.h--;
     }
     for(int i=0;i<now_reading_chr_pos.h;i++){
@@ -268,7 +276,7 @@ int main(void){
   close(master_fd);
   CloseWindow();
 }
-char *bash_str_parse(char *buff,ssize_t size,unsigned int **change_line_pos,int *cols,struct pos *reading_pos){
+char *bash_str_parse(char *buff,ssize_t size,unsigned int **change_line_pos,int *cols,struct pos *reading_pos,unsigned int *bash_line_total_ciunt,enum visiavle_chr *vis_state){
   char *return_buff=malloc(size+1);
   int buff_counter=0;
   static enum parse_state state=GROUND;
@@ -277,19 +285,19 @@ char *bash_str_parse(char *buff,ssize_t size,unsigned int **change_line_pos,int 
     enum parse_state old_state=state;
     state=buff_state_check(buff[i],state);
     if(!(old_state==GROUND && state==GROUND))continue;
-    enum visiavle_chr result=check_visible_chr(buff[i]);
-    if(result==NO)continue;
-    else if(result==NO_AND_BS_IS_CAME){
-      back_space(reading_pos,return_buff,*cols,&buff_counter);
+    *vis_state=check_visible_chr(buff[i]);
+    if(*vis_state==BS_ST1){
+      bs_st1(reading_pos,return_buff,*cols,&buff_counter,bash_line_total_ciunt);
+      continue;
     }
     //改行か、壁まで文字が入力されたら
     if(buff[i]=='\n' || reading_pos->w > *cols){
-        (*change_line_pos)[reading_pos->h++]=bash_line_total_ciunt;
+        (*change_line_pos)[reading_pos->h++]=*bash_line_total_ciunt;
         (reading_pos->w)=0;
         if(buff[i]=='\n')continue;
     }
     return_buff[buff_counter++]=buff[i];
-    bash_line_total_ciunt++;
+    (*bash_line_total_ciunt)++;
     (reading_pos->w)++;
   }
   return_buff[buff_counter]='\0';
@@ -343,9 +351,7 @@ void draw_cursor(struct cursor *cur,double *current_time){
   }
 }
 bool IsAnyKeyReleased(void) {
-    for (int i = 32; i <= 126; i++) {
-        if (IsKeyReleased(i)) return true;
-    }
+    for (int i = 32; i <= 126; i++)if(IsKeyReleased(i))return true;
     if (IsKeyReleased(KEY_ENTER) || IsKeyReleased(KEY_BACKSPACE)) return true;
     return false;
 }
@@ -393,7 +399,7 @@ void cur_font_set(struct cursor *cur,struct cur_mgr *cur_mgr,int n){
 }
 enum parse_state buff_state_check(char buff,enum parse_state now_state){
   enum parse_state return_state=now_state;
-  if(now_state==GROUND){
+  if(return_state==GROUND){
     if(buff=='\x1b')return_state=SQE_START;
   }
   else if(return_state==SQE_START){
@@ -402,23 +408,25 @@ enum parse_state buff_state_check(char buff,enum parse_state now_state){
     else return_state = GROUND;
   }
   else if(return_state==CSI_MODE){
+    if(buff=='?')return_state=PRV_MODE;
     if(buff>=0x40 && buff<=0x7E)return_state=GROUND;
   }
   else if(return_state==OSC_MODE){
     if(buff=='\a')return_state=GROUND;
   }
+  else if(return_state==PRV_MODE){
+    if(buff>=0x40 && buff<=0x7E)return_state=GROUND;
+  }
   return return_state;
 }
 enum visiavle_chr check_visible_chr(char buff){
-  enum visiavle_chr chr_state=YES;
-  if(buff==0x08){
-    chr_state=NO_AND_BS_IS_CAME;
-  }
-  else if(buff==0x7f)chr_state=NO;
-  else if(buff=='\r')chr_state=NO;
-  return chr_state;
+  enum visiavle_chr vis_state;
+  if(buff=='\b')vis_state=BS_ST1;
+  else if(buff=='\r')vis_state=NO;
+  else vis_state=YES;
+  return vis_state;
 }
-void back_space(struct pos *pos,char *buff,int cols,int *buff_counter){
+void bs_st1(struct pos *pos,char *buff,int cols,int *buff_counter,unsigned int *bash_line_total_ciunt){
   if (*buff_counter <= 0) return;
   if(pos->w>0){
     (*buff_counter)--;
