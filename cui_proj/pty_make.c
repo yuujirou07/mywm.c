@@ -105,15 +105,20 @@ struct term_context {
     struct cursor *cur;
     struct cursor *save_cur;
     struct pos term_size;
+    struct pos temp_cur_pos;
     int *palms;
     int *palms_counter;
     bool paste_mode;
     char *abs_path_name;
     int total_cells;
+    bool insert_mode;
 };
-
-// プロトタイプ宣言の更新
-void reset_fg_color(struct term_cell *term_cell, int total_cell);
+void erase_chr(struct term_context *ctx,int n);
+void char_arry_insert_chr(struct term_context *ctx,int n);
+void char_array_alignment(struct term_context *ctx,int n);
+Color conbert_num_to_color(char *color_str,int mode);
+void change_bg_color(struct term_context *ctx,Color c_col);
+void change_fg_color(struct term_context *ctx,Color c_col);
 void conbert_chr_to_binary_table(struct return_binary *char_conbert_binary, char buff);
 struct return_binary *char_conbert_binary_arry(char *osc_pal_chr);
 char *base64_decoder(char *osc_pal_chr);
@@ -154,11 +159,9 @@ int main(void) {
   SetTargetFPS(60);
   Font myfont = LoadFontEx("/usr/share/fonts/TTF/TerminusTTF.ttf", 256, NULL, 0);
   SetTextureFilter(myfont.texture, TEXTURE_FILTER_POINT);
-  struct pos term_size;
   int cols = (int)(scr_w - str_start_pos_x) / 8;
   int rows = scr_h / 16;
-  term_size.h = rows;
-  term_size.w = cols;
+  struct pos term_size=(struct pos){cols,rows};
   int total = cols * rows;
   
   // 元のターミナルの設定をコピーし、安全なウィンドウサイズを指定する
@@ -239,7 +242,6 @@ int main(void) {
   load_cur_font(&cur_mg);
   cur_font_set(&cur, &cur_mg, 1);
 
-  // ★ 新しく追加：構造体にすべての情報をまとめる
   struct term_context ctx;
   ctx.term_cell = main_term_cell;
   ctx.alt_term_cell = alt_term_cell;
@@ -276,7 +278,6 @@ int main(void) {
         write(master_fd, &c, 1);
       }
     }
-    
     if (IsKeyPressed(KEY_ENTER)) {
       char enter_key = 13;
       write(master_fd, &enter_key, 1);
@@ -285,16 +286,26 @@ int main(void) {
       char c = 0x7f; 
       write(master_fd, &c, 1);
     }
+    if (IsKeyPressed(KEY_RIGHT)){
+      //右のセルが空白ならカーソルをブロックする
+      if(ctx.cur->cur_pos.w<ctx.term_size.w){
+        if(ctx.cur->cur_pos.w<ctx.temp_cur_pos.w+1){
+          write(master_fd,"\x1b[C",strlen("\x1b[C"));
+        }
+      }
+    }
+    if(IsKeyPressed(KEY_LEFT)){
+      write(master_fd,"\x1b[D",strlen("\x1b[D"));
+    }
     
     while (1) {
       ssize_t buf_size = read(master_fd, read_buf, total - 1);
-      if (buf_size > 0) {
-        // ★ 変更：引数がスッキリしました
+      if (buf_size > 0) { 
         bash_str_parse(read_buf, buf_size, &ctx);
       }
       else break;
     }
-    
+
     BeginDrawing();
     ClearBackground(BLACK);
     for (int i = 0; i < rows; i++) {
@@ -360,7 +371,6 @@ void bash_str_parse(char *buff, ssize_t size, struct term_context *ctx) {
                 }
                 osc_pal_chr[osc_pal_chr_counter] = '\0';
                 
-                // ★ 変更：引数をまとめる
                 osc_mode(buff, ctx, osc_pal_chr);
                 
                 osc_pal_chr_counter = 0;
@@ -389,8 +399,7 @@ void bash_str_parse(char *buff, ssize_t size, struct term_context *ctx) {
                       ctx->palms[0] = 0;
                       *(ctx->palms_counter) = 1;
                   }
-                  
-                  // ★ 変更：引数をまとめる
+            
                   ls_chr_parse(ctx, buff[i], &now_fg_color, &now_bg_color, is_private);
                   
                   *(ctx->palms_counter) = 0;
@@ -424,11 +433,17 @@ void bash_str_parse(char *buff, ssize_t size, struct term_context *ctx) {
         } else if (buff[i] == '\a') {
             continue;
         } else {
+            if (ctx->insert_mode) {
+                char_arry_insert_chr(ctx, 1);
+            }
             int idx = ctx->cur->cur_pos.h * ctx->term_size.w + ctx->cur->cur_pos.w;
             if (idx >= 0 && idx < ctx->term_size.h * ctx->term_size.w) {
                 ctx->term_cell[idx].character = buff[i];
                 ctx->term_cell[idx].fg_color = now_fg_color;
                 ctx->term_cell[idx].bg_color = now_bg_color;
+                //カーソル移動可能範囲更新
+                ctx->temp_cur_pos.h=ctx->cur->cur_pos.h;
+                ctx->temp_cur_pos.w=ctx->cur->cur_pos.w;
             }
             ctx->cur->cur_pos.w++;
             if (ctx->cur->cur_pos.w >= ctx->term_size.w) {
@@ -452,7 +467,6 @@ void bash_str_parse(char *buff, ssize_t size, struct term_context *ctx) {
     }
 }
 
-// ★ 変更：構造体を受け取るように修正
 void ls_chr_parse(struct term_context *ctx, char buff, Color *now_fg_color, Color *now_bg_color, bool is_private) {
   int palms_counter = *(ctx->palms_counter);
   int *palms = ctx->palms;
@@ -543,11 +557,29 @@ void ls_chr_parse(struct term_context *ctx, char buff, Color *now_fg_color, Colo
       if (ctx->cur->cur_pos.w < 0) ctx->cur->cur_pos.w = 0;
       break;
     }
+    case 'P':
+      {
+      int n = (palms_counter > 0 && palms[0] > 0) ? palms[0] : 1;
+      char_array_alignment(ctx,n);
+      break;
+      }
+    case 'x':
+      {
+        int n = (palms_counter > 0 && palms[0] > 0) ? palms[0] : 1;
+        erase_chr(ctx,n);
+      }
     case 'h':
     case 'l':
      if (is_private && palms_counter > 0) {
         bool is_on = (buff == 'h'); 
         switch (palms[0]) {
+          case 4:
+            if (!is_private && palms_counter > 0) {
+              if (palms[0] == 4) { // 4番は インサートモード(IRM)
+                bool is_on = (buff == 'h');
+                ctx->insert_mode = is_on; 
+              }
+            }
           case 25:
             ctx->cur->lighting.blinking = is_on; 
             break;
@@ -583,6 +615,12 @@ void ls_chr_parse(struct term_context *ctx, char buff, Color *now_fg_color, Colo
         }
       }
       break;
+    case '@':
+      {
+        int n = (palms_counter > 0 && palms[0] > 0) ? palms[0] : 1;
+        char_array_alignment(ctx,n);      
+        break;
+    }
     default:
       break;
   }
@@ -622,10 +660,29 @@ void osc_mode(char *buff, struct term_context *ctx, char *osc_pal_chr){
       break;
     case 9:
     case 777:
+      break;
     case 10:
-      reset_fg_color(ctx->term_cell, ctx->total_cells);
-      break; // ※ 元のコードでbreakが抜けていたため追加しました
     case 11:
+      {
+      int mode=0;
+      char *result=strchr(osc_pal_chr,';');
+      if(result==NULL)break;
+      char *rgb_result=strstr(result+1,"rgb:");
+      if(rgb_result==NULL){
+        result=strchr(result+1,'#');
+        if(result==NULL)break;
+        result++;
+        mode++;
+      }
+      else result+=strlen("rgb:");
+      Color c_col=conbert_num_to_color(result,mode);
+      if(ctx->palms[0] == 10) {
+        change_fg_color(ctx,c_col); // 後述の関数
+      }else{
+        change_bg_color(ctx, c_col);
+      }
+      break;
+     }
     case 12:
       break;
     case 52:{
@@ -838,6 +895,73 @@ void conbert_chr_to_binary_table(struct return_binary *char_conbert_binary, char
   return ;
 }
 
-void reset_fg_color(struct term_cell *term_cell, int total_cell){
+void change_fg_color(struct term_context *ctx,Color c_col){
+  for(int i=0;i<ctx->total_cells;i++){
+    ctx->term_cell[i].fg_color=c_col;
+  }
+}
+void change_bg_color(struct term_context *ctx,Color c_col){
+  for(int i=0;i<ctx->total_cells;i++){
+    ctx->term_cell[i].bg_color=c_col;
+  }
+}
 
+Color conbert_num_to_color(char *color_str,int mode){
+  Color target_color={0};
+  int r = 0, g = 0, b = 0;
+  if(mode==0){
+    char hex_r[5] = {0}, hex_g[5] = {0}, hex_b[5] = {0};
+    if(sscanf(color_str, "%4[^/]/%4[^/]/%4s", hex_r, hex_g, hex_b) == 3) {
+        // 文字列の長さに応じて、最初の2桁(8ビット)だけを評価する
+        sscanf(hex_r, "%02x", &r);
+        sscanf(hex_g, "%02x", &g);
+        sscanf(hex_b, "%02x", &b);
+        
+        target_color.r = r;
+        target_color.g = g;
+        target_color.b = b;
+    }
+  }
+  else if(mode==1){
+    if(sscanf(color_str, "#%02x%02x%02x", &r, &g, &b) == 3) {
+      target_color.r = r;
+      target_color.g = g;
+      target_color.b = b;
+    }
+  }
+  else target_color=WHITE;
+  target_color.a = 255;
+  return target_color;
+}
+
+void char_array_alignment(struct term_context *ctx,int n){
+  int loop= ctx->term_size.w - ctx->cur->cur_pos.w;
+  int idx = ctx->cur->cur_pos.h * ctx->term_size.w + ctx->cur->cur_pos.w;
+  if (n > loop) n = loop;
+  for(int i = 0; i < loop - n; i++){
+    // 文字だけでなく、色情報なども含めて構造体ごとコピーする
+    ctx->term_cell[idx + i] = ctx->term_cell[idx + i + n];
+  }
+  for(int i = loop - n; i < loop; i++){
+    ctx->term_cell[idx + i].character = ' ';
+  }
+}
+void char_arry_insert_chr(struct term_context *ctx,int n){
+  int loop= ctx->term_size.w - ctx->cur->cur_pos.w;
+  int idx = ctx->cur->cur_pos.h * ctx->term_size.w + ctx->cur->cur_pos.w;
+  if (n > loop) n = loop;
+  for(int i = loop - 1; i >= n; i--){
+    ctx->term_cell[idx + i] = ctx->term_cell[idx + i - n];
+  }
+  for(int i=0;i<n;i++){
+    ctx->term_cell[idx + i].character=' ';
+  }
+}
+void erase_chr(struct term_context *ctx,int n){
+  int loop = ctx->term_size.w - ctx->cur->cur_pos.w;
+  if (n > loop) n = loop;
+  int idx = ctx->cur->cur_pos.h * ctx->term_size.w + ctx->cur->cur_pos.w;
+  for(int i=0;i<n;i++){
+    ctx->term_cell[idx+i].character=' ';
+  }
 }
