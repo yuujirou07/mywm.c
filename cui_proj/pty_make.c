@@ -35,6 +35,10 @@ struct cursor{
     }cur_pos;
     Font font;
 };
+struct csi_data{
+  int pal_count;
+  char last_chr; 
+};
 enum last_chr_mode{
   line_down,
   str_end,
@@ -42,11 +46,16 @@ enum last_chr_mode{
 };
 enum parse_state{
   GROUND,//通常モード（届いた文字をそのまま画面に描画する)
-  ESC_MODE,//ESC (0x1b) を受信直後	次の文字を見て、CSI（[）かOSC（]）かを判断する。
+  SQE_START,
+};
+enum mode_state{
   CSI_MODE,//引数を収集中	数字やセミコロンをメモリに溜める。
   OSC_MODE,//終端文字を受信	溜めた引数を使って、実際の命令（色変更など）を実行する。
-  SQE_START,
-  PRV_MODE
+  IDK
+};
+enum pal_p{
+  st,
+  ed
 };
 enum esc_state{
   CSI,//画面制御系([)文字
@@ -60,12 +69,33 @@ enum visiavle_chr{
   BS_ST2,
   BS_ST3
 };
+
 struct data{
   enum parse_state parce_state;
   enum esc_state esc_state;
   unsigned char esc_pal[32];//ESC内パラメーター
   unsigned char last_char;//終了文字
 };
+// 1文字（セル）のデータ構造
+struct term_cell {
+    char character;  // 表示する文字（例: 'A'）
+    Color fg_color;  // 前景色（文字色）
+    Color bg_color;  // 背景色
+    bool is_bold;    // 太字かどうか
+};
+
+// ターミナルの「現在の状態」を保持する構造体
+struct term_state {
+    Color current_fg; // 今から打ち込まれる文字の色
+    Color current_bg; // 今から打ち込まれる文字の背景色
+    bool current_bold;
+};
+void osc_mode(char *win_title,char *buff,int *palms,int palms_counter,struct term_cell *term_cell,char *osc_pal_chr);
+void ls_chr_parse(struct term_cell *term_cell, char buff, int *palms, int palms_counter, Color *now_fg_color, Color *now_bg_color,struct cursor *cur,struct pos term_size,bool is_private,struct cursor *save_cur,struct term_cell *alt_term_cell,bool *paste_mode);
+struct csi_data csi_mode_pal_parse(char *buff,int *i,int size);
+void read_counter_inc(int *i,int size);
+enum mode_state get_mode(char *buff,int *i,int size);
+void csi_mode_parse(char *buff,int *i,int size);
 enum visiavle_chr check_visible_chr(char buff);
 void bs_st1(struct pos *pos,char *buff,int cols,int *buff_counter,unsigned int *bash_line_total_ciunt);
 void cur_font_set(struct cursor *cur,struct cur_mgr *cur_mgr,int n);
@@ -75,7 +105,8 @@ int init_cur_mgr(struct cur_mgr *cur_mgr);
 void load_cur_font(struct cur_mgr *cur_mgr);
 bool IsAnyKeyReleased(void);
 void draw_cursor(struct cursor *cur,double *current_time);
-char *bash_str_parse(char *buff,ssize_t size,unsigned int **change_line_pos,int *cols,struct pos *reading_pos,unsigned int *bash_line_total_ciunt,enum visiavle_chr *vis_state);
+void bash_str_parse(char *buff, ssize_t size, int *palms, int *palms_counter, struct term_cell *term_cell, struct cursor *cur, struct pos term_size,struct cursor *save_cur,
+  struct term_cell *alt_term_cell,bool *paste_mode,char *win_title);
 char ** split_line(int cols,char *buff_str);
 char *mymemcpy(char *start,char*end,enum last_chr_mode mode);
 char input_bash(char *n);
@@ -84,22 +115,24 @@ enum parse_state buff_state_check(char buff,enum parse_state now_state);
 int main(void){
   int master_fd,slave_fd;
   char slavename[256];
-
-  int scr_h=400;
-  int scr_w=400;
+  int scr_h=500;
+  int scr_w=500;
   int str_start_pos_x = 3;//文字の表示開始座標X
-  InitWindow(scr_w,scr_h, "bash");
+  char *window_title=malloc(128);
+  window_title="bash";
+  InitWindow(scr_w,scr_h,window_title);
   if(!IsWindowReady()){
     printf("window error");
     return 0;
   }
-  scr_h=500;
-  scr_w=500;
   SetTargetFPS(60);
   Font myfont = LoadFontEx("/usr/share/fonts/TTF/TerminusTTF.ttf",256, NULL, 0);
   SetTextureFilter(myfont.texture, TEXTURE_FILTER_POINT);
+  struct pos term_size;
   int cols = (int)(scr_w-str_start_pos_x)/8;
   int rows = scr_h/16;
+  term_size.h=rows;
+  term_size.w=cols;
   int total=cols*rows;
   
   // 元のターミナルの設定をコピーし、安全なウィンドウサイズを指定する
@@ -146,34 +179,26 @@ int main(void){
   //readを非ブロッキングにする
   fcntl(master_fd, F_SETFL, O_NONBLOCK);
   struct cursor cur;
+  struct cursor save_cur;
   struct cur_mgr cur_mg;
-  struct pos now_reading_chr_pos={0,0};
+  struct term_cell *main_term_cell = calloc(total, sizeof(struct term_cell));
+  struct term_cell *alt_term_cell=NULL;
   Vector2 str_pos;
   int n=0;
-  int clean_buff_counter=0;
+  int palms[16];
+  int palms_counter=0;
   double current_time=0;
-  char **clean_buff_line_splited=NULL;
   char *read_buf=malloc(total);
-  char *clean_buff=malloc(total);
-  char **temp=realloc(clean_buff_line_splited,sizeof(char*)*(rows+1));
-  unsigned int *line_down_pos=calloc(rows+1,sizeof(unsigned int));
-  unsigned int bash_line_total_ciunt=0;
-  if(read_buf ==NULL || clean_buff==NULL || line_down_pos==NULL){
-    printf("read buff or clean buff error");
-    return 0;
-  }
-  if(temp==NULL){
-    printf("change_line_pos realloc error");
-    return 0;
-  }
+  bool paste_mode=false;
   str_pos.x=str_start_pos_x;
   str_pos.y=0;
-  clean_buff_line_splited=temp;
   cur.shape=malloc(2);
-  cur.lighting.blinking=false;
+  cur.lighting.blinking=true;
   cur.lighting.speed_ms=500;
   cur.font=myfont;
   cur.lighting.now_right=0;
+  cur.cur_pos.w = 0;
+  cur.cur_pos.h = 0;
   int result=init_cur_mgr(&cur_mg);
   if(result==1){
     perror("can not init cur_mgr");
@@ -181,133 +206,188 @@ int main(void){
   }
   load_cur_font(&cur_mg);
   cur_font_set(&cur,&cur_mg,1);
-  enum visiavle_chr vis_state=YES;
   while(!WindowShouldClose()){
-    Vector2 current_pos = { (float)str_start_pos_x, (float)(0) };
-    // 入力処理
-    //英字、英数字、記号処理
-    while((n=GetCharPressed())>0){
-      if(n == 13 || n == 10)continue; 
-      else if(IsAnyKeyReleased())break;
-      char c=n;
-      write(master_fd,&c, 1);
-      printf("%d\n",n);
-    } 
-    if(IsKeyPressed(KEY_ENTER)){
-      char enter_key=13;
-      write(master_fd,&enter_key,1);
+    if ((IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) && IsKeyPressed(KEY_V)) {
+        const char* clip_bord_chr = GetClipboardText();
+        // クリップボードが空でない場合のみPTY（擬似端末）へ書き込む
+        if (clip_bord_chr != NULL&& strlen(clip_bord_chr) > 0){   
+          if(paste_mode){
+            write(master_fd, "\x1b[200~", strlen("\x1b[200~"));
+            write(master_fd, clip_bord_chr, strlen(clip_bord_chr));
+            write(master_fd, "\x1b[201~", strlen("\x1b[201~"));
+          }
+          else write(master_fd, clip_bord_chr, strlen(clip_bord_chr));
+      }
     }
-    if(IsKeyPressed(KEY_BACKSPACE)){
-      char c=0x7f;
-      write(master_fd,&c,1);
+    else {
+      while((n = GetCharPressed()) > 0){
+        // 制御文字(32未満)やDEL(127)は二重送信を防ぐため無視する
+        if(n < 32 || n == 127) continue; 
+        else if(IsAnyKeyReleased()) break;
+        char c = n;
+        write(master_fd, &c, 1);
+      }
+    }
+    if(IsKeyPressed(KEY_ENTER)){
+      char enter_key = 13;
+      write(master_fd, &enter_key, 1);
+    }
+    if(IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE)){
+      char c = 0x7f; 
+      write(master_fd, &c, 1);
     }
     while(1){
       ssize_t buf_size = read(master_fd, read_buf, total - 1);
-      if(buf_size>0){
-        char *temp_str=bash_str_parse(read_buf,buf_size,&line_down_pos,&cols,&now_reading_chr_pos,&bash_line_total_ciunt,&vis_state);
-        size_t temp_size=strlen(temp_str);
-        clean_buff_counter+=temp_size;
-        if(clean_buff_counter>=total){
-          printf("memory error");
-          break;
-        }
-        memcpy(clean_buff+clean_buff_counter-temp_size,temp_str,temp_size);
-        clean_buff[clean_buff_counter]='\0';
-        free(temp_str);
+      if(buf_size > 0){
+        bash_str_parse(read_buf, buf_size, palms, &palms_counter, main_term_cell, &cur, term_size,&save_cur,alt_term_cell,&paste_mode,window_title);
       }
       else break;
     }
-    if(now_reading_chr_pos.h>=rows){
-      unsigned int first_line_len = line_down_pos[0]; 
-      memmove(clean_buff, &clean_buff[first_line_len], clean_buff_counter - first_line_len + 1);
-      memmove(line_down_pos, &line_down_pos[1], sizeof(line_down_pos[0]) * (now_reading_chr_pos.h - 1));
-      for(int i = 0; i <now_reading_chr_pos.h - 1; i++)line_down_pos[i] -= first_line_len; 
-      clean_buff_counter-=first_line_len;
-      bash_line_total_ciunt-= first_line_len;
-      now_reading_chr_pos.h--;
-    }
-    for(int i=0;i<now_reading_chr_pos.h;i++){
-      int str_len =(i==0) ? 0:line_down_pos[i-1];
-      clean_buff_line_splited[i]=mymemcpy(clean_buff + str_len, clean_buff + line_down_pos[i],line_down);
-    }
-    bool win_r=IsWindowResized();
-    if(win_r){
-      scr_w=GetScreenWidth();
-      scr_h=GetScreenHeight();
-      cols=(int)(scr_w-str_start_pos_x)/8;
-      rows=scr_h/16;
-      total=cols*rows;
-      ws.ws_col = cols; // 横幅 (壁の位置)
-      ws.ws_row = rows; // 縦幅
-      ioctl(slave_fd, TIOCSWINSZ, &ws);
-      SetWindowSize(cols,rows);
-    }
-    int last_start = (now_reading_chr_pos.h==0) ? 0 : line_down_pos[now_reading_chr_pos.h-1];
-    clean_buff_line_splited[now_reading_chr_pos.h] = mymemcpy(clean_buff + last_start, clean_buff + clean_buff_counter, none);
-    Vector2 draw_pos={current_pos.x,0};
-    int pos_x=0;
     BeginDrawing();
     ClearBackground(BLACK);
-    //bash受信文字
-    for(int i=0;i<=now_reading_chr_pos.h;i++){
-      draw_pos.y=i*16;
-      DrawTextEx(
-        myfont,
-        clean_buff_line_splited[i],
-        draw_pos, 
-        16, 
-        0, 
-        WHITE
-      );
-      if(i>=now_reading_chr_pos.h){
-        pos_x=strlen(clean_buff_line_splited[i]);
-        break;
+    for(int i=0;i<rows;i++){
+      for(int j=0;j<cols;j++){
+        int idx=i*cols+j;
+        char c=main_term_cell[idx].character;
+        if (c == 0) c = ' '; // 未設定のセルはスペースとして描画
+        char char_str[2] = { c, '\0' };
+        Color fg = main_term_cell[idx].fg_color.a == 0 ? WHITE : main_term_cell[idx].fg_color;
+        Color bg = main_term_cell[idx].bg_color.a == 0 ? BLACK : main_term_cell[idx].bg_color;
+        if (bg.r != 0 || bg.g != 0 || bg.b != 0) {
+           DrawRectangle(j*8, i*16, 8, 16, bg);
+        }
+        DrawTextEx(myfont, char_str, (Vector2){3+j*8, i*16}, 16, 0, fg);
       }
-      free(clean_buff_line_splited[i]);
     }
-    //クライアント実装エフェクト
-    cur.cur_pos.w=pos_x*8+1;
-    cur.cur_pos.h=draw_pos.y;
     draw_cursor(&cur,&current_time);
     EndDrawing();
     fflush(stdout); // バッファに溜めず即座にコンソールに反映させる
   }
-  free(clean_buff);
   close(master_fd);
   CloseWindow();
 }
-char *bash_str_parse(char *buff,ssize_t size,unsigned int **change_line_pos,int *cols,struct pos *reading_pos,unsigned int *bash_line_total_ciunt,enum visiavle_chr *vis_state){
-  char *return_buff=malloc(size+1);
-  int buff_counter=0;
-  static enum parse_state state=GROUND;
-  for(int i=0;i<size;i++){
-    printf("%c ",buff[i]);
-    enum parse_state old_state=state;
-    state=buff_state_check(buff[i],state);
-    if(!(old_state==GROUND && state==GROUND))continue;
-    *vis_state=check_visible_chr(buff[i]);
-    if(*vis_state==BS_ST1){
-      bs_st1(reading_pos,return_buff,*cols,&buff_counter,bash_line_total_ciunt);
-      continue;
+void bash_str_parse(char *buff, ssize_t size, int *palms, int *palms_counter, struct term_cell *term_cell, struct cursor *cur, struct pos term_size,struct cursor *save_cur,struct term_cell *alt_term_cell,bool *paste_mode,char *win_title) {
+    static enum parse_state state = GROUND;
+    static enum mode_state mode=IDK;
+    static char osc_pal_chr[64];
+    static int osc_pal_chr_counter=0;
+    static int val=0;
+    static bool is_private=false;
+    static bool has_val=0;
+    static Color now_fg_color=WHITE;
+    static Color now_bg_color=BLACK;
+    for (int i = 0; i < size; i++) {
+      if(state==SQE_START){
+        if (mode == IDK) {
+          mode = get_mode(buff, &i, size);
+          continue; 
+        }
+        switch (mode) {
+          case OSC_MODE:
+              if(buff[i] >= '0' && buff[i] <= '9') {
+                  val = val * 10 + (buff[i] - '0');
+                  has_val = true;
+              }else if (buff[i] == ';') {
+                  if (!has_val) val = 0;
+                  if (*palms_counter < 16) palms[(*palms_counter)++] = val;
+                  val = 0;
+                  has_val = false;
+              }else if (buff[i] >= 0x40 && buff[i] <= 0x7E){
+                osc_pal_chr[osc_pal_chr_counter++]=buff[i];
+              }
+              else if(buff[i]=='\a'){
+                if (has_val) {
+                      if (*palms_counter < 16) palms[(*palms_counter)++] = val;
+                  } else if (*palms_counter == 0) {
+                      palms[0] = 0;
+                      *palms_counter = 1;
+                }
+                osc_pal_chr[osc_pal_chr_counter]='\0';
+                osc_mode(win_title,buff,palms,*palms_counter,term_cell,&osc_pal_chr[0]);
+                osc_pal_chr_counter=0;
+                *palms_counter = 0;
+                val = 0;
+                has_val = false;
+                state = GROUND;
+                mode = IDK;
+              }    
+              continue;
+              break;
+          case CSI_MODE:
+              if(buff[i] >= '0' && buff[i] <= '9') {
+                  val = val * 10 + (buff[i] - '0');
+                  has_val = true;
+              }else if (buff[i] == ';') {
+                  if (!has_val) val = 0;
+                  if (*palms_counter < 16) palms[(*palms_counter)++] = val;
+                  val = 0;
+                  has_val = false;
+              }else if(buff[i]=='?')is_private=true;
+              else if (buff[i] >= 0x40 && buff[i] <= 0x7E) {
+                  if (has_val) {
+                      if (*palms_counter < 16) palms[(*palms_counter)++] = val;
+                  } else if (*palms_counter == 0) {
+                      palms[0] = 0;
+                      *palms_counter = 1;
+                  }
+                  ls_chr_parse(term_cell, buff[i], palms, *palms_counter, &now_fg_color, &now_bg_color, cur, term_size,is_private,save_cur,alt_term_cell,paste_mode);
+                  *palms_counter = 0;
+                  val = 0;
+                  has_val = false;
+                  state = GROUND;
+                  mode = IDK;
+              }
+              continue;
+              break;
+              
+          case IDK:
+              state = GROUND;
+              mode = IDK;
+              continue;
+              break;
+        }
+      }
+      else if(state == GROUND){
+        state = buff_state_check(buff[i], state);
+        if(state==SQE_START)continue;
+        if (buff[i] == '\b') {
+            if (cur->cur_pos.w > 0) cur->cur_pos.w--;
+            continue;
+        } else if (buff[i] == '\r') {
+            cur->cur_pos.w = 0;
+            continue;
+        } else if (buff[i] == '\n') {
+            cur->cur_pos.w = 0;
+            cur->cur_pos.h++;
+        } else if (buff[i] == '\a') {
+            continue;
+        } else {
+            int idx = cur->cur_pos.h * term_size.w + cur->cur_pos.w;
+            if (idx >= 0 && idx < term_size.h * term_size.w) {
+                term_cell[idx].character = buff[i];
+                term_cell[idx].fg_color = now_fg_color;
+                term_cell[idx].bg_color = now_bg_color;
+            }
+            cur->cur_pos.w++;
+            if (cur->cur_pos.w >= term_size.w) {
+                cur->cur_pos.w = 0;
+                cur->cur_pos.h++;
+            }
+        }
+        // 画面外スクロール処理
+        if (cur->cur_pos.h >= term_size.h) {
+            int total_cells = term_size.w * term_size.h;
+            memmove(term_cell, term_cell + term_size.w, (total_cells - term_size.w) * sizeof(struct term_cell));
+            for (int c = 0; c < term_size.w; c++) {
+                int last_line_idx = (term_size.h - 1) * term_size.w + c;
+                term_cell[last_line_idx].character = ' ';
+                term_cell[last_line_idx].bg_color = BLACK;
+                term_cell[last_line_idx].fg_color = WHITE;
+            }
+            cur->cur_pos.h = term_size.h - 1;
+        }
+      }
     }
-    //改行か、壁まで文字が入力されたら
-    if(buff[i]=='\n' || reading_pos->w > *cols){
-        (*change_line_pos)[reading_pos->h++]=*bash_line_total_ciunt;
-        (reading_pos->w)=0;
-        if(buff[i]=='\n')continue;
-    }
-    return_buff[buff_counter++]=buff[i];
-    (*bash_line_total_ciunt)++;
-    (reading_pos->w)++;
-  }
-  return_buff[buff_counter]='\0';
-  char *temp_buff=realloc(return_buff,buff_counter+1);
-  if(temp_buff==NULL){
-    perror("shrunk_buff malloc error");
-    exit(1);
-  }
-  return_buff=temp_buff;
-  return return_buff;
 }
 char *mymemcpy(char *start, char *end, enum last_chr_mode mode){
   char *cpy;
@@ -334,6 +414,7 @@ char *mymemcpy(char *start, char *end, enum last_chr_mode mode){
   return cpy;
 }
 void draw_cursor(struct cursor *cur,double *current_time){
+  if(!cur->lighting.blinking)return;
   double now_time=GetTime();
   if(now_time-*current_time>=cur->lighting.speed_ms/1000){
     *current_time=now_time;
@@ -343,7 +424,7 @@ void draw_cursor(struct cursor *cur,double *current_time){
     DrawTextEx(
       cur->font,
       cur->shape,
-      (Vector2){cur->cur_pos.w,cur->cur_pos.h},
+      (Vector2){cur->cur_pos.w * 8, cur->cur_pos.h * 16},
       16, 
       0, 
       WHITE
@@ -399,24 +480,7 @@ void cur_font_set(struct cursor *cur,struct cur_mgr *cur_mgr,int n){
 }
 enum parse_state buff_state_check(char buff,enum parse_state now_state){
   enum parse_state return_state=now_state;
-  if(return_state==GROUND){
-    if(buff=='\x1b')return_state=SQE_START;
-  }
-  else if(return_state==SQE_START){
-    if(buff==']')return_state=OSC_MODE;
-    else if(buff=='[')return_state=CSI_MODE;
-    else return_state = GROUND;
-  }
-  else if(return_state==CSI_MODE){
-    if(buff=='?')return_state=PRV_MODE;
-    if(buff>=0x40 && buff<=0x7E)return_state=GROUND;
-  }
-  else if(return_state==OSC_MODE){
-    if(buff=='\a')return_state=GROUND;
-  }
-  else if(return_state==PRV_MODE){
-    if(buff>=0x40 && buff<=0x7E)return_state=GROUND;
-  }
+  if(buff=='\x1b' && return_state==GROUND)return_state=SQE_START;
   return return_state;
 }
 enum visiavle_chr check_visible_chr(char buff){
@@ -426,15 +490,160 @@ enum visiavle_chr check_visible_chr(char buff){
   else vis_state=YES;
   return vis_state;
 }
-void bs_st1(struct pos *pos,char *buff,int cols,int *buff_counter,unsigned int *bash_line_total_ciunt){
-  if (*buff_counter <= 0) return;
-  if(pos->w>0){
-    (*buff_counter)--;
-    pos->w--;
+enum mode_state get_mode(char *buff,int *i,int size){
+  enum mode_state return_state;
+  if(buff[*i]==']')return_state=OSC_MODE;
+  else if(buff[*i]=='[')return_state=CSI_MODE;
+  else return_state=IDK;
+  return return_state;
+}
+void read_counter_inc(int *i,int size){
+  if(*i<size)i++;
+}
+void ls_chr_parse(struct term_cell *term_cell, char buff, int *palms, int palms_counter, Color *now_fg_color, Color *now_bg_color, struct cursor *cur, struct pos term_size,bool is_private,struct cursor *save_cur,struct term_cell *alt_term_cell,bool *paste_mode) {
+  switch(buff){
+    case 'm': // SGR (Select Graphic Rendition) - 文字の色やスタイルを変更
+      for (int i = 0; i < palms_counter; i++) {
+        int code = palms[i];
+        if (code == 0) { // リセット
+          *now_fg_color = WHITE;
+          *now_bg_color = BLACK;
+        } else if (code >= 30 && code <= 37) { // 前景色
+          Color colors[] = {BLACK, RED, GREEN, YELLOW, BLUE, MAGENTA, SKYBLUE, WHITE};
+          *now_fg_color = colors[code - 30];
+        } else if (code >= 40 && code <= 47) { // 背景色
+          Color colors[] = {BLACK, RED, GREEN, YELLOW, BLUE, MAGENTA, SKYBLUE, WHITE};
+          *now_bg_color = colors[code - 40];
+        }
+      }
+      break;
+    case 'H':
+    case 'f':
+    {
+      int row = (palms_counter > 0 && palms[0] > 0) ? palms[0] - 1 : 0;
+      int col = (palms_counter > 1 && palms[1] > 0) ? palms[1] - 1 : 0;
+      // 画面の範囲内に収める
+      if(row >= term_size.h) row = term_size.h - 1;
+      if(col >= term_size.w) col = term_size.w - 1;
+      
+      cur->cur_pos.h = row;
+      cur->cur_pos.w = col;
+      break;
+    }
+    case 'J':
+    {
+      int mode = (palms_counter > 0) ? palms[0] : 0;
+      // mode 2: 画面全体を消去 (本来はmode 0, 1の対応も必要)
+      if (mode == 2) {
+        for(int i = 0; i < (term_size.h * term_size.w); i++){
+          term_cell[i].character = ' ';
+          term_cell[i].bg_color = *now_bg_color;
+        }
+      }
+      break;
+    }
+    case 'K':
+    {
+      int mode = (palms_counter > 0) ? palms[0] : 0;
+      if (mode == 2) {
+        // 行全体消去
+        int line_start = cur->cur_pos.h * term_size.w;
+        for(int i = 0; i < term_size.w; i++){
+          term_cell[line_start + i].character = ' ';
+          term_cell[line_start + i].bg_color = *now_bg_color;
+        }
+      } else if (mode == 0) {
+        // カーソル位置から行末まで消去
+        int start = cur->cur_pos.h * term_size.w + cur->cur_pos.w;
+        int end = (cur->cur_pos.h + 1) * term_size.w;
+        for (int i = start; i < end; i++) {
+          term_cell[i].character = ' ';
+          term_cell[i].bg_color = *now_bg_color;
+        }
+      }
+      break;
+    }
+    case 'A':
+    {
+      int n = (palms_counter > 0 && palms[0] > 0) ? palms[0] : 1;
+      cur->cur_pos.h -= n;
+      if (cur->cur_pos.h < 0) cur->cur_pos.h = 0;
+      break;
+    }
+    case 'B':
+    {
+      int n = (palms_counter > 0 && palms[0] > 0) ? palms[0] : 1;
+      cur->cur_pos.h += n;
+      if (cur->cur_pos.h >= term_size.h) cur->cur_pos.h = term_size.h - 1;
+      break;
+    }
+    case 'C':
+    {
+      int n = (palms_counter > 0 && palms[0] > 0) ? palms[0] : 1;
+      cur->cur_pos.w += n;
+      if (cur->cur_pos.w >= term_size.w) cur->cur_pos.w = term_size.w - 1;
+      break;
+    }
+    case 'D':
+    {
+      int n = (palms_counter > 0 && palms[0] > 0) ? palms[0] : 1;
+      cur->cur_pos.w -= n;
+      if (cur->cur_pos.w < 0) cur->cur_pos.w = 0;
+      break;
+    }
+    case 'h':
+    case 'l':
+     if(is_private && palms_counter > 0) {
+        bool is_on = (buff == 'h'); // h なら true(オン)、l なら false(オフ)
+        switch (palms[0]) {
+          case 25:
+            // カーソルの表示・非表示
+            cur->lighting.blinking = is_on; 
+            break;
+          case 1049:
+            // 代替画面の切り替え
+            if(is_on){
+              *save_cur=*cur;
+              if(alt_term_cell!=NULL)free(alt_term_cell);     
+              alt_term_cell=malloc(sizeof(struct term_cell)*(term_size.h*term_size.w));         
+              memcpy(alt_term_cell,term_cell,term_size.h*term_size.w*sizeof(struct term_cell));
+              for (int i = 0; i < (term_size.h * term_size.w); i++) {
+                term_cell[i].character = ' ';
+                term_cell[i].fg_color = WHITE;
+                term_cell[i].bg_color = BLACK;
+              }
+            }else{
+              if(alt_term_cell!=NULL){
+                memcpy(term_cell, alt_term_cell,term_size.h*term_size.w*sizeof(struct term_cell));
+                free(alt_term_cell);
+                *cur=*save_cur;
+              }
+              *cur=*save_cur;
+            } 
+            break;
+            
+          case 2004:
+            if(is_on)*paste_mode=true;
+            else *paste_mode=false;
+            break;
+          default:
+            // 未対応の番号が来たら、エラーにせず優しく無視する
+            break;
+        }
+      }
+      break;
+    default:
+      // 未実装のCSIシーケンス
+      break;
   }
-  else if(pos->h>0){
-    pos->h--;
-    pos->w=cols;
-    (*buff_counter)--;
+}
+void osc_mode(char *win_title,char *buff,int *palms,int palms_counter,struct term_cell *term_cell,char *osc_pal_chr){
+  switch(palms[0]){
+    case 0:
+    case 2:
+      //SetWindowTitle(osc_pal_chr);
+      break;
+    default:
+      break;
   }
 }
