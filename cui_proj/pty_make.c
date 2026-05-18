@@ -18,6 +18,8 @@
 #define ESC_PAL_MAX 32
 #define cur_font_load_max 32
 #define EVENT_WAIT_MAX 16
+#define DEFAULT_SCREEN_SIZE_W 500
+#define DEFAULT_SCREEN_SIZE_H 500
 
 struct pos {
   int w;
@@ -123,6 +125,7 @@ struct term_context {
     int total_cells;
     bool insert_mode;
 };
+void window_resized_update_memb(struct pos *screen_size,struct pos *term_size,struct term_context *ctx);
 void error_log_write(char *error_statement);
 void erase_chr(struct term_context *ctx,int n);
 void char_arry_insert_chr(struct term_context *ctx,int n);
@@ -158,31 +161,37 @@ enum parse_state buff_state_check(char buff, enum parse_state now_state);
 int main(void) {
   int master_fd, slave_fd;
   char slavename[256];
-  int scr_h = 500;
-  int scr_w = 500;
   int str_start_pos_x = 3; //文字の表示開始座標X
-  InitWindow(scr_w, scr_h, "bash");
-  SetTargetFPS(120);
+
+  struct pos screen_pixel;
+  struct pos term_size;
+  screen_pixel.h=DEFAULT_SCREEN_SIZE_H;
+  screen_pixel.w=DEFAULT_SCREEN_SIZE_W;
+
+  InitWindow(screen_pixel.w, screen_pixel.h, "bash");
+  SetWindowState(FLAG_WINDOW_RESIZABLE);
+  SetTargetFPS(60);
   if (!IsWindowReady()) {
     printf("window error");
     return 0;
   }
-  SetTargetFPS(60);
-  Font myfont = LoadFontEx("/usr/share/fonts/TTF/TerminusTTF.ttf", 256, NULL, 0);
+  Font myfont = LoadFontEx("/usr/share/fonts/TTF/TerminusTTF.ttf", 64, NULL, 0);
+
   SetTextureFilter(myfont.texture, TEXTURE_FILTER_POINT);
-  int cols = (int)(scr_w - str_start_pos_x) / 8;
-  int rows = scr_h / 16;
-  struct pos term_size=(struct pos){cols,rows};
-  int total = cols * rows;
+  term_size.w = (int)(screen_pixel.w - str_start_pos_x) / 8;
+  term_size.h = screen_pixel.h / 16;
+  int total =  term_size.w*term_size.h;
   
   // 元のターミナルの設定をコピーし、安全なウィンドウサイズを指定する
   struct termios term;
   struct termios *term_ptr = NULL;
   struct winsize ws;
-  ws.ws_col = cols; // 横幅 (壁の位置)
-  ws.ws_row = rows; // 縦幅
+  ws.ws_col = term_size.w; // 横幅 (壁の位置)
+  ws.ws_row = term_size.h; // 縦幅
+  ws.ws_col=(unsigned short)screen_pixel.w;//横ピクセル
+  ws.ws_ypixel=(unsigned short)screen_pixel.h;//縦ピクセル
 
-  if (openpty(&master_fd, &slave_fd, slavename, term_ptr, &ws) == -1) {
+  if (openpty(&master_fd, &slave_fd, slavename, term_ptr,&ws) == -1) {
     printf("pty error");
     exit(EXIT_FAILURE);
   }
@@ -233,7 +242,7 @@ int main(void) {
   struct epoll_event master_fd_ev_poll;
   struct epoll_event epoll_list[EVENT_WAIT_MAX];
   memset(&master_fd_ev_poll,0,sizeof(master_fd_ev_poll));
-  //入出力監視
+  //読み込み監視
   master_fd_ev_poll.events=EPOLLIN;
 
   master_fd_ev_poll.data.ptr=malloc(sizeof(struct clientinfo));
@@ -255,20 +264,18 @@ int main(void) {
   struct cur_mgr cur_mg;
   struct term_cell *main_term_cell = calloc(total, sizeof(struct term_cell));
   struct term_cell *alt_term_cell = NULL;
-  Vector2 str_pos;
+
   int n = 0;
   int nfds=0;
   int palms[16];
   int palms_counter = 0;
-  ssize_t now_fd_input_size=0;//fdに何バイト書き込める状態か
   double current_time = 0;
   const char* clip_bord_chr=NULL;
   char *read_buf = malloc(total);
   char *abs_path_name = NULL;
   bool paste_mode = false;
+  bool write_buff_overflow=false;
     
-  str_pos.x = str_start_pos_x;
-  str_pos.y = 0;
   cur.shape = malloc(2);
   cur.lighting.blinking = true;
   cur.lighting.speed_ms = 500;
@@ -301,56 +308,74 @@ int main(void) {
   while (!WindowShouldClose()) {
     nfds = epoll_wait(epoll_fd_list,epoll_list,EVENT_WAIT_MAX, 0);
     if ((IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) && IsKeyPressed(KEY_V)){
-      if(nfds>0){
+      if(write_buff_overflow==true && nfds>0){
         for(int i=0;i<nfds;i++){
           //もしepoll_list[i]番目のfdがmaster_fdだったら
           if(((struct clientinfo*)epoll_list[i].data.ptr)->fd!=master_fd)continue;
-          //もし書き込み可能なら
+          //もし書き込み可能かwriteの書き込みバッファが溢れていなかったら
           if(epoll_list[i].events & EPOLLOUT){
             if(clip_bord_chr == NULL && (clip_bord_chr = GetClipboardText()) == NULL) {
               break;
             }
-            size_t len = strlen(clip_bord_chr);   
-            if(len> 0) {
-              unsigned char formated_clip_bord_chr[len+1];
-              int formated_clip_bord_chr_counter=0;
-              for (size_t i = 0; i < len; i++) {
-                unsigned char c = (unsigned char)clip_bord_chr[i];
-                if ((c >= 32 && c <= 126) || c == '\n' || c == '\r' || c == '\t') {
-                  formated_clip_bord_chr[formated_clip_bord_chr_counter++]=c;
-                }
-              }
-              formated_clip_bord_chr[formated_clip_bord_chr_counter]='\0';
-              now_fd_input_size=write(master_fd,formated_clip_bord_chr,formated_clip_bord_chr_counter);
-              //次のループで再度書き込む位置を保存しておきたいのでclipbord_chr変数から書き込んだバイト数のポインタを加算する
-              if(now_fd_input_size>0){
-                clip_bord_chr+=now_fd_input_size;
-              }
-              else if(now_fd_input_size==0){
-                clip_bord_chr=NULL;
-                break;
-              }
-              //バッファが入らなかった場合EPOLLOUTに変更する
-              else if(now_fd_input_size==-1 && errno==EAGAIN){
-                if(epoll_ctl(epoll_fd_list,EPOLL_CTL_MOD ,master_fd,&master_fd_ev_poll)!=0){
-                  char err_buff[128];
-                  snprintf(err_buff,128,"epoll_ctl func error errno = %d",errno);
-                  error_log_write(err_buff);
-                }
-                break;
-              }
-              else {
-                error_log_write("write error");
-                return 0;
-              }
-              while (GetCharPressed() > 0) {} //ショートカットキーのバッファがたまっているので捨てる
-            }
-          break;
-          }   
+          }
         }
       }
+      else if(write_buff_overflow==false){
+        if(clip_bord_chr == NULL && (clip_bord_chr = GetClipboardText()) == NULL) {
+          break;
+        }
+      }
+      else break;
+
+      if(clip_bord_chr!=NULL){
+        size_t len = strlen(clip_bord_chr);   
+        if(len> 0) {
+          char temp_clip_bord_chr[len+1];
+          int temp_clip_bord_chr_counter=0;
+          for (size_t i = 0; i < len; i++) {
+            char c = (char)clip_bord_chr[i];
+            if ((c >= 32 && c <= 126) || c == '\n' || c == '\r' || c == '\t') {
+              temp_clip_bord_chr[temp_clip_bord_chr_counter++]=c;
+            }
+          }
+          temp_clip_bord_chr[temp_clip_bord_chr_counter]='\0';
+          //何バイト読み込んだか
+          ssize_t now_fd_input_size=write(master_fd,temp_clip_bord_chr,strlen(temp_clip_bord_chr));
+          //次のループで再度書き込む位置を保存しておきたいのでclipbord_chr変数から書き込んだバイト数のポインタを加算する
+          if(now_fd_input_size>0){
+            clip_bord_chr+=now_fd_input_size;
+            clip_bord_chr=NULL;
+          }
+          else if(now_fd_input_size==0){
+            clip_bord_chr=NULL;
+            write_buff_overflow=false;
+            master_fd_ev_poll.events=EPOLLIN;
+            if(epoll_ctl(epoll_fd_list,EPOLL_CTL_MOD ,master_fd,&master_fd_ev_poll)!=0){
+              char err_buff[128];
+              snprintf(err_buff,128,"epoll_ctl func error errno = %d",errno);
+              error_log_write(err_buff);
+            }
+          }
+          //バッファが入らなかった場合EPOLLOUTに変更する
+          else if(now_fd_input_size==-1 && errno==EAGAIN){
+            master_fd_ev_poll.events=EPOLLOUT;
+            write_buff_overflow=true;
+            if(epoll_ctl(epoll_fd_list,EPOLL_CTL_MOD ,master_fd,&master_fd_ev_poll)!=0){
+              char err_buff[128];
+              snprintf(err_buff,128,"epoll_ctl func error errno = %d",errno);
+              error_log_write(err_buff);
+            }
+            break;
+          }
+          else {//エラーの場合
+            error_log_write("write error");
+            return 0;
+          }
+        }
+      }
+      while (GetCharPressed() > 0) {} //ショートカットキーのバッファがたまっているので捨てる   
     }
-    else {
+    else{ 
       while ((n = GetCharPressed()) > 0) {
         if (n < 32 || n == 127) continue; 
         else if (IsAnyKeyReleased()) break;
@@ -404,12 +429,39 @@ int main(void) {
         }
       }
     }
+    if(IsWindowResized()){
+      window_resized_update_memb(&screen_pixel,&term_size,&ctx);
+      int old_total=total;
+      total=term_size.h*term_size.w;
+      char *read_buff_temp = realloc(read_buf,total);
+      struct term_cell * main_term_cell_temp = realloc(main_term_cell,sizeof(struct term_cell)*total);
+      if(read_buff_temp==NULL || main_term_cell_temp){
+        error_log_write("read buff or main_term_cell_temp realloc error");
+        free(read_buf);
+        return 1;
+      }
+      if(old_total<total){
+        //追加分のポインタを0で初期化
+        memset(main_term_cell+old_total,0,total-old_total);
+      }
+      //context memb update
+      ctx.term_cell = main_term_cell;
+      ctx.alt_term_cell = alt_term_cell;
+      ctx.cur = &cur;
+      ctx.save_cur = &save_cur;
+      ctx.term_size = term_size;
+      ctx.palms = palms;
+      ctx.palms_counter = &palms_counter;
+      ctx.paste_mode = paste_mode;
+      ctx.abs_path_name = abs_path_name;
+      ctx.total_cells = total;
+    }
 
     BeginDrawing();
     ClearBackground(BLACK);
-    for (int i = 0; i < rows; i++) {
-      for (int j = 0; j < cols; j++) {
-        int idx = i * cols + j;
+    for (int i = 0; i < term_size.h; i++) {
+      for (int j = 0; j < term_size.w; j++) {
+        int idx = i * term_size.w + j;
         char c = ctx.term_cell[idx].character;
         if (c == 0) c = ' '; // 未設定のセルはスペースとして描画
         char char_str[2] = { c, '\0' };
@@ -724,7 +776,6 @@ void ls_chr_parse(struct term_context *ctx, char buff, Color *now_fg_color, Colo
     }
 }
 
-// ★ 変更：構造体を受け取るように修正
 void osc_mode(char *buff, struct term_context *ctx, char *osc_pal_chr){
   switch(ctx->palms[0]){
     case 0:
@@ -1072,4 +1123,11 @@ void error_log_write(char *error_statement){
   ssize_t size=fputs(error_statement,error_f);
   if(size<0)perror("can not write on error_log.txt");
   fclose(error_f);
+}
+void window_resized_update_memb(struct pos *screen_pixel,struct pos *term_size,struct term_context *ctx){
+  screen_pixel->w=GetScreenWidth();
+  screen_pixel->h=GetScreenHeight();
+  SetWindowSize(screen_pixel->h, screen_pixel->w);
+  term_size->w = (int)(screen_pixel->w - 3) / 8;
+  term_size->h = (int)screen_pixel->h / 16;
 }
