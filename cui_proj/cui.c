@@ -4,7 +4,7 @@
 int main(){
     char *a=malloc(sizeof(char)*10);
     memcpy(a,"123456789",sizeof("123456789"));
-    memmove(a, &a[4],strlen(&a[4]));
+    memmove(a, &a[4], strlen(&a[4]) + 1);
     printf("%s\n",a);
 
 }

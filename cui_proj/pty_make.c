@@ -1,4 +1,5 @@
 #include "raylib.h"
+#include <asm-generic/errno-base.h>
 #include <bits/types/siginfo_t.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -11,9 +12,12 @@
 #include <termios.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
+#include<sys/epoll.h>
+#include<errno.h>
 
 #define ESC_PAL_MAX 32
 #define cur_font_load_max 32
+#define EVENT_WAIT_MAX 16
 
 struct pos {
   int w;
@@ -98,7 +102,13 @@ struct return_binary {
   int char_binary_counter;
 };
 
-// ★ 新しく追加：関数の引数をまとめる構造体
+struct clientinfo {
+    int fd;
+    char buf[1024];
+    int n;
+    int state;
+  };
+
 struct term_context {
     struct term_cell *term_cell;
     struct term_cell *alt_term_cell;
@@ -113,6 +123,7 @@ struct term_context {
     int total_cells;
     bool insert_mode;
 };
+void error_log_write(char *error_statement);
 void erase_chr(struct term_context *ctx,int n);
 void char_arry_insert_chr(struct term_context *ctx,int n);
 void char_array_alignment(struct term_context *ctx,int n);
@@ -183,8 +194,8 @@ int main(void) {
   tcsetattr(slave_fd, TCSANOW, &term); // 設定を即時反映
   pid_t pid_id = fork();
   if (pid_id == -1) {
-    perror("forkに失敗しました");
-        exit(EXIT_FAILURE);
+    error_log_write("fork faild code 186");
+    exit(EXIT_FAILURE);
   }
   else if (pid_id == 0) {
     close(master_fd);
@@ -199,16 +210,45 @@ int main(void) {
     setenv("TERM", "xterm-256color", 1);
     execlp("bash", "bash", "-i", NULL);
 
-    perror("bashの起動に失敗しました");
+    error_log_write("bash lunch afaild");
     exit(EXIT_FAILURE);
   }
   else {
     close(slave_fd); // 親プロセス（マスター側）では slave_fd は不要なので即座に閉じる
   }
-  
+  //現在のフラグを取得する
+  int flags=fcntl(master_fd,F_GETFL,0);
+
+  if(flags!=-1){
   //readを非ブロッキングにする
-  fcntl(master_fd, F_SETFL, O_NONBLOCK);
-  
+    fcntl(master_fd, F_SETFL,flags|O_NONBLOCK);
+  }
+
+  //epoll設定////////////
+  int epoll_fd_list=epoll_create(EVENT_WAIT_MAX);
+  if(epoll_fd_list<0){
+    error_log_write("epoll create error code");
+    return 1;
+  }
+  struct epoll_event master_fd_ev_poll;
+  struct epoll_event epoll_list[EVENT_WAIT_MAX];
+  memset(&master_fd_ev_poll,0,sizeof(master_fd_ev_poll));
+  //入出力監視
+  master_fd_ev_poll.events=EPOLLIN;
+
+  master_fd_ev_poll.data.ptr=malloc(sizeof(struct clientinfo));
+  if(master_fd_ev_poll.data.ptr==NULL){
+    error_log_write("e_ev.data.ptr malloc error");
+    return 1;
+  }
+  memset(master_fd_ev_poll.data.ptr,0,sizeof(struct clientinfo));
+
+  ((struct clientinfo *)master_fd_ev_poll.data.ptr)->fd=master_fd;
+
+  if(epoll_ctl(epoll_fd_list,EPOLL_CTL_ADD,master_fd,&master_fd_ev_poll)!=0){
+    error_log_write("epoll_ctl faild code");
+    return 1;
+  }
   // 変数の初期化
   struct cursor cur;
   struct cursor save_cur;
@@ -217,13 +257,16 @@ int main(void) {
   struct term_cell *alt_term_cell = NULL;
   Vector2 str_pos;
   int n = 0;
+  int nfds=0;
   int palms[16];
   int palms_counter = 0;
+  ssize_t now_fd_input_size=0;//fdに何バイト書き込める状態か
   double current_time = 0;
+  const char* clip_bord_chr=NULL;
   char *read_buf = malloc(total);
   char *abs_path_name = NULL;
   bool paste_mode = false;
-  
+    
   str_pos.x = str_start_pos_x;
   str_pos.y = 0;
   cur.shape = malloc(2);
@@ -236,7 +279,7 @@ int main(void) {
   
   int result = init_cur_mgr(&cur_mg);
   if (result == 1) {
-    perror("can not init cur_mgr");
+    error_log_write("can not init cur_mgr code 245");
     return 0;
   }
   load_cur_font(&cur_mg);
@@ -253,22 +296,59 @@ int main(void) {
   ctx.paste_mode = paste_mode;
   ctx.abs_path_name = abs_path_name;
   ctx.total_cells = total;
+  ctx.insert_mode=false;
 
   while (!WindowShouldClose()) {
-    if ((IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) && IsKeyPressed(KEY_V)) {
-      const char* clip_bord_chr = GetClipboardText();
-      if (clip_bord_chr != NULL && strlen(clip_bord_chr) > 0) {   
-        size_t len = strlen(clip_bord_chr);
-        for (size_t i = 0; i < len; i++) {
-          unsigned char c = (unsigned char)clip_bord_chr[i];
-          if ((c >= 32 && c <= 126) || c == '\n' || c == '\r' || c == '\t') {
-            write(master_fd, &c, 1);
-          } else {
-            break; 
-          }
+    nfds = epoll_wait(epoll_fd_list,epoll_list,EVENT_WAIT_MAX, 0);
+    if ((IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) && IsKeyPressed(KEY_V)){
+      if(nfds>0){
+        for(int i=0;i<nfds;i++){
+          //もしepoll_list[i]番目のfdがmaster_fdだったら
+          if(((struct clientinfo*)epoll_list[i].data.ptr)->fd!=master_fd)continue;
+          //もし書き込み可能なら
+          if(epoll_list[i].events & EPOLLOUT){
+            if(clip_bord_chr == NULL && (clip_bord_chr = GetClipboardText()) == NULL) {
+              break;
+            }
+            size_t len = strlen(clip_bord_chr);   
+            if(len> 0) {
+              unsigned char formated_clip_bord_chr[len+1];
+              int formated_clip_bord_chr_counter=0;
+              for (size_t i = 0; i < len; i++) {
+                unsigned char c = (unsigned char)clip_bord_chr[i];
+                if ((c >= 32 && c <= 126) || c == '\n' || c == '\r' || c == '\t') {
+                  formated_clip_bord_chr[formated_clip_bord_chr_counter++]=c;
+                }
+              }
+              formated_clip_bord_chr[formated_clip_bord_chr_counter]='\0';
+              now_fd_input_size=write(master_fd,formated_clip_bord_chr,formated_clip_bord_chr_counter);
+              //次のループで再度書き込む位置を保存しておきたいのでclipbord_chr変数から書き込んだバイト数のポインタを加算する
+              if(now_fd_input_size>0){
+                clip_bord_chr+=now_fd_input_size;
+              }
+              else if(now_fd_input_size==0){
+                clip_bord_chr=NULL;
+                break;
+              }
+              //バッファが入らなかった場合EPOLLOUTに変更する
+              else if(now_fd_input_size==-1 && errno==EAGAIN){
+                if(epoll_ctl(epoll_fd_list,EPOLL_CTL_MOD ,master_fd,&master_fd_ev_poll)!=0){
+                  char err_buff[128];
+                  snprintf(err_buff,128,"epoll_ctl func error errno = %d",errno);
+                  error_log_write(err_buff);
+                }
+                break;
+              }
+              else {
+                error_log_write("write error");
+                return 0;
+              }
+              while (GetCharPressed() > 0) {} //ショートカットキーのバッファがたまっているので捨てる
+            }
+          break;
+          }   
         }
       }
-      while (GetCharPressed() > 0) {} //ショートカットキーのバッファがたまっているので捨てる
     }
     else {
       while ((n = GetCharPressed()) > 0) {
@@ -289,7 +369,7 @@ int main(void) {
     if (IsKeyPressed(KEY_RIGHT)){
       //右のセルが空白ならカーソルをブロックする
       if(ctx.cur->cur_pos.w<ctx.term_size.w){
-        if(ctx.cur->cur_pos.w<ctx.temp_cur_pos.w+1){
+        if(ctx.cur->cur_pos.w<ctx.temp_cur_pos.w+1 || ctx.term_cell[ctx.cur->cur_pos.w+1].character!=' '){
           write(master_fd,"\x1b[C",strlen("\x1b[C"));
         }
       }
@@ -297,13 +377,32 @@ int main(void) {
     if(IsKeyPressed(KEY_LEFT)){
       write(master_fd,"\x1b[D",strlen("\x1b[D"));
     }
-    
-    while (1) {
-      ssize_t buf_size = read(master_fd, read_buf, total - 1);
-      if (buf_size > 0) { 
-        bash_str_parse(read_buf, buf_size, &ctx);
+    if(nfds>0){
+      for(int i=0;i<nfds;i++){
+        //もしfdがmaster_fdだったら
+        if(((struct clientinfo *)epoll_list[i].data.ptr)->fd==master_fd){
+          if(epoll_list[i].events & EPOLLIN){
+            while (1) {
+              ssize_t buf_size = read(master_fd, read_buf, total - 1);
+              if (buf_size > 0){
+              bash_str_parse(read_buf, buf_size, &ctx);
+              }
+              else if (buf_size == -1) {
+                // -1 の場合は errno を確認する
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                  // 受信バッファが空になったので、正常に読み取りループを抜ける
+                  break;
+                } else {
+                  // それ以外の本当のエラー
+                  error_log_write("read error");
+                  break;
+                }
+              }
+            }
+            break;
+          }
+        }
       }
-      else break;
     }
 
     BeginDrawing();
@@ -326,11 +425,12 @@ int main(void) {
     EndDrawing();
     fflush(stdout);
   }
+  free(master_fd_ev_poll.data.ptr);
   close(master_fd);
   CloseWindow();
+  close(epoll_fd_list);
 }
 
-// ★ 変更：構造体を受け取るように修正
 void bash_str_parse(char *buff, ssize_t size, struct term_context *ctx) {
     static enum parse_state state = GROUND;
     static enum mode_state mode = IDK;
@@ -351,17 +451,7 @@ void bash_str_parse(char *buff, ssize_t size, struct term_context *ctx) {
         }
         switch (mode) {
           case OSC_MODE:
-              if (buff[i] >= '0' && buff[i] <= '9') {
-                  val = val * 10 + (buff[i] - '0');
-                  has_val = true;
-              } else if (buff[i] == ';') {
-                if (!has_val) val = 0;
-                if (*(ctx->palms_counter) < 16) ctx->palms[(*(ctx->palms_counter))++] = val;
-                osc_pal_chr[osc_pal_chr_counter++] = buff[i];
-                val = 0;
-                has_val = false;     
-              } else if (buff[i] >= 0x40 && buff[i] <= 0x7E) osc_pal_chr[osc_pal_chr_counter++] = buff[i];
-              else if (buff[i] == '\x1b') osc_state = OSC_EXPECT_ST;
+              if (buff[i] == '\x1b') osc_state = OSC_EXPECT_ST;
               else if (buff[i] == '\a' || (osc_state == OSC_EXPECT_ST && buff[i] == '\\')) {
                 if (has_val) {
                       if (*(ctx->palms_counter) < 16) ctx->palms[(*(ctx->palms_counter))++] = val;
@@ -379,6 +469,18 @@ void bash_str_parse(char *buff, ssize_t size, struct term_context *ctx) {
                 has_val = false;
                 state = GROUND;
                 mode = IDK;
+                osc_state = NORMAL;
+              } else if (*(ctx->palms_counter) == 0 && buff[i] >= '0' && buff[i] <= '9') {
+                  val = val * 10 + (buff[i] - '0');
+                  has_val = true;
+              } else if (*(ctx->palms_counter) == 0 && buff[i] == ';') {
+                  if (!has_val) val = 0;
+                  if (*(ctx->palms_counter) < 16) ctx->palms[(*(ctx->palms_counter))++] = val;
+                  if (osc_pal_chr_counter < sizeof(osc_pal_chr) - 1) osc_pal_chr[osc_pal_chr_counter++] = buff[i];
+                  val = 0;
+                  has_val = false;     
+              } else if (buff[i] >= 0x20 && buff[i] <= 0x7E) {
+                  if (osc_pal_chr_counter < sizeof(osc_pal_chr) - 1) osc_pal_chr[osc_pal_chr_counter++] = buff[i];
               }
               continue;
               break;
@@ -567,19 +669,13 @@ void ls_chr_parse(struct term_context *ctx, char buff, Color *now_fg_color, Colo
       {
         int n = (palms_counter > 0 && palms[0] > 0) ? palms[0] : 1;
         erase_chr(ctx,n);
+        break;
       }
     case 'h':
     case 'l':
-     if (is_private && palms_counter > 0) {
-        bool is_on = (buff == 'h'); 
+      bool is_on = (buff == 'h'); 
+      if (is_private && palms_counter > 0) {
         switch (palms[0]) {
-          case 4:
-            if (!is_private && palms_counter > 0) {
-              if (palms[0] == 4) { // 4番は インサートモード(IRM)
-                bool is_on = (buff == 'h');
-                ctx->insert_mode = is_on; 
-              }
-            }
           case 25:
             ctx->cur->lighting.blinking = is_on; 
             break;
@@ -613,17 +709,19 @@ void ls_chr_parse(struct term_context *ctx, char buff, Color *now_fg_color, Colo
           default:
             break;
         }
-      }
+      }else if (!is_private && palms_counter > 0) {
+        if (palms[0] == 4) { // 4番: インサートモード (IRM)
+          ctx->insert_mode = is_on;
+        }
+      } 
       break;
     case '@':
-      {
-        int n = (palms_counter > 0 && palms[0] > 0) ? palms[0] : 1;
-        char_array_alignment(ctx,n);      
-        break;
-    }
-    default:
+    {
+      int n = (palms_counter > 0 && palms[0] > 0) ? palms[0] : 1;
+      char_arry_insert_chr(ctx,n);      
       break;
-  }
+    }
+    }
 }
 
 // ★ 変更：構造体を受け取るように修正
@@ -674,7 +772,7 @@ void osc_mode(char *buff, struct term_context *ctx, char *osc_pal_chr){
         result++;
         mode++;
       }
-      else result+=strlen("rgb:");
+      else result = rgb_result + strlen("rgb:");
       Color c_col=conbert_num_to_color(result,mode);
       if(ctx->palms[0] == 10) {
         change_fg_color(ctx,c_col); // 後述の関数
@@ -822,9 +920,8 @@ char *base64_decoder(char *osc_pal_chr){
     if (*(result + 1) == 'c') {
       char *str_ptr_st = strchr(result + 1, ';');
       if (str_ptr_st == NULL) return NULL;
-      char str_ptr[strlen(str_ptr_st) + 1];
-      memcpy(str_ptr, str_ptr_st + 1, strlen(str_ptr_st));
-      str_ptr[strlen(str_ptr_st)] = '\0';
+      char str_ptr[strlen(str_ptr_st)];
+      strcpy(str_ptr, str_ptr_st + 1);
       struct return_binary *char_bin = char_conbert_binary_arry(str_ptr);
       if (char_bin != NULL) {
         int remainder = char_bin->char_binary_counter % 8;
@@ -964,4 +1061,15 @@ void erase_chr(struct term_context *ctx,int n){
   for(int i=0;i<n;i++){
     ctx->term_cell[idx+i].character=' ';
   }
+}
+void error_log_write(char *error_statement){
+  FILE *error_f;
+  error_f=fopen("error_log.txt","w");
+  if(error_f==NULL){
+    perror("cant open error_log.txt");
+    exit(1);
+  }
+  ssize_t size=fputs(error_statement,error_f);
+  if(size<0)perror("can not write on error_log.txt");
+  fclose(error_f);
 }
