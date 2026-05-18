@@ -160,16 +160,19 @@ enum parse_state buff_state_check(char buff, enum parse_state now_state);
 
 int main(void) {
   int master_fd, slave_fd;
-  char slavename[256];
   int str_start_pos_x = 3; //文字の表示開始座標X
+  char slavename[256];
 
   struct pos screen_pixel;
   struct pos term_size;
   screen_pixel.h=DEFAULT_SCREEN_SIZE_H;
   screen_pixel.w=DEFAULT_SCREEN_SIZE_W;
+  term_size.w = (int)(screen_pixel.w - str_start_pos_x) / 8;
+  term_size.h = screen_pixel.h / 16;
+  int total =  term_size.w*term_size.h;
 
+  SetConfigFlags(FLAG_WINDOW_RESIZABLE);
   InitWindow(screen_pixel.w, screen_pixel.h, "bash");
-  SetWindowState(FLAG_WINDOW_RESIZABLE);
   SetTargetFPS(60);
   if (!IsWindowReady()) {
     printf("window error");
@@ -178,9 +181,6 @@ int main(void) {
   Font myfont = LoadFontEx("/usr/share/fonts/TTF/TerminusTTF.ttf", 64, NULL, 0);
 
   SetTextureFilter(myfont.texture, TEXTURE_FILTER_POINT);
-  term_size.w = (int)(screen_pixel.w - str_start_pos_x) / 8;
-  term_size.h = screen_pixel.h / 16;
-  int total =  term_size.w*term_size.h;
   
   // 元のターミナルの設定をコピーし、安全なウィンドウサイズを指定する
   struct termios term;
@@ -269,6 +269,7 @@ int main(void) {
   int nfds=0;
   int palms[16];
   int palms_counter = 0;
+  int term_cell_alloc_size=total;
   double current_time = 0;
   const char* clip_bord_chr=NULL;
   char *read_buf = malloc(total);
@@ -431,30 +432,28 @@ int main(void) {
     }
     if(IsWindowResized()){
       window_resized_update_memb(&screen_pixel,&term_size,&ctx);
-      int old_total=total;
       total=term_size.h*term_size.w;
-      char *read_buff_temp = realloc(read_buf,total);
-      struct term_cell * main_term_cell_temp = realloc(main_term_cell,sizeof(struct term_cell)*total);
-      if(read_buff_temp==NULL || main_term_cell_temp){
-        error_log_write("read buff or main_term_cell_temp realloc error");
-        free(read_buf);
-        return 1;
+      if(total>term_cell_alloc_size){
+        //二倍にして確保する
+        term_cell_alloc_size*=2;
+        char *read_buff_temp = realloc(read_buf,term_cell_alloc_size);
+        struct term_cell * main_term_cell_temp = realloc(main_term_cell,sizeof(struct term_cell)*term_cell_alloc_size);
+        if(read_buff_temp==NULL || main_term_cell_temp==NULL){
+          error_log_write("read buff or main_term_cell_temp realloc error");
+          free(read_buf);
+          return 1;
+        }
+        read_buf=read_buff_temp;
+        main_term_cell=main_term_cell_temp;
+        memset(read_buf+(term_cell_alloc_size/2),0,term_cell_alloc_size/2);
+        memset(main_term_cell+total,0,term_cell_alloc_size/2);
+        for(int i=0;i<term_cell_alloc_size/2;i++){
+          main_term_cell[(term_cell_alloc_size/2)+i].character=' ';
+          main_term_cell[(term_cell_alloc_size/2)+i].bg_color=BLACK;
+          main_term_cell[(term_cell_alloc_size/2)+i].fg_color=WHITE;
+          main_term_cell[(term_cell_alloc_size/2)+i].is_bold=false;
+        }
       }
-      if(old_total<total){
-        //追加分のポインタを0で初期化
-        memset(main_term_cell+old_total,0,total-old_total);
-      }
-      //context memb update
-      ctx.term_cell = main_term_cell;
-      ctx.alt_term_cell = alt_term_cell;
-      ctx.cur = &cur;
-      ctx.save_cur = &save_cur;
-      ctx.term_size = term_size;
-      ctx.palms = palms;
-      ctx.palms_counter = &palms_counter;
-      ctx.paste_mode = paste_mode;
-      ctx.abs_path_name = abs_path_name;
-      ctx.total_cells = total;
     }
 
     BeginDrawing();
@@ -1127,7 +1126,7 @@ void error_log_write(char *error_statement){
 void window_resized_update_memb(struct pos *screen_pixel,struct pos *term_size,struct term_context *ctx){
   screen_pixel->w=GetScreenWidth();
   screen_pixel->h=GetScreenHeight();
-  SetWindowSize(screen_pixel->h, screen_pixel->w);
+  SetWindowSize(screen_pixel->w, screen_pixel->h);
   term_size->w = (int)(screen_pixel->w - 3) / 8;
   term_size->h = (int)screen_pixel->h / 16;
 }
