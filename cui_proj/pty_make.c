@@ -86,7 +86,7 @@ enum visiavle_chr {
 
 // 1文字（セル）のデータ構造
 struct term_cell {
-    char character;  // 表示する文字（例: 'A'）
+    int character;  // 表示する文字（例: 'A'）
     Color fg_color;  // 前景色（文字色）
     Color bg_color;  // 背景色
     bool is_bold;    // 太字かどうか
@@ -109,21 +109,34 @@ struct clientinfo {
     char buf[1024];
     int n;
     int state;
-  };
+};
 
 struct term_context {
-    struct term_cell *term_cell;
-    struct term_cell *alt_term_cell;
-    struct cursor *cur;
-    struct cursor *save_cur;
-    struct pos term_size;
-    struct pos temp_cur_pos;
-    int *palms;
-    int *palms_counter;
-    bool paste_mode;
-    char *abs_path_name;
-    int total_cells;
-    bool insert_mode;
+  struct term_cell *term_cell;
+  struct term_cell *alt_term_cell;
+  struct cursor *cur;
+  struct cursor *save_cur;
+  struct pos term_size;
+  struct pos temp_cur_pos;
+  int *palms;
+  int *palms_counter;
+  bool paste_mode;
+  char *abs_path_name;
+  int total_cells;
+  bool insert_mode;
+
+  struct {//bash_str_parse関数で使用する変数
+    enum parse_state state;
+    enum mode_state mode;
+    char osc_pal_chr[513];
+    int osc_pal_chr_counter;
+    int val;
+    bool is_private;
+    bool has_val;
+    Color now_fg_color;
+    Color now_bg_color;
+    enum osc_state osc_state;
+  }bash_parser_required_memb;
 };
 void window_resized_update_memb(struct pos *screen_size,struct pos *term_size,struct term_context *ctx);
 void error_log_write(char *error_statement);
@@ -160,16 +173,22 @@ enum parse_state buff_state_check(char buff, enum parse_state now_state);
 
 int main(void) {
   int master_fd, slave_fd;
-  int str_start_pos_x = 3; //文字の表示開始座標X
-  char slavename[256];
+  int str_start_pos_x = 0; //文字の表示開始座標X
+  int total;
 
   struct pos screen_pixel;
   struct pos term_size;
+  struct termios term;
+  struct termios *term_ptr = NULL;
+  struct winsize ws;
+
+  char slavename[256];
+
   screen_pixel.h=DEFAULT_SCREEN_SIZE_H;
   screen_pixel.w=DEFAULT_SCREEN_SIZE_W;
   term_size.w = (int)(screen_pixel.w - str_start_pos_x) / 8;
   term_size.h = screen_pixel.h / 16;
-  int total =  term_size.w*term_size.h;
+  total =  term_size.w*term_size.h;
 
   SetConfigFlags(FLAG_WINDOW_RESIZABLE);
   InitWindow(screen_pixel.w, screen_pixel.h, "bash");
@@ -182,13 +201,10 @@ int main(void) {
 
   SetTextureFilter(myfont.texture, TEXTURE_FILTER_POINT);
   
-  // 元のターミナルの設定をコピーし、安全なウィンドウサイズを指定する
-  struct termios term;
-  struct termios *term_ptr = NULL;
-  struct winsize ws;
+  // 元のターミナルの設定をコピーし、安全なウィンドウサイズを指定すru
   ws.ws_col = term_size.w; // 横幅 (壁の位置)
   ws.ws_row = term_size.h; // 縦幅
-  ws.ws_col=(unsigned short)screen_pixel.w;//横ピクセル
+  ws.ws_xpixel=(unsigned short)screen_pixel.w;//横ピクセル
   ws.ws_ypixel=(unsigned short)screen_pixel.h;//縦ピクセル
 
   if (openpty(&master_fd, &slave_fd, slavename, term_ptr,&ws) == -1) {
@@ -201,6 +217,7 @@ int main(void) {
       term.c_oflag |= ONLCR;   // \n を \r\n に変換す
   }
   tcsetattr(slave_fd, TCSANOW, &term); // 設定を即時反映
+
   pid_t pid_id = fork();
   if (pid_id == -1) {
     error_log_write("fork faild code 186");
@@ -217,6 +234,7 @@ int main(void) {
     // 繋ぎ変えが終わったら、元の slave_fd は不要なので閉じる
     close(slave_fd);
     setenv("TERM", "xterm-256color", 1);
+    setenv("LANG", "en_US.UTF-8", 1);
     execlp("bash", "bash", "-i", NULL);
 
     error_log_write("bash lunch afaild");
@@ -246,6 +264,7 @@ int main(void) {
   master_fd_ev_poll.events=EPOLLIN;
 
   master_fd_ev_poll.data.ptr=malloc(sizeof(struct clientinfo));
+
   if(master_fd_ev_poll.data.ptr==NULL){
     error_log_write("e_ev.data.ptr malloc error");
     return 1;
@@ -259,55 +278,63 @@ int main(void) {
     return 1;
   }
   // 変数の初期化
-  struct cursor cur;
-  struct cursor save_cur;
-  struct cur_mgr cur_mg;
-  struct term_cell *main_term_cell = calloc(total, sizeof(struct term_cell));
-  struct term_cell *alt_term_cell = NULL;
+  struct cur_mgr *cur_mg=calloc(1,sizeof(struct cur_mgr));
+  struct term_context ctx;
 
-  int n = 0;
-  int nfds=0;
-  int palms[16];
-  int palms_counter = 0;
-  int term_cell_alloc_size=total;
+  int term_cell_alloc_size=total*4;
+  int result=0;
   double current_time = 0;
   const char* clip_bord_chr=NULL;
-  char *read_buf = malloc(total);
-  char *abs_path_name = NULL;
-  bool paste_mode = false;
   bool write_buff_overflow=false;
-    
-  cur.shape = malloc(2);
-  cur.lighting.blinking = true;
-  cur.lighting.speed_ms = 500;
-  cur.font = myfont;
-  cur.lighting.now_right = 0;
-  cur.cur_pos.w = 0;
-  cur.cur_pos.h = 0;
+
+  // ctx構造体の直接初期化
+  ctx.term_cell = calloc(term_cell_alloc_size, sizeof(struct term_cell));
+  ctx.alt_term_cell = NULL;
+  ctx.cur = malloc(sizeof(struct cursor));
+  ctx.save_cur = malloc(sizeof(struct cursor));
+  ctx.term_size = term_size;
+  ctx.palms = malloc(sizeof(int) * 16);
+  ctx.palms_counter = malloc(sizeof(int));
+  *ctx.palms_counter = 0;
+  ctx.paste_mode = false;
+  ctx.abs_path_name = NULL;
+  ctx.total_cells = total;
+  ctx.insert_mode = false;
+
+  // curソル初期化
+  ctx.cur->shape = malloc(2);
+  ctx.cur->lighting.blinking = true;
+  ctx.cur->lighting.speed_ms = 500;
+  ctx.cur->font = myfont;
+  ctx.cur->lighting.now_right = 0;
+  ctx.cur->cur_pos.w = 0;
+  ctx.cur->cur_pos.h = 0;
+
+  // bash_parser_required_memb初期化
+  ctx.bash_parser_required_memb.state = GROUND;
+  ctx.bash_parser_required_memb.mode = IDK;
+  ctx.bash_parser_required_memb.osc_pal_chr_counter = 0;
+  ctx.bash_parser_required_memb.val = 0;
+  ctx.bash_parser_required_memb.is_private = false;
+  ctx.bash_parser_required_memb.has_val = 0;
+  ctx.bash_parser_required_memb.now_fg_color = WHITE;
+  ctx.bash_parser_required_memb.now_bg_color = BLACK;
+  ctx.bash_parser_required_memb.osc_state = NORMAL;
+
+  result = init_cur_mgr(cur_mg);
   
-  int result = init_cur_mgr(&cur_mg);
   if (result == 1) {
     error_log_write("can not init cur_mgr code 245");
     return 0;
   }
-  load_cur_font(&cur_mg);
-  cur_font_set(&cur, &cur_mg, 1);
+  load_cur_font(cur_mg);
+  cur_font_set(ctx.cur, cur_mg, 1);
 
-  struct term_context ctx;
-  ctx.term_cell = main_term_cell;
-  ctx.alt_term_cell = alt_term_cell;
-  ctx.cur = &cur;
-  ctx.save_cur = &save_cur;
-  ctx.term_size = term_size;
-  ctx.palms = palms;
-  ctx.palms_counter = &palms_counter;
-  ctx.paste_mode = paste_mode;
-  ctx.abs_path_name = abs_path_name;
-  ctx.total_cells = total;
-  ctx.insert_mode=false;
+  char *read_buf = malloc(total);
+
 
   while (!WindowShouldClose()) {
-    nfds = epoll_wait(epoll_fd_list,epoll_list,EVENT_WAIT_MAX, 0);
+    int nfds = epoll_wait(epoll_fd_list,epoll_list,EVENT_WAIT_MAX, 0);
     if ((IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) && IsKeyPressed(KEY_V)){
       if(write_buff_overflow==true && nfds>0){
         for(int i=0;i<nfds;i++){
@@ -345,7 +372,10 @@ int main(void) {
           //次のループで再度書き込む位置を保存しておきたいのでclipbord_chr変数から書き込んだバイト数のポインタを加算する
           if(now_fd_input_size>0){
             clip_bord_chr+=now_fd_input_size;
-            clip_bord_chr=NULL;
+            //もし送られたバイト数がクリップボードbuffのデータより大きかったら初期化する
+            if(len<=now_fd_input_size){
+              clip_bord_chr=NULL;
+            }
           }
           else if(now_fd_input_size==0){
             clip_bord_chr=NULL;
@@ -377,6 +407,7 @@ int main(void) {
       while (GetCharPressed() > 0) {} //ショートカットキーのバッファがたまっているので捨てる   
     }
     else{ 
+      int n = 0;
       while ((n = GetCharPressed()) > 0) {
         if (n < 32 || n == 127) continue; 
         else if (IsAnyKeyReleased()) break;
@@ -400,6 +431,10 @@ int main(void) {
         }
       }
     }
+    //fnキー入力処理  
+    if (IsKeyPressed(KEY_F1))  write(master_fd, "\x1bOP", 3);
+    if (IsKeyPressed(KEY_F2))  write(master_fd, "\x1bOQ", 3);
+    if (IsKeyPressed(KEY_F10)) write(master_fd, "\x1b[21~", 5);
     if(IsKeyPressed(KEY_LEFT)){
       write(master_fd,"\x1b[D",strlen("\x1b[D"));
     }
@@ -430,52 +465,127 @@ int main(void) {
         }
       }
     }
+    //リサイズ処理//////////////
     if(IsWindowResized()){
       window_resized_update_memb(&screen_pixel,&term_size,&ctx);
       total=term_size.h*term_size.w;
+      //ctxの同期
+      ctx.term_size=term_size;
+      ctx.total_cells=total;
+
+      ws.ws_col = term_size.w;
+      ws.ws_row = term_size.h;
+      ws.ws_xpixel = screen_pixel.w;
+      ws.ws_ypixel = screen_pixel.h;
+
+      ioctl(master_fd, TIOCSWINSZ, &ws);
+      //bashに通知
       if(total>term_cell_alloc_size){
-        //二倍にして確保する
-        term_cell_alloc_size*=2;
-        char *read_buff_temp = realloc(read_buf,term_cell_alloc_size);
-        struct term_cell * main_term_cell_temp = realloc(main_term_cell,sizeof(struct term_cell)*term_cell_alloc_size);
-        if(read_buff_temp==NULL || main_term_cell_temp==NULL){
+        // 古い確保サイズを記憶しておく（read_bufのクリアに必要）
+        int old_alloc_size = term_cell_alloc_size;
+
+        //確実に二倍にして確保する
+        while(total>term_cell_alloc_size){
+          term_cell_alloc_size*=2;
+        }
+
+        char *read_buff_temp = calloc(term_cell_alloc_size,sizeof(char));
+        struct term_cell *main_term_cell_temp = calloc(term_cell_alloc_size,sizeof(struct term_cell));
+        struct term_cell *alt_term_cell_temp = calloc(term_cell_alloc_size,sizeof(struct term_cell));
+
+        if(read_buff_temp==NULL || main_term_cell_temp==NULL || alt_term_cell_temp==NULL){
           error_log_write("read buff or main_term_cell_temp realloc error");
           free(read_buf);
           return 1;
         }
-        read_buf=read_buff_temp;
-        main_term_cell=main_term_cell_temp;
-        memset(read_buf+(term_cell_alloc_size/2),0,term_cell_alloc_size/2);
-        memset(main_term_cell+total,0,term_cell_alloc_size/2);
-        for(int i=0;i<term_cell_alloc_size/2;i++){
-          main_term_cell[(term_cell_alloc_size/2)+i].character=' ';
-          main_term_cell[(term_cell_alloc_size/2)+i].bg_color=BLACK;
-          main_term_cell[(term_cell_alloc_size/2)+i].fg_color=WHITE;
-          main_term_cell[(term_cell_alloc_size/2)+i].is_bold=false;
+
+        memcpy(read_buff_temp,read_buf,old_alloc_size);
+        memset(read_buff_temp + old_alloc_size, 0, term_cell_alloc_size - old_alloc_size);
+      
+        for(int h=0;h<term_size.h;h++){
+          for(int w=0;w<term_size.w;w++){
+            int now_cell_pos=(h*term_size.h)+w;
+            if(now_cell_pos<=old_alloc_size){
+              main_term_cell_temp[now_cell_pos].bg_color=ctx.term_cell[now_cell_pos].bg_color;
+              main_term_cell_temp[now_cell_pos].fg_color=ctx.term_cell[now_cell_pos].fg_color;
+              main_term_cell_temp[now_cell_pos].character=ctx.term_cell[now_cell_pos].character;
+              main_term_cell_temp[now_cell_pos].is_bold=ctx.term_cell[now_cell_pos].is_bold;
+            }else{
+              main_term_cell_temp[now_cell_pos].bg_color=BLACK;
+              main_term_cell_temp[now_cell_pos].fg_color=WHITE;
+              main_term_cell_temp[now_cell_pos].character=' ';
+              main_term_cell_temp[now_cell_pos].is_bold=false;
+            }
+          }
         }
+       
+        free(ctx.term_cell);
+        free(read_buf);
+      
+        read_buf = read_buff_temp;
+        ctx.term_cell = main_term_cell_temp;
+        ctx.total_cells=total;
+      }
+      else if(total<term_cell_alloc_size){
+
+        for(int h=0;h<term_size.h;h++){
+          for(int w=0;w>term_size.w;w++){
+            int now_cell_pos=(h*term_size.h)+w;
+            //小さくなっている場合の処理なので、term_cellのメモリ参照エラーはチェックしなくてもいいと思う
+            if(ctx.term_cell[now_cell_pos].character!=' '){
+
+
+
+            }
+
+
+
+          }
+
+
+
+        }
+
+
+
+
       }
     }
-
+  
     BeginDrawing();
     ClearBackground(BLACK);
     for (int i = 0; i < term_size.h; i++) {
+      Color fg;
+      Color bg;
       for (int j = 0; j < term_size.w; j++) {
         int idx = i * term_size.w + j;
-        char c = ctx.term_cell[idx].character;
+        int  c = ctx.term_cell[idx].character;
         if (c == 0) c = ' '; // 未設定のセルはスペースとして描画
-        char char_str[2] = { c, '\0' };
-        Color fg = ctx.term_cell[idx].fg_color.a == 0 ? WHITE : ctx.term_cell[idx].fg_color;
-        Color bg = ctx.term_cell[idx].bg_color.a == 0 ? BLACK : ctx.term_cell[idx].bg_color;
+        
+        fg = ctx.term_cell[idx].fg_color.a == 0 ? WHITE : ctx.term_cell[idx].fg_color;
+        bg = ctx.term_cell[idx].bg_color.a == 0 ? BLACK : ctx.term_cell[idx].bg_color;
         if (bg.r != 0 || bg.g != 0 || bg.b != 0) {
-           DrawRectangle(j * 8, i * 16, 8, 16, bg);
+          DrawRectangle(j * 8, i * 16, 8, 16, bg);
         }
-        DrawTextEx(myfont, char_str, (Vector2){3 + j * 8, i * 16}, 16, 0, fg);
+        DrawTextCodepoint(myfont,c, (Vector2){j * 8, i * 16}, 16, fg);
       }
     }
     draw_cursor(ctx.cur, &current_time);
     EndDrawing();
-    fflush(stdout);
+  
   }
+  // ctxのクリーンアップ
+  if (ctx.term_cell) free(ctx.term_cell);
+  if (ctx.alt_term_cell) free(ctx.alt_term_cell);
+  if (ctx.cur) {
+    if (ctx.cur->shape) free(ctx.cur->shape);
+    free(ctx.cur);
+  }
+  if (ctx.save_cur) free(ctx.save_cur);
+  if (ctx.palms) free(ctx.palms);
+  if (ctx.palms_counter) free(ctx.palms_counter);
+  if (read_buf) free(read_buf);
+  
   free(master_fd_ev_poll.data.ptr);
   close(master_fd);
   CloseWindow();
@@ -483,97 +593,87 @@ int main(void) {
 }
 
 void bash_str_parse(char *buff, ssize_t size, struct term_context *ctx) {
-    static enum parse_state state = GROUND;
-    static enum mode_state mode = IDK;
-    static char osc_pal_chr[513];
-    static int osc_pal_chr_counter = 0;
-    static int val = 0;
-    static bool is_private = false;
-    static bool has_val = 0;
-    static Color now_fg_color = WHITE;
-    static Color now_bg_color = BLACK;
-    static enum osc_state osc_state = NORMAL;
-    
+
     for (int i = 0; i < size; i++) {
-      if (state == SQE_START) {
-        if (mode == IDK) {
-          mode = get_mode(buff, &i, size);
+      if (ctx->bash_parser_required_memb.state == SQE_START) {
+        if (ctx->bash_parser_required_memb.mode == IDK) {
+          ctx->bash_parser_required_memb.mode = get_mode(buff, &i, size);
           continue; 
         }
-        switch (mode) {
+        switch (ctx->bash_parser_required_memb.mode) {
           case OSC_MODE:
-              if (buff[i] == '\x1b') osc_state = OSC_EXPECT_ST;
-              else if (buff[i] == '\a' || (osc_state == OSC_EXPECT_ST && buff[i] == '\\')) {
-                if (has_val) {
-                      if (*(ctx->palms_counter) < 16) ctx->palms[(*(ctx->palms_counter))++] = val;
+              if (buff[i] == '\x1b') ctx->bash_parser_required_memb.osc_state = OSC_EXPECT_ST;
+              else if (buff[i] == '\a' || (ctx->bash_parser_required_memb.osc_state == OSC_EXPECT_ST && buff[i] == '\\')) {
+                if (ctx->bash_parser_required_memb.has_val) {
+                      if (*(ctx->palms_counter) < 16) ctx->palms[(*(ctx->palms_counter))++] = ctx->bash_parser_required_memb.val;
                   } else if (*(ctx->palms_counter) == 0) {
                       ctx->palms[0] = 0;
                       *(ctx->palms_counter) = 1;
                 }
-                osc_pal_chr[osc_pal_chr_counter] = '\0';
+                ctx->bash_parser_required_memb.osc_pal_chr[ctx->bash_parser_required_memb.osc_pal_chr_counter] = '\0';
                 
-                osc_mode(buff, ctx, osc_pal_chr);
+                osc_mode(buff, ctx, ctx->bash_parser_required_memb.osc_pal_chr);
                 
-                osc_pal_chr_counter = 0;
+                ctx->bash_parser_required_memb.osc_pal_chr_counter = 0;
                 *(ctx->palms_counter) = 0;
-                val = 0;
-                has_val = false;
-                state = GROUND;
-                mode = IDK;
-                osc_state = NORMAL;
+                ctx->bash_parser_required_memb.val = 0;
+                ctx->bash_parser_required_memb.has_val = false;
+                ctx->bash_parser_required_memb.state = GROUND;
+                ctx->bash_parser_required_memb.mode = IDK;
+                ctx->bash_parser_required_memb.osc_state = NORMAL;
               } else if (*(ctx->palms_counter) == 0 && buff[i] >= '0' && buff[i] <= '9') {
-                  val = val * 10 + (buff[i] - '0');
-                  has_val = true;
+                  ctx->bash_parser_required_memb.val = ctx->bash_parser_required_memb.val * 10 + (buff[i] - '0');
+                  ctx->bash_parser_required_memb.has_val = true;
               } else if (*(ctx->palms_counter) == 0 && buff[i] == ';') {
-                  if (!has_val) val = 0;
-                  if (*(ctx->palms_counter) < 16) ctx->palms[(*(ctx->palms_counter))++] = val;
-                  if (osc_pal_chr_counter < sizeof(osc_pal_chr) - 1) osc_pal_chr[osc_pal_chr_counter++] = buff[i];
-                  val = 0;
-                  has_val = false;     
+                  if (!ctx->bash_parser_required_memb.has_val) ctx->bash_parser_required_memb.val = 0;
+                  if (*(ctx->palms_counter) < 16) ctx->palms[(*(ctx->palms_counter))++] = ctx->bash_parser_required_memb.val;
+                  if (ctx->bash_parser_required_memb.osc_pal_chr_counter < sizeof(ctx->bash_parser_required_memb.osc_pal_chr) - 1) ctx->bash_parser_required_memb.osc_pal_chr[ctx->bash_parser_required_memb.osc_pal_chr_counter++] = buff[i];
+                  ctx->bash_parser_required_memb.val = 0;
+                  ctx->bash_parser_required_memb.has_val = false;     
               } else if (buff[i] >= 0x20 && buff[i] <= 0x7E) {
-                  if (osc_pal_chr_counter < sizeof(osc_pal_chr) - 1) osc_pal_chr[osc_pal_chr_counter++] = buff[i];
+                  if (ctx->bash_parser_required_memb.osc_pal_chr_counter < sizeof(ctx->bash_parser_required_memb.osc_pal_chr) - 1) ctx->bash_parser_required_memb.osc_pal_chr[ctx->bash_parser_required_memb.osc_pal_chr_counter++] = buff[i];
               }
               continue;
               break;
           case CSI_MODE:
               if (buff[i] >= '0' && buff[i] <= '9') {
-                  val = val * 10 + (buff[i] - '0');
-                  has_val = true;
+                  ctx->bash_parser_required_memb.val = ctx->bash_parser_required_memb.val * 10 + (buff[i] - '0');
+                  ctx->bash_parser_required_memb.has_val = true;
               } else if (buff[i] == ';') {
-                  if (!has_val) val = 0;
-                  if (*(ctx->palms_counter) < 16) ctx->palms[(*(ctx->palms_counter))++] = val;
-                  val = 0;
-                  has_val = false;
-              } else if (buff[i] == '?') is_private = true;
+                  if (!ctx->bash_parser_required_memb.has_val) ctx->bash_parser_required_memb.val = 0;
+                  if (*(ctx->palms_counter) < 16) ctx->palms[(*(ctx->palms_counter))++] =ctx->bash_parser_required_memb.val;
+                  ctx->bash_parser_required_memb.val = 0;
+                  ctx->bash_parser_required_memb.has_val = false;
+              } else if (buff[i] == '?') ctx->bash_parser_required_memb.is_private = true;
               else if (buff[i] >= 0x40 && buff[i] <= 0x7E) {
-                  if (has_val) {
-                      if (*(ctx->palms_counter) < 16) ctx->palms[(*(ctx->palms_counter))++] = val;
+                  if (ctx->bash_parser_required_memb.has_val) {
+                      if (*(ctx->palms_counter) < 16) ctx->palms[(*(ctx->palms_counter))++] = ctx->bash_parser_required_memb.val;
                   } else if (*(ctx->palms_counter) == 0) {
                       ctx->palms[0] = 0;
                       *(ctx->palms_counter) = 1;
                   }
             
-                  ls_chr_parse(ctx, buff[i], &now_fg_color, &now_bg_color, is_private);
+                  ls_chr_parse(ctx, buff[i], &ctx->bash_parser_required_memb.now_fg_color, &ctx->bash_parser_required_memb.now_bg_color,ctx->bash_parser_required_memb.is_private);
                   
                   *(ctx->palms_counter) = 0;
-                  val = 0;
-                  has_val = false;
-                  state = GROUND;
-                  mode = IDK;
+                  ctx->bash_parser_required_memb.val = 0;
+                  ctx->bash_parser_required_memb.has_val = false;
+                  ctx->bash_parser_required_memb.state = GROUND;
+                  ctx->bash_parser_required_memb.mode = IDK;
               }
               continue;
               break;
               
           case IDK:
-              state = GROUND;
-              mode = IDK;
+              ctx->bash_parser_required_memb.state = GROUND;
+              ctx->bash_parser_required_memb.mode = IDK;
               continue;
               break;
         }
       }
-      else if (state == GROUND) {
-        state = buff_state_check(buff[i], state);
-        if (state == SQE_START) continue;
+      else if (ctx->bash_parser_required_memb.state == GROUND) {
+        ctx->bash_parser_required_memb.state = buff_state_check(buff[i],ctx->bash_parser_required_memb.state);
+        if (ctx->bash_parser_required_memb.state == SQE_START) continue;
         if (buff[i] == '\b') {
             if (ctx->cur->cur_pos.w > 0) ctx->cur->cur_pos.w--;
             continue;
@@ -586,35 +686,35 @@ void bash_str_parse(char *buff, ssize_t size, struct term_context *ctx) {
         } else if (buff[i] == '\a') {
             continue;
         } else {
-            if (ctx->insert_mode) {
-                char_arry_insert_chr(ctx, 1);
-            }
-            int idx = ctx->cur->cur_pos.h * ctx->term_size.w + ctx->cur->cur_pos.w;
-            if (idx >= 0 && idx < ctx->term_size.h * ctx->term_size.w) {
-                ctx->term_cell[idx].character = buff[i];
-                ctx->term_cell[idx].fg_color = now_fg_color;
-                ctx->term_cell[idx].bg_color = now_bg_color;
-                //カーソル移動可能範囲更新
-                ctx->temp_cur_pos.h=ctx->cur->cur_pos.h;
-                ctx->temp_cur_pos.w=ctx->cur->cur_pos.w;
-            }
-            ctx->cur->cur_pos.w++;
-            if (ctx->cur->cur_pos.w >= ctx->term_size.w) {
-                ctx->cur->cur_pos.w = 0;
-                ctx->cur->cur_pos.h++;
-            }
+          if (ctx->insert_mode) {
+              char_arry_insert_chr(ctx, 1);
+          }
+          int idx = ctx->cur->cur_pos.h * ctx->term_size.w + ctx->cur->cur_pos.w;
+          if (idx >= 0 && idx < ctx->term_size.h * ctx->term_size.w) {
+              ctx->term_cell[idx].character = buff[i];
+              ctx->term_cell[idx].fg_color = ctx->bash_parser_required_memb.now_fg_color;
+              ctx->term_cell[idx].bg_color = ctx->bash_parser_required_memb.now_bg_color;
+              //カーソル移動可能範囲更新
+              ctx->temp_cur_pos.h=ctx->cur->cur_pos.h;
+              ctx->temp_cur_pos.w=ctx->cur->cur_pos.w;
+          }
+          ctx->cur->cur_pos.w++;
+          if (ctx->cur->cur_pos.w >= ctx->term_size.w) {
+              ctx->cur->cur_pos.w = 0;
+              ctx->cur->cur_pos.h++;
+          }
         }
         // 画面外スクロール処理
         if (ctx->cur->cur_pos.h >= ctx->term_size.h) {
-            int total_cells = ctx->term_size.w * ctx->term_size.h;
-            memmove(ctx->term_cell, ctx->term_cell + ctx->term_size.w, (total_cells - ctx->term_size.w) * sizeof(struct term_cell));
-            for (int c = 0; c < ctx->term_size.w; c++) {
-                int last_line_idx = (ctx->term_size.h - 1) * ctx->term_size.w + c;
-                ctx->term_cell[last_line_idx].character = ' ';
-                ctx->term_cell[last_line_idx].bg_color = BLACK;
-                ctx->term_cell[last_line_idx].fg_color = WHITE;
-            }
-            ctx->cur->cur_pos.h = ctx->term_size.h - 1;
+          int total_cells = ctx->term_size.w * ctx->term_size.h;
+          memmove(ctx->term_cell, ctx->term_cell + ctx->term_size.w, (total_cells - ctx->term_size.w) * sizeof(struct term_cell));
+          for (int c = 0; c < ctx->term_size.w; c++) {
+              int last_line_idx = (ctx->term_size.h - 1) * ctx->term_size.w + c;
+              ctx->term_cell[last_line_idx].character = ' ';
+              ctx->term_cell[last_line_idx].bg_color = BLACK;
+              ctx->term_cell[last_line_idx].fg_color = WHITE;
+          }
+          ctx->cur->cur_pos.h = ctx->term_size.h - 1;
         }
       }
     }
@@ -645,9 +745,12 @@ void ls_chr_parse(struct term_context *ctx, char buff, Color *now_fg_color, Colo
     {
       int row = (palms_counter > 0 && palms[0] > 0) ? palms[0] - 1 : 0;
       int col = (palms_counter > 1 && palms[1] > 0) ? palms[1] - 1 : 0;
-      if (row >= ctx->term_size.h) row = ctx->term_size.h - 1;
-      if (col >= ctx->term_size.w) col = ctx->term_size.w - 1;
-      
+      if (row >= ctx->term_size.h) {
+        row = ctx->term_size.h - 1;
+      }
+      if (col >= ctx->term_size.w){
+        col = ctx->term_size.w - 1;
+      }
       ctx->cur->cur_pos.h = row;
       ctx->cur->cur_pos.w = col;
       break;
@@ -734,7 +837,7 @@ void ls_chr_parse(struct term_context *ctx, char buff, Color *now_fg_color, Colo
             if (is_on) {
               *(ctx->save_cur) = *(ctx->cur);
               if (ctx->alt_term_cell != NULL) free(ctx->alt_term_cell);     
-              ctx->alt_term_cell = malloc(sizeof(struct term_cell) * (ctx->term_size.h * ctx->term_size.w));         
+              ctx->alt_term_cell = malloc(sizeof(struct term_cell) * (ctx->total_cells));         
               memcpy(ctx->alt_term_cell, ctx->term_cell, ctx->term_size.h * ctx->term_size.w * sizeof(struct term_cell));
               for (int i = 0; i < (ctx->term_size.h * ctx->term_size.w); i++) {
                 ctx->term_cell[i].character = ' ';
@@ -837,6 +940,7 @@ void osc_mode(char *buff, struct term_context *ctx, char *osc_pal_chr){
       char *decode_result = base64_decoder(osc_pal_chr);
       if (decode_result == NULL) break;
       SetClipboardText(decode_result);
+      free(decode_result);
       break;
     }
     default:
@@ -1127,6 +1231,6 @@ void window_resized_update_memb(struct pos *screen_pixel,struct pos *term_size,s
   screen_pixel->w=GetScreenWidth();
   screen_pixel->h=GetScreenHeight();
   SetWindowSize(screen_pixel->w, screen_pixel->h);
-  term_size->w = (int)(screen_pixel->w - 3) / 8;
+  term_size->w = (int)(screen_pixel->w) / 8;
   term_size->h = (int)screen_pixel->h / 16;
 }
