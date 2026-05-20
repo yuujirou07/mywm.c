@@ -190,14 +190,16 @@ int main(void) {
   term_size.h = screen_pixel.h / 16;
   total =  term_size.w*term_size.h;
 
-  SetConfigFlags(FLAG_WINDOW_RESIZABLE);
+  SetConfigFlags(FLAG_WINDOW_RESIZABLE);  
+  int current_monitor=GetCurrentMonitor();
+  int current_moniter_refreshrate=GetMonitorRefreshRate(current_monitor);
   InitWindow(screen_pixel.w, screen_pixel.h, "bash");
-  SetTargetFPS(60);
+  SetTargetFPS(current_moniter_refreshrate);
   if (!IsWindowReady()) {
     printf("window error");
     return 0;
   }
-  Font myfont = LoadFontEx("/usr/share/fonts/TTF/TerminusTTF.ttf", 64, NULL, 0);
+  Font myfont = LoadFontEx("/usr/share/fonts/TTF/TerminusTTF.ttf", 128, NULL, 0);
 
   SetTextureFilter(myfont.texture, TEXTURE_FILTER_POINT);
   
@@ -467,6 +469,8 @@ int main(void) {
     }
     //リサイズ処理//////////////
     if(IsWindowResized()){
+
+      struct pos old_term_size=term_size;
       window_resized_update_memb(&screen_pixel,&term_size,&ctx);
       total=term_size.h*term_size.w;
       //ctxの同期
@@ -504,12 +508,10 @@ int main(void) {
       
         for(int h=0;h<term_size.h;h++){
           for(int w=0;w<term_size.w;w++){
-            int now_cell_pos=(h*term_size.h)+w;
-            if(now_cell_pos<=old_alloc_size){
-              main_term_cell_temp[now_cell_pos].bg_color=ctx.term_cell[now_cell_pos].bg_color;
-              main_term_cell_temp[now_cell_pos].fg_color=ctx.term_cell[now_cell_pos].fg_color;
-              main_term_cell_temp[now_cell_pos].character=ctx.term_cell[now_cell_pos].character;
-              main_term_cell_temp[now_cell_pos].is_bold=ctx.term_cell[now_cell_pos].is_bold;
+
+            int now_cell_pos = (h * term_size.w) + w;
+            if(now_cell_pos-(h*term_size.h) <= old_term_size.w){
+              main_term_cell_temp[now_cell_pos]=ctx.term_cell[now_cell_pos];
             }else{
               main_term_cell_temp[now_cell_pos].bg_color=BLACK;
               main_term_cell_temp[now_cell_pos].fg_color=WHITE;
@@ -518,7 +520,7 @@ int main(void) {
             }
           }
         }
-       
+      
         free(ctx.term_cell);
         free(read_buf);
       
@@ -527,28 +529,20 @@ int main(void) {
         ctx.total_cells=total;
       }
       else if(total<term_cell_alloc_size){
-
-        for(int h=0;h<term_size.h;h++){
-          for(int w=0;w>term_size.w;w++){
-            int now_cell_pos=(h*term_size.h)+w;
-            //小さくなっている場合の処理なので、term_cellのメモリ参照エラーはチェックしなくてもいいと思う
-            if(ctx.term_cell[now_cell_pos].character!=' '){
-
-
-
-            }
-
-
-
+        if(term_size.w<old_term_size.w){
+          struct term_cell *term_cell_temp=malloc(sizeof(struct term_cell)*ctx.total_cells);
+          if(term_cell_temp==NULL){
+            error_log_write("term_cell_remp_error");
+            return 1;
           }
+          for(int h=0;h<term_size.h;h++){
+            for(int w=0;w<term_size.w;w++){
 
 
-
+              
+            }
+          }
         }
-
-
-
-
       }
     }
   
@@ -594,130 +588,136 @@ int main(void) {
 
 void bash_str_parse(char *buff, ssize_t size, struct term_context *ctx) {
 
-    for (int i = 0; i < size; i++) {
-      if (ctx->bash_parser_required_memb.state == SQE_START) {
-        if (ctx->bash_parser_required_memb.mode == IDK) {
-          ctx->bash_parser_required_memb.mode = get_mode(buff, &i, size);
-          continue; 
-        }
-        switch (ctx->bash_parser_required_memb.mode) {
-          case OSC_MODE:
-              if (buff[i] == '\x1b') ctx->bash_parser_required_memb.osc_state = OSC_EXPECT_ST;
-              else if (buff[i] == '\a' || (ctx->bash_parser_required_memb.osc_state == OSC_EXPECT_ST && buff[i] == '\\')) {
+  for (int i = 0; i < size; i++) {
+    if (ctx->bash_parser_required_memb.state == SQE_START) {
+      if (ctx->bash_parser_required_memb.mode == IDK) {
+        ctx->bash_parser_required_memb.mode = get_mode(buff, &i, size);
+        continue; 
+      }
+      switch (ctx->bash_parser_required_memb.mode) {
+        case OSC_MODE:
+            if (buff[i] == '\x1b') ctx->bash_parser_required_memb.osc_state = OSC_EXPECT_ST;
+            else if (buff[i] == '\a' || (ctx->bash_parser_required_memb.osc_state == OSC_EXPECT_ST && buff[i] == '\\')) {
+              if (ctx->bash_parser_required_memb.has_val) {
+                    if (*(ctx->palms_counter) < 16) ctx->palms[(*(ctx->palms_counter))++] = ctx->bash_parser_required_memb.val;
+                } else if (*(ctx->palms_counter) == 0) {
+                    ctx->palms[0] = 0;
+                    *(ctx->palms_counter) = 1;
+              }
+              ctx->bash_parser_required_memb.osc_pal_chr[ctx->bash_parser_required_memb.osc_pal_chr_counter] = '\0';
+              
+              osc_mode(buff, ctx, ctx->bash_parser_required_memb.osc_pal_chr);
+              
+              ctx->bash_parser_required_memb.osc_pal_chr_counter = 0;
+              *ctx->palms_counter = 0;
+              ctx->bash_parser_required_memb.val = 0;
+              ctx->bash_parser_required_memb.has_val = false;
+              ctx->bash_parser_required_memb.state = GROUND;
+              ctx->bash_parser_required_memb.mode = IDK;
+              ctx->bash_parser_required_memb.osc_state = NORMAL;
+
+            } else if (*(ctx->palms_counter) == 0 && buff[i] >= '0' && buff[i] <= '9') {
+                ctx->bash_parser_required_memb.val = ctx->bash_parser_required_memb.val * 10 + (buff[i] - '0');
+                ctx->bash_parser_required_memb.has_val = true;
+
+            } else if (*(ctx->palms_counter) == 0 && buff[i] == ';') {
+                if (!ctx->bash_parser_required_memb.has_val) ctx->bash_parser_required_memb.val = 0;
+                if (*(ctx->palms_counter) < 16) ctx->palms[(*(ctx->palms_counter))++] = ctx->bash_parser_required_memb.val;
+                if (ctx->bash_parser_required_memb.osc_pal_chr_counter < sizeof(ctx->bash_parser_required_memb.osc_pal_chr) - 1) ctx->bash_parser_required_memb.osc_pal_chr[ctx->bash_parser_required_memb.osc_pal_chr_counter++] = buff[i];
+                ctx->bash_parser_required_memb.val = 0;
+                ctx->bash_parser_required_memb.has_val = false;     
+            } else if (buff[i] >= 0x20 && buff[i] <= 0x7E) {
+                if (ctx->bash_parser_required_memb.osc_pal_chr_counter < sizeof(ctx->bash_parser_required_memb.osc_pal_chr) - 1) ctx->bash_parser_required_memb.osc_pal_chr[ctx->bash_parser_required_memb.osc_pal_chr_counter++] = buff[i];
+            }
+            continue;
+            break;
+        case CSI_MODE:
+            if (buff[i] >= '0' && buff[i] <= '9') {
+                ctx->bash_parser_required_memb.val = ctx->bash_parser_required_memb.val * 10 + (buff[i] - '0');
+                ctx->bash_parser_required_memb.has_val = true;
+
+            } else if (buff[i] == ';') {
+                if (!ctx->bash_parser_required_memb.has_val) ctx->bash_parser_required_memb.val = 0;
+                if (*(ctx->palms_counter) < 16) ctx->palms[(*(ctx->palms_counter))++] =ctx->bash_parser_required_memb.val;
+                ctx->bash_parser_required_memb.val = 0;
+                ctx->bash_parser_required_memb.has_val = false;
+
+            } else if (buff[i] == '?') ctx->bash_parser_required_memb.is_private = true;
+
+            else if (buff[i] >= 0x40 && buff[i] <= 0x7E) {
                 if (ctx->bash_parser_required_memb.has_val) {
-                      if (*(ctx->palms_counter) < 16) ctx->palms[(*(ctx->palms_counter))++] = ctx->bash_parser_required_memb.val;
-                  } else if (*(ctx->palms_counter) == 0) {
-                      ctx->palms[0] = 0;
-                      *(ctx->palms_counter) = 1;
+                    if (*(ctx->palms_counter) < 16) ctx->palms[(*(ctx->palms_counter))++] = ctx->bash_parser_required_memb.val;
+                } else if (*(ctx->palms_counter) == 0) {
+                    ctx->palms[0] = 0;
+                    *(ctx->palms_counter) = 1;
                 }
-                ctx->bash_parser_required_memb.osc_pal_chr[ctx->bash_parser_required_memb.osc_pal_chr_counter] = '\0';
+          
+                ls_chr_parse(ctx, buff[i], &ctx->bash_parser_required_memb.now_fg_color, &ctx->bash_parser_required_memb.now_bg_color,ctx->bash_parser_required_memb.is_private);
                 
-                osc_mode(buff, ctx, ctx->bash_parser_required_memb.osc_pal_chr);
-                
-                ctx->bash_parser_required_memb.osc_pal_chr_counter = 0;
-                *(ctx->palms_counter) = 0;
+                *ctx->palms_counter = 0;
                 ctx->bash_parser_required_memb.val = 0;
                 ctx->bash_parser_required_memb.has_val = false;
                 ctx->bash_parser_required_memb.state = GROUND;
                 ctx->bash_parser_required_memb.mode = IDK;
-                ctx->bash_parser_required_memb.osc_state = NORMAL;
-              } else if (*(ctx->palms_counter) == 0 && buff[i] >= '0' && buff[i] <= '9') {
-                  ctx->bash_parser_required_memb.val = ctx->bash_parser_required_memb.val * 10 + (buff[i] - '0');
-                  ctx->bash_parser_required_memb.has_val = true;
-              } else if (*(ctx->palms_counter) == 0 && buff[i] == ';') {
-                  if (!ctx->bash_parser_required_memb.has_val) ctx->bash_parser_required_memb.val = 0;
-                  if (*(ctx->palms_counter) < 16) ctx->palms[(*(ctx->palms_counter))++] = ctx->bash_parser_required_memb.val;
-                  if (ctx->bash_parser_required_memb.osc_pal_chr_counter < sizeof(ctx->bash_parser_required_memb.osc_pal_chr) - 1) ctx->bash_parser_required_memb.osc_pal_chr[ctx->bash_parser_required_memb.osc_pal_chr_counter++] = buff[i];
-                  ctx->bash_parser_required_memb.val = 0;
-                  ctx->bash_parser_required_memb.has_val = false;     
-              } else if (buff[i] >= 0x20 && buff[i] <= 0x7E) {
-                  if (ctx->bash_parser_required_memb.osc_pal_chr_counter < sizeof(ctx->bash_parser_required_memb.osc_pal_chr) - 1) ctx->bash_parser_required_memb.osc_pal_chr[ctx->bash_parser_required_memb.osc_pal_chr_counter++] = buff[i];
-              }
-              continue;
-              break;
-          case CSI_MODE:
-              if (buff[i] >= '0' && buff[i] <= '9') {
-                  ctx->bash_parser_required_memb.val = ctx->bash_parser_required_memb.val * 10 + (buff[i] - '0');
-                  ctx->bash_parser_required_memb.has_val = true;
-              } else if (buff[i] == ';') {
-                  if (!ctx->bash_parser_required_memb.has_val) ctx->bash_parser_required_memb.val = 0;
-                  if (*(ctx->palms_counter) < 16) ctx->palms[(*(ctx->palms_counter))++] =ctx->bash_parser_required_memb.val;
-                  ctx->bash_parser_required_memb.val = 0;
-                  ctx->bash_parser_required_memb.has_val = false;
-              } else if (buff[i] == '?') ctx->bash_parser_required_memb.is_private = true;
-              else if (buff[i] >= 0x40 && buff[i] <= 0x7E) {
-                  if (ctx->bash_parser_required_memb.has_val) {
-                      if (*(ctx->palms_counter) < 16) ctx->palms[(*(ctx->palms_counter))++] = ctx->bash_parser_required_memb.val;
-                  } else if (*(ctx->palms_counter) == 0) {
-                      ctx->palms[0] = 0;
-                      *(ctx->palms_counter) = 1;
-                  }
+            }
+            continue;
+            break;
             
-                  ls_chr_parse(ctx, buff[i], &ctx->bash_parser_required_memb.now_fg_color, &ctx->bash_parser_required_memb.now_bg_color,ctx->bash_parser_required_memb.is_private);
-                  
-                  *(ctx->palms_counter) = 0;
-                  ctx->bash_parser_required_memb.val = 0;
-                  ctx->bash_parser_required_memb.has_val = false;
-                  ctx->bash_parser_required_memb.state = GROUND;
-                  ctx->bash_parser_required_memb.mode = IDK;
-              }
-              continue;
-              break;
-              
-          case IDK:
-              ctx->bash_parser_required_memb.state = GROUND;
-              ctx->bash_parser_required_memb.mode = IDK;
-              continue;
-              break;
-        }
-      }
-      else if (ctx->bash_parser_required_memb.state == GROUND) {
-        ctx->bash_parser_required_memb.state = buff_state_check(buff[i],ctx->bash_parser_required_memb.state);
-        if (ctx->bash_parser_required_memb.state == SQE_START) continue;
-        if (buff[i] == '\b') {
-            if (ctx->cur->cur_pos.w > 0) ctx->cur->cur_pos.w--;
+        case IDK:
+            ctx->bash_parser_required_memb.state = GROUND;
+            ctx->bash_parser_required_memb.mode = IDK;
             continue;
-        } else if (buff[i] == '\r') {
-            ctx->cur->cur_pos.w = 0;
-            continue;
-        } else if (buff[i] == '\n') {
-            ctx->cur->cur_pos.w = 0;
-            ctx->cur->cur_pos.h++;
-        } else if (buff[i] == '\a') {
-            continue;
-        } else {
-          if (ctx->insert_mode) {
-              char_arry_insert_chr(ctx, 1);
-          }
-          int idx = ctx->cur->cur_pos.h * ctx->term_size.w + ctx->cur->cur_pos.w;
-          if (idx >= 0 && idx < ctx->term_size.h * ctx->term_size.w) {
-              ctx->term_cell[idx].character = buff[i];
-              ctx->term_cell[idx].fg_color = ctx->bash_parser_required_memb.now_fg_color;
-              ctx->term_cell[idx].bg_color = ctx->bash_parser_required_memb.now_bg_color;
-              //カーソル移動可能範囲更新
-              ctx->temp_cur_pos.h=ctx->cur->cur_pos.h;
-              ctx->temp_cur_pos.w=ctx->cur->cur_pos.w;
-          }
-          ctx->cur->cur_pos.w++;
-          if (ctx->cur->cur_pos.w >= ctx->term_size.w) {
-              ctx->cur->cur_pos.w = 0;
-              ctx->cur->cur_pos.h++;
-          }
-        }
-        // 画面外スクロール処理
-        if (ctx->cur->cur_pos.h >= ctx->term_size.h) {
-          int total_cells = ctx->term_size.w * ctx->term_size.h;
-          memmove(ctx->term_cell, ctx->term_cell + ctx->term_size.w, (total_cells - ctx->term_size.w) * sizeof(struct term_cell));
-          for (int c = 0; c < ctx->term_size.w; c++) {
-              int last_line_idx = (ctx->term_size.h - 1) * ctx->term_size.w + c;
-              ctx->term_cell[last_line_idx].character = ' ';
-              ctx->term_cell[last_line_idx].bg_color = BLACK;
-              ctx->term_cell[last_line_idx].fg_color = WHITE;
-          }
-          ctx->cur->cur_pos.h = ctx->term_size.h - 1;
-        }
+            break;
       }
     }
+    else if (ctx->bash_parser_required_memb.state == GROUND) {
+      ctx->bash_parser_required_memb.state = buff_state_check(buff[i],ctx->bash_parser_required_memb.state);
+      if (ctx->bash_parser_required_memb.state == SQE_START) continue;
+      if (buff[i] == '\b') {
+          if (ctx->cur->cur_pos.w > 0) ctx->cur->cur_pos.w--;
+          continue;
+      } else if (buff[i] == '\r') {
+          ctx->cur->cur_pos.w = 0;
+          continue;
+      } else if (buff[i] == '\n') {
+          ctx->cur->cur_pos.w = 0;
+          ctx->cur->cur_pos.h++;
+      } else if (buff[i] == '\a') {
+          continue;
+      } else {
+        if (ctx->insert_mode) {
+            char_arry_insert_chr(ctx, 1);
+        }
+        //可視文字処理
+        int idx = ctx->cur->cur_pos.h * ctx->term_size.w + ctx->cur->cur_pos.w;
+        if (idx >= 0 && idx < ctx->term_size.h * ctx->term_size.w) {
+            ctx->term_cell[idx].character = buff[i];
+            ctx->term_cell[idx].fg_color = ctx->bash_parser_required_memb.now_fg_color;
+            ctx->term_cell[idx].bg_color = ctx->bash_parser_required_memb.now_bg_color;
+            //カーソル移動可能範囲更新
+            ctx->temp_cur_pos.h=ctx->cur->cur_pos.h;
+            ctx->temp_cur_pos.w=ctx->cur->cur_pos.w;
+        }
+        ctx->cur->cur_pos.w++;
+        if (ctx->cur->cur_pos.w >= ctx->term_size.w) {
+            ctx->cur->cur_pos.w = 0;
+            ctx->cur->cur_pos.h++;
+        }
+      }
+      // 画面外スクロール処理
+      if (ctx->cur->cur_pos.h >= ctx->term_size.h) {
+        int total_cells = ctx->term_size.w * ctx->term_size.h;
+        memmove(ctx->term_cell, ctx->term_cell + ctx->term_size.w, (total_cells - ctx->term_size.w) * sizeof(struct term_cell));
+        for (int c = 0; c < ctx->term_size.w; c++) {
+          int last_line_idx = (ctx->term_size.h - 1) * ctx->term_size.w + c;
+          ctx->term_cell[last_line_idx].character = ' ';
+          ctx->term_cell[last_line_idx].bg_color = BLACK;
+          ctx->term_cell[last_line_idx].fg_color = WHITE;
+        }
+        ctx->cur->cur_pos.h = ctx->term_size.h - 1;
+      }
+    }
+  }
 }
 
 void ls_chr_parse(struct term_context *ctx, char buff, Color *now_fg_color, Color *now_bg_color, bool is_private) {
