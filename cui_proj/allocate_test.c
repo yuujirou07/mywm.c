@@ -27,6 +27,7 @@ int *arctan_1_over_x(int x, int counter) {
     one[0] = 1; // 1の位を1にして 1.0000... を表現
 
     int *arr_x = create_num(x, counter);
+    
     int *arr_x2 = create_num(x * x, counter);
 
     // T = 1 / x

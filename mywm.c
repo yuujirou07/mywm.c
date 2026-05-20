@@ -684,11 +684,13 @@ static void newinput_mouce(struct wl_listener *listener,void *data){
         //サーフェスの位置情報と大きさ
         //プライベート変数に代入することでデータをレジスタに乗せて高速化する
         struct view *temporary_set_resize_view=s1->resizing_view;
+
         //temporary_set_resize_viewを更新する
         temporary_set_resize_view->temporary_set_resize_box.x = s1->resizing_view->scene_tree->node.x;
         temporary_set_resize_view->temporary_set_resize_box.y = s1->resizing_view->scene_tree->node.y;
         temporary_set_resize_view->temporary_set_resize_box.width = s1->resizing_view->surface_box->width;
         temporary_set_resize_view->temporary_set_resize_box.height = s1->resizing_view->surface_box->height;
+
         //リサイズ処理
         uint32_t resize_num=s1->mouce_structure.resize_edges;
 
@@ -1251,6 +1253,7 @@ static void deco_request_mode(struct wl_listener *listener, void *data) {
 }
 static void deco_destroy(struct wl_listener *listener, void *data) {
     struct my_decoration *deco = wl_container_of(listener, deco, destroy);
+    
     wl_list_remove(&deco->request_mode.link);
     wl_list_remove(&deco->destroy.link);
     free(deco);
@@ -1258,6 +1261,7 @@ static void deco_destroy(struct wl_listener *listener, void *data) {
 
 static void toplevel_destroy(struct wl_listener *listener, void *data){
     struct view *v = wl_container_of(listener, v,toplevel_destroy_listener);
+
     wl_list_remove(&v->toplevel_destroy_listener.link);
     wl_list_remove(&v->map.link);
     wl_list_remove(&v->unmap.link);

@@ -14,6 +14,7 @@
 #include <sys/ioctl.h>
 #include<sys/epoll.h>
 #include<errno.h>
+#include<sys/wait.h>
 
 #define ESC_PAL_MAX 32
 #define cur_font_load_max 32
@@ -138,6 +139,7 @@ struct term_context {
     enum osc_state osc_state;
   }bash_parser_required_memb;
 };
+void unicode_utf8_encoder(char *utf8,int unicode, int *len);
 void window_resized_update_memb(struct pos *screen_size,struct pos *term_size,struct term_context *ctx);
 void error_log_write(char *error_statement);
 void erase_chr(struct term_context *ctx,int n);
@@ -191,8 +193,10 @@ int main(void) {
   total =  term_size.w*term_size.h;
 
   SetConfigFlags(FLAG_WINDOW_RESIZABLE);  
+
   int current_monitor=GetCurrentMonitor();
   int current_moniter_refreshrate=GetMonitorRefreshRate(current_monitor);
+
   InitWindow(screen_pixel.w, screen_pixel.h, "bash");
   SetTargetFPS(current_moniter_refreshrate);
   if (!IsWindowReady()) {
@@ -282,7 +286,6 @@ int main(void) {
   // 変数の初期化
   struct cur_mgr *cur_mg=calloc(1,sizeof(struct cur_mgr));
   struct term_context ctx;
-
   int term_cell_alloc_size=total*4;
   int result=0;
   double current_time = 0;
@@ -336,7 +339,7 @@ int main(void) {
 
 
   while (!WindowShouldClose()) {
-    int nfds = epoll_wait(epoll_fd_list,epoll_list,EVENT_WAIT_MAX, 0);
+    int nfds = epoll_wait(epoll_fd_list,epoll_list,EVENT_WAIT_MAX, 1);
     if ((IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) && IsKeyPressed(KEY_V)){
       if(write_buff_overflow==true && nfds>0){
         for(int i=0;i<nfds;i++){
@@ -413,8 +416,10 @@ int main(void) {
       while ((n = GetCharPressed()) > 0) {
         if (n < 32 || n == 127) continue; 
         else if (IsAnyKeyReleased()) break;
-        char c = n;
-        write(master_fd, &c, 1);
+        char utf8[4]={0};
+        int len=0;
+        unicode_utf8_encoder(utf8,n,&len);
+        write(master_fd,utf8, len);
       }
     }
     if (IsKeyPressed(KEY_ENTER)) {
@@ -428,7 +433,7 @@ int main(void) {
     if (IsKeyPressed(KEY_RIGHT)){
       //右のセルが空白ならカーソルをブロックする
       if(ctx.cur->cur_pos.w<ctx.term_size.w){
-        if(ctx.cur->cur_pos.w<ctx.temp_cur_pos.w+1 || ctx.term_cell[ctx.cur->cur_pos.w+1].character!=' '){
+        if(ctx.cur->cur_pos.w<ctx.temp_cur_pos.w+1 || ctx.term_cell[ctx.cur->cur_pos.h * ctx.term_size.w + ctx.cur->cur_pos.w + 1].character!=' '){
           write(master_fd,"\x1b[C",strlen("\x1b[C"));
         }
       }
@@ -437,7 +442,7 @@ int main(void) {
     if (IsKeyPressed(KEY_F1))  write(master_fd, "\x1bOP", 3);
     if (IsKeyPressed(KEY_F2))  write(master_fd, "\x1bOQ", 3);
     if (IsKeyPressed(KEY_F10)) write(master_fd, "\x1b[21~", 5);
-    if(IsKeyPressed(KEY_LEFT)){
+    if (IsKeyPressed(KEY_LEFT)){
       write(master_fd,"\x1b[D",strlen("\x1b[D"));
     }
     if(nfds>0){
@@ -449,6 +454,9 @@ int main(void) {
               ssize_t buf_size = read(master_fd, read_buf, total - 1);
               if (buf_size > 0){
               bash_str_parse(read_buf, buf_size, &ctx);
+              }
+              else if(buf_size==0){
+                break;
               }
               else if (buf_size == -1) {
                 // -1 の場合は errno を確認する
@@ -467,10 +475,14 @@ int main(void) {
         }
       }
     }
+    
+  
+
     //リサイズ処理//////////////
     if(IsWindowResized()){
 
       struct pos old_term_size=term_size;
+      int old_total=total;
       window_resized_update_memb(&screen_pixel,&term_size,&ctx);
       total=term_size.h*term_size.w;
       //ctxの同期
@@ -492,12 +504,11 @@ int main(void) {
         while(total>term_cell_alloc_size){
           term_cell_alloc_size*=2;
         }
-
+       
         char *read_buff_temp = calloc(term_cell_alloc_size,sizeof(char));
         struct term_cell *main_term_cell_temp = calloc(term_cell_alloc_size,sizeof(struct term_cell));
-        struct term_cell *alt_term_cell_temp = calloc(term_cell_alloc_size,sizeof(struct term_cell));
 
-        if(read_buff_temp==NULL || main_term_cell_temp==NULL || alt_term_cell_temp==NULL){
+        if(read_buff_temp==NULL || main_term_cell_temp==NULL ){
           error_log_write("read buff or main_term_cell_temp realloc error");
           free(read_buf);
           return 1;
@@ -505,43 +516,41 @@ int main(void) {
 
         memcpy(read_buff_temp,read_buf,old_alloc_size);
         memset(read_buff_temp + old_alloc_size, 0, term_cell_alloc_size - old_alloc_size);
-      
-        for(int h=0;h<term_size.h;h++){
-          for(int w=0;w<term_size.w;w++){
 
-            int now_cell_pos = (h * term_size.w) + w;
-            if(now_cell_pos-(h*term_size.h) <= old_term_size.w){
-              main_term_cell_temp[now_cell_pos]=ctx.term_cell[now_cell_pos];
-            }else{
-              main_term_cell_temp[now_cell_pos].bg_color=BLACK;
-              main_term_cell_temp[now_cell_pos].fg_color=WHITE;
-              main_term_cell_temp[now_cell_pos].character=' ';
-              main_term_cell_temp[now_cell_pos].is_bold=false;
-            }
-          }
-        }
-      
         free(ctx.term_cell);
         free(read_buf);
       
         read_buf = read_buff_temp;
         ctx.term_cell = main_term_cell_temp;
-        ctx.total_cells=total;
       }
-      else if(total<term_cell_alloc_size){
-        if(term_size.w<old_term_size.w){
-          struct term_cell *term_cell_temp=malloc(sizeof(struct term_cell)*ctx.total_cells);
-          if(term_cell_temp==NULL){
-            error_log_write("term_cell_remp_error");
-            return 1;
-          }
-          for(int h=0;h<term_size.h;h++){
-            for(int w=0;w<term_size.w;w++){
+      if(term_size.w != old_term_size.w){
+        if(term_size.w > old_term_size.w){
+          for (int h = term_size.h - 1; h >= 0; h--) {
+            // 既存データを逆順（右端の列から）コピー
+            for (int w = old_term_size.w - 1; w >= 0; w--) {
+                int old_idx = h * old_term_size.w + w;
+                int new_idx = h * term_size.w + w;
+                ctx.term_cell[new_idx] = ctx.term_cell[old_idx];
+            }
 
-
-              
+            // 新しく増えた列を空白で初期化
+            for (int w = old_term_size.w; w < term_size.w; w++) {
+                int new_idx = h * term_size.w + w;
+                ctx.term_cell[new_idx].character = ' ';
+                ctx.term_cell[new_idx].fg_color  = WHITE;
+                ctx.term_cell[new_idx].bg_color  = BLACK;
+                ctx.term_cell[new_idx].is_bold   = false;
             }
           }
+        }
+        if(term_size.w < old_term_size.w){
+            for(int h = 0; h < term_size.h; h++){
+                for(int w = 0; w < term_size.w; w++){
+                    int old_idx = h * old_term_size.w + w;
+                    int new_idx = h * term_size.w + w;
+                    ctx.term_cell[new_idx] = ctx.term_cell[old_idx];
+                }
+            }
         }
       }
     }
@@ -623,11 +632,15 @@ void bash_str_parse(char *buff, ssize_t size, struct term_context *ctx) {
             } else if (*(ctx->palms_counter) == 0 && buff[i] == ';') {
                 if (!ctx->bash_parser_required_memb.has_val) ctx->bash_parser_required_memb.val = 0;
                 if (*(ctx->palms_counter) < 16) ctx->palms[(*(ctx->palms_counter))++] = ctx->bash_parser_required_memb.val;
-                if (ctx->bash_parser_required_memb.osc_pal_chr_counter < sizeof(ctx->bash_parser_required_memb.osc_pal_chr) - 1) ctx->bash_parser_required_memb.osc_pal_chr[ctx->bash_parser_required_memb.osc_pal_chr_counter++] = buff[i];
+                if (ctx->bash_parser_required_memb.osc_pal_chr_counter < sizeof(ctx->bash_parser_required_memb.osc_pal_chr) - 1) {
+                  ctx->bash_parser_required_memb.osc_pal_chr[ctx->bash_parser_required_memb.osc_pal_chr_counter++] = buff[i];
+                }
                 ctx->bash_parser_required_memb.val = 0;
                 ctx->bash_parser_required_memb.has_val = false;     
             } else if (buff[i] >= 0x20 && buff[i] <= 0x7E) {
-                if (ctx->bash_parser_required_memb.osc_pal_chr_counter < sizeof(ctx->bash_parser_required_memb.osc_pal_chr) - 1) ctx->bash_parser_required_memb.osc_pal_chr[ctx->bash_parser_required_memb.osc_pal_chr_counter++] = buff[i];
+                if (ctx->bash_parser_required_memb.osc_pal_chr_counter < sizeof(ctx->bash_parser_required_memb.osc_pal_chr) - 1){
+                  ctx->bash_parser_required_memb.osc_pal_chr[ctx->bash_parser_required_memb.osc_pal_chr_counter++] = buff[i];
+                }
             }
             continue;
             break;
@@ -652,7 +665,10 @@ void bash_str_parse(char *buff, ssize_t size, struct term_context *ctx) {
                     *(ctx->palms_counter) = 1;
                 }
           
-                ls_chr_parse(ctx, buff[i], &ctx->bash_parser_required_memb.now_fg_color, &ctx->bash_parser_required_memb.now_bg_color,ctx->bash_parser_required_memb.is_private);
+                ls_chr_parse(ctx, buff[i],
+                  &ctx->bash_parser_required_memb.now_fg_color,
+                  &ctx->bash_parser_required_memb.now_bg_color,
+                  ctx->bash_parser_required_memb.is_private);
                 
                 *ctx->palms_counter = 0;
                 ctx->bash_parser_required_memb.val = 0;
@@ -1015,6 +1031,7 @@ void load_cur_font(struct cur_mgr *cur_mgr){
     char c = (char)in;
     cur_mgr->cur_font[i] = c;
   }
+  fclose(cur_load);
 }
 
 int init_cur_mgr(struct cur_mgr *cur_mgr){
@@ -1074,7 +1091,7 @@ char *base64_decoder(char *osc_pal_chr){
     if (*(result + 1) == 'c') {
       char *str_ptr_st = strchr(result + 1, ';');
       if (str_ptr_st == NULL) return NULL;
-      char str_ptr[strlen(str_ptr_st)];
+      char str_ptr[strlen(str_ptr_st)+1];
       strcpy(str_ptr, str_ptr_st + 1);
       struct return_binary *char_bin = char_conbert_binary_arry(str_ptr);
       if (char_bin != NULL) {
@@ -1147,14 +1164,10 @@ void conbert_chr_to_binary_table(struct return_binary *char_conbert_binary, char
 }
 
 void change_fg_color(struct term_context *ctx,Color c_col){
-  for(int i=0;i<ctx->total_cells;i++){
-    ctx->term_cell[i].fg_color=c_col;
-  }
+  ctx->bash_parser_required_memb.now_fg_color=c_col;
 }
 void change_bg_color(struct term_context *ctx,Color c_col){
-  for(int i=0;i<ctx->total_cells;i++){
-    ctx->term_cell[i].bg_color=c_col;
-  }
+  ctx->bash_parser_required_memb.now_fg_color=c_col;
 }
 
 Color conbert_num_to_color(char *color_str,int mode){
@@ -1218,7 +1231,7 @@ void erase_chr(struct term_context *ctx,int n){
 }
 void error_log_write(char *error_statement){
   FILE *error_f;
-  error_f=fopen("error_log.txt","w");
+  error_f=fopen("error_log.txt","a");
   if(error_f==NULL){
     perror("cant open error_log.txt");
     exit(1);
@@ -1234,3 +1247,26 @@ void window_resized_update_memb(struct pos *screen_pixel,struct pos *term_size,s
   term_size->w = (int)(screen_pixel->w) / 8;
   term_size->h = (int)screen_pixel->h / 16;
 }
+
+void unicode_utf8_encoder(char *utf8,int unicode, int *len){   
+  int n=unicode; 
+    if (n <= 0x7F) {
+        utf8[0] = (char)n;
+        *len = 1;
+    } else if (n <= 0x7FF) {
+        utf8[0] = (char)(0xC0 | (n >> 6));
+        utf8[1] = (char)(0x80 | (n & 0x3F));
+        *len = 2;
+    } else if (n <= 0xFFFF) {
+        utf8[0] = (char)(0xE0 | (n >> 12));
+        utf8[1] = (char)(0x80 | ((n >> 6) & 0x3F));
+        utf8[2] = (char)(0x80 | (n & 0x3F));
+        *len = 3;
+    } else if (n <= 0x10FFFF) {
+        utf8[0] = (char)(0xF0 | (n >> 18));
+        utf8[1] = (char)(0x80 | ((n >> 12) & 0x3F));
+        utf8[2] = (char)(0x80 | ((n >> 6) & 0x3F));
+        utf8[3] = (char)(0x80 | (n & 0x3F));
+        *len = 4;
+    }
+} 
