@@ -85,12 +85,22 @@ enum visiavle_chr {
   BS_ST1,
 };
 
+enum now_str_ovf{
+  Y,
+  N
+};
+
+struct line_info {
+    bool is_wrapped; // true なら「上の行から自動で溢れてきた行」
+};
+
 // 1文字（セル）のデータ構造
 struct term_cell {
     int character;  // 表示する文字（例: 'A'）
     Color fg_color;  // 前景色（文字色）
     Color bg_color;  // 背景色
     bool is_bold;    // 太字かどうか
+    bool is_real_chr;
 };
 
 // ターミナルの「現在の状態」を保持する構造体
@@ -194,8 +204,8 @@ int main(void) {
 
   SetConfigFlags(FLAG_WINDOW_RESIZABLE);  
 
-  int current_monitor=GetCurrentMonitor();
-  int current_moniter_refreshrate=GetMonitorRefreshRate(current_monitor);
+  int current_monitor = GetCurrentMonitor();
+  int current_moniter_refreshrate = GetMonitorRefreshRate(current_monitor);
 
   InitWindow(screen_pixel.w, screen_pixel.h, "bash");
   SetTargetFPS(current_moniter_refreshrate);
@@ -203,8 +213,8 @@ int main(void) {
     printf("window error");
     return 0;
   }
-  Font myfont = LoadFontEx("/usr/share/fonts/TTF/TerminusTTF.ttf", 128, NULL, 0);
-
+  //Font myfont = LoadFontEx("/usr/share/fonts/TTF/TerminusTTF.ttf", 256, NULL, 0);
+  Font myfont = LoadFontEx("/usr/share/fonts/TTF/TerminusTTF.ttf", 256, NULL, 0);
   SetTextureFilter(myfont.texture, TEXTURE_FILTER_POINT);
   
   // 元のターミナルの設定をコピーし、安全なウィンドウサイズを指定すru
@@ -213,16 +223,23 @@ int main(void) {
   ws.ws_xpixel=(unsigned short)screen_pixel.w;//横ピクセル
   ws.ws_ypixel=(unsigned short)screen_pixel.h;//縦ピクセル
 
+  if (tcgetattr(STDIN_FILENO, &term) != -1) {
+    term_ptr = &term;
+    term.c_oflag |= OPOST;   // ポストプロセスを有効化
+    term.c_oflag |= ONLCR;   // \n を \r\n に変換す
+  }
+
   if (openpty(&master_fd, &slave_fd, slavename, term_ptr,&ws) == -1) {
     printf("pty error");
     exit(EXIT_FAILURE);
   }
-  if (tcgetattr(STDIN_FILENO, &term) != -1) {
-      term_ptr = &term;
-      term.c_oflag |= OPOST;   // ポストプロセスを有効化
-      term.c_oflag |= ONLCR;   // \n を \r\n に変換す
+
+  if(tcsetattr(slave_fd, TCSANOW, &term)!=0){ // 設定を即時反映
+    char error_log[128];
+    snprintf(error_log,sizeof(char)*128,"tcsetattr error log=%d: %s\n",errno,strerror(errno));
+    error_log_write(error_log);
+    return 1;
   }
-  tcsetattr(slave_fd, TCSANOW, &term); // 設定を即時反映
 
   pid_t pid_id = fork();
   if (pid_id == -1) {
@@ -284,13 +301,23 @@ int main(void) {
     return 1;
   }
   // 変数の初期化
-  struct cur_mgr *cur_mg=calloc(1,sizeof(struct cur_mgr));
-  struct term_context ctx;
   int term_cell_alloc_size=total*4;
   int result=0;
+
+  struct cur_mgr *cur_mg = NULL; 
+  struct term_context ctx;
+  struct term_cell *temp_term_cell = NULL; 
+  struct line_info *lines = NULL;
+
   double current_time = 0;
+  char *read_buf = NULL;
   const char* clip_bord_chr=NULL;
   bool write_buff_overflow=false;
+  
+  read_buf      =malloc(term_cell_alloc_size);
+  temp_term_cell=malloc(sizeof(struct term_cell)*term_cell_alloc_size);
+  lines         =calloc(term_size.h,sizeof(struct line_info));
+  cur_mg        =calloc(1,sizeof(struct cur_mgr));
 
   // ctx構造体の直接初期化
   ctx.term_cell = calloc(term_cell_alloc_size, sizeof(struct term_cell));
@@ -332,12 +359,10 @@ int main(void) {
     error_log_write("can not init cur_mgr code 245");
     return 0;
   }
+
   load_cur_font(cur_mg);
   cur_font_set(ctx.cur, cur_mg, 1);
-
-  char *read_buf = malloc(total);
-
-
+  
   while (!WindowShouldClose()) {
     int nfds = epoll_wait(epoll_fd_list,epoll_list,EVENT_WAIT_MAX, 1);
     if ((IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) && IsKeyPressed(KEY_V)){
@@ -453,7 +478,7 @@ int main(void) {
             while (1) {
               ssize_t buf_size = read(master_fd, read_buf, total - 1);
               if (buf_size > 0){
-              bash_str_parse(read_buf, buf_size, &ctx);
+                bash_str_parse(read_buf, buf_size, &ctx);
               }
               else if(buf_size==0){
                 break;
@@ -480,10 +505,10 @@ int main(void) {
 
     //リサイズ処理//////////////
     if(IsWindowResized()){
-
       struct pos old_term_size=term_size;
       int old_total=total;
       window_resized_update_memb(&screen_pixel,&term_size,&ctx);
+  
       total=term_size.h*term_size.w;
       //ctxの同期
       ctx.term_size=term_size;
@@ -504,67 +529,103 @@ int main(void) {
         while(total>term_cell_alloc_size){
           term_cell_alloc_size*=2;
         }
-       
+        struct line_info *temp_lines=realloc(lines,sizeof(struct line_info) * term_size.h);
         char *read_buff_temp = calloc(term_cell_alloc_size,sizeof(char));
-        struct term_cell *main_term_cell_temp = calloc(term_cell_alloc_size,sizeof(struct term_cell));
+        struct term_cell *main_term_cell_temp = realloc(ctx.term_cell,sizeof(struct term_cell)*term_cell_alloc_size);
+        //リサイズ時にterm_cellのバッファとして使う
+        struct term_cell *temp_temp_term_cell=calloc(term_cell_alloc_size,sizeof(struct term_cell));
+        struct term_cell *temp_alt_term_cell = calloc(term_cell_alloc_size,sizeof(struct term_cell));
 
-        if(read_buff_temp==NULL || main_term_cell_temp==NULL ){
-          error_log_write("read buff or main_term_cell_temp realloc error");
+        if(read_buff_temp==NULL || main_term_cell_temp==NULL || temp_temp_term_cell==NULL || temp_lines==NULL || temp_alt_term_cell==NULL){
+          char buff[128];
+          snprintf(buff,128,"read buff or main_term_cell_temp realloc error code=%d\n",errno);
+          error_log_write(buff);
           free(read_buf);
           return 1;
         }
 
         memcpy(read_buff_temp,read_buf,old_alloc_size);
         memset(read_buff_temp + old_alloc_size, 0, term_cell_alloc_size - old_alloc_size);
+        memset(temp_temp_term_cell,0,sizeof(struct term_cell)*term_cell_alloc_size);
 
-        free(ctx.term_cell);
+        ctx.term_cell=main_term_cell_temp;
+        if(temp_term_cell!=NULL){
+          free(temp_term_cell);
+        }
+        if(ctx.alt_term_cell!=NULL){
+          free(ctx.alt_term_cell);
+        }
+        ctx.alt_term_cell=temp_alt_term_cell;
+        temp_term_cell=temp_temp_term_cell;
+        lines=temp_lines;
+
+
+        //term_cell拡張範囲の初期化
+        for(int i=old_alloc_size;i<term_cell_alloc_size;i++){
+          ctx.term_cell[i].bg_color=ctx.bash_parser_required_memb.now_bg_color;
+          ctx.term_cell[i].fg_color=ctx.bash_parser_required_memb.now_fg_color;
+          ctx.term_cell[i].character=' ';
+          ctx.term_cell[i].is_bold=false;
+        }
+
         free(read_buf);
-      
         read_buf = read_buff_temp;
-        ctx.term_cell = main_term_cell_temp;
+
       }
+      //リサイズ処理////////
       if(term_size.w != old_term_size.w){
-        if(term_size.w > old_term_size.w){
-          for (int h = term_size.h - 1; h >= 0; h--) {
-            // 既存データを逆順（右端の列から）コピー
-            for (int w = old_term_size.w - 1; w >= 0; w--) {
-                int old_idx = h * old_term_size.w + w;
-                int new_idx = h * term_size.w + w;
-                ctx.term_cell[new_idx] = ctx.term_cell[old_idx];
+        memset(temp_term_cell,0,sizeof(struct term_cell) * term_cell_alloc_size);
+
+        int new_h = 0;
+        int new_w=0;
+
+        for(int old_h = 0; old_h < old_term_size.h; old_h++){
+          for(int old_w = 0; old_w < old_term_size.w; old_w++){
+
+            int old_idx = old_h * old_term_size.w + old_w;
+            int new_idx = new_h * term_size.w + new_w;
+            
+            if (new_h >= term_size.h){
+              break;
+            }
+            if (!ctx.term_cell[old_idx].is_real_chr) {
+              new_w = 0;
+              new_h++;
+              break;
             }
 
-            // 新しく増えた列を空白で初期化
-            for (int w = old_term_size.w; w < term_size.w; w++) {
-                int new_idx = h * term_size.w + w;
-                ctx.term_cell[new_idx].character = ' ';
-                ctx.term_cell[new_idx].fg_color  = WHITE;
-                ctx.term_cell[new_idx].bg_color  = BLACK;
-                ctx.term_cell[new_idx].is_bold   = false;
+            if (new_w >= term_size.w) {
+              new_w = 0;
+              new_h++;
+              if (new_h >= term_size.h) break;
             }
-          }
+
+            new_idx = new_h * term_size.w + new_w;
+            temp_term_cell[new_idx] = ctx.term_cell[old_idx];
+            new_w++;
         }
-        if(term_size.w < old_term_size.w){
-            for(int h = 0; h < term_size.h; h++){
-                for(int w = 0; w < term_size.w; w++){
-                    int old_idx = h * old_term_size.w + w;
-                    int new_idx = h * term_size.w + w;
-                    ctx.term_cell[new_idx] = ctx.term_cell[old_idx];
-                }
-            }
-        }
+      }
+        struct term_cell *swap_ptr = ctx.term_cell;
+        ctx.term_cell = temp_term_cell;
+        temp_term_cell = swap_ptr;
       }
     }
   
+
+    
+
     BeginDrawing();
     ClearBackground(BLACK);
-    for (int i = 0; i < term_size.h; i++) {
+    for (int i = 0; i < term_size.h; i++){
       Color fg;
       Color bg;
-      for (int j = 0; j < term_size.w; j++) {
+
+      for (int j = 0; j < term_size.w; j++){
         int idx = i * term_size.w + j;
         int  c = ctx.term_cell[idx].character;
-        if (c == 0) c = ' '; // 未設定のセルはスペースとして描画
-        
+        if(ctx.term_cell[idx].is_real_chr==false){
+          break;
+        }
         fg = ctx.term_cell[idx].fg_color.a == 0 ? WHITE : ctx.term_cell[idx].fg_color;
         bg = ctx.term_cell[idx].bg_color.a == 0 ? BLACK : ctx.term_cell[idx].bg_color;
         if (bg.r != 0 || bg.g != 0 || bg.b != 0) {
@@ -691,6 +752,8 @@ void bash_str_parse(char *buff, ssize_t size, struct term_context *ctx) {
       if (ctx->bash_parser_required_memb.state == SQE_START) continue;
       if (buff[i] == '\b') {
           if (ctx->cur->cur_pos.w > 0) ctx->cur->cur_pos.w--;
+          int idx = ctx->cur->cur_pos.h * ctx->term_size.w + ctx->cur->cur_pos.w;
+          ctx->term_cell[idx].is_real_chr = false;
           continue;
       } else if (buff[i] == '\r') {
           ctx->cur->cur_pos.w = 0;
@@ -710,6 +773,7 @@ void bash_str_parse(char *buff, ssize_t size, struct term_context *ctx) {
             ctx->term_cell[idx].character = buff[i];
             ctx->term_cell[idx].fg_color = ctx->bash_parser_required_memb.now_fg_color;
             ctx->term_cell[idx].bg_color = ctx->bash_parser_required_memb.now_bg_color;
+            ctx->term_cell[idx].is_real_chr = true;
             //カーソル移動可能範囲更新
             ctx->temp_cur_pos.h=ctx->cur->cur_pos.h;
             ctx->temp_cur_pos.w=ctx->cur->cur_pos.w;
@@ -722,13 +786,14 @@ void bash_str_parse(char *buff, ssize_t size, struct term_context *ctx) {
       }
       // 画面外スクロール処理
       if (ctx->cur->cur_pos.h >= ctx->term_size.h) {
-        int total_cells = ctx->term_size.w * ctx->term_size.h;
+        int total_cells = ctx->total_cells;
         memmove(ctx->term_cell, ctx->term_cell + ctx->term_size.w, (total_cells - ctx->term_size.w) * sizeof(struct term_cell));
         for (int c = 0; c < ctx->term_size.w; c++) {
           int last_line_idx = (ctx->term_size.h - 1) * ctx->term_size.w + c;
           ctx->term_cell[last_line_idx].character = ' ';
           ctx->term_cell[last_line_idx].bg_color = BLACK;
           ctx->term_cell[last_line_idx].fg_color = WHITE;
+          ctx->term_cell[last_line_idx].is_real_chr = false;
         }
         ctx->cur->cur_pos.h = ctx->term_size.h - 1;
       }
@@ -741,6 +806,7 @@ void ls_chr_parse(struct term_context *ctx, char buff, Color *now_fg_color, Colo
   int *palms = ctx->palms;
 
   switch(buff){
+    // SGR: 色や表示属性（リセットや文字色/背景色）を設定する
     case 'm': 
       for (int i = 0; i < palms_counter; i++) {
         int code = palms[i];
@@ -756,6 +822,7 @@ void ls_chr_parse(struct term_context *ctx, char buff, Color *now_fg_color, Colo
         }
       }
       break;
+    // カーソル位置を行/列で指定して移動する (行,列)
     case 'H':
     case 'f':
     {
@@ -771,17 +838,22 @@ void ls_chr_parse(struct term_context *ctx, char buff, Color *now_fg_color, Colo
       ctx->cur->cur_pos.w = col;
       break;
     }
+    // 端末画面の消去（モード2などで全体クリア）
     case 'J':
     {
       int mode = (palms_counter > 0) ? palms[0] : 0;
       if (mode == 2) {
-        for (int i = 0; i < (ctx->term_size.h * ctx->term_size.w); i++){
-          ctx->term_cell[i].character = ' ';
-          ctx->term_cell[i].bg_color = *now_bg_color;
+        for (int i = 0; i < ctx->term_size.h; i++){
+          for(int j = 0;j<ctx->term_size.w;j++){
+            int idx = i * ctx->term_size.w + j;
+            ctx->term_cell[idx].character = ' ';
+            ctx->term_cell[idx].bg_color = *now_bg_color;
+          }
         }
       }
       break;
     }
+    // 行の消去（モードにより行末、行頭から末尾、または全行を消す）
     case 'K':
     {
       int mode = (palms_counter > 0) ? palms[0] : 0;
@@ -801,6 +873,7 @@ void ls_chr_parse(struct term_context *ctx, char buff, Color *now_fg_color, Colo
       }
       break;
     }
+    // カーソルを上に移動（パラメータ n 回分）
     case 'A':
     {
       int n = (palms_counter > 0 && palms[0] > 0) ? palms[0] : 1;
@@ -808,6 +881,7 @@ void ls_chr_parse(struct term_context *ctx, char buff, Color *now_fg_color, Colo
       if (ctx->cur->cur_pos.h < 0) ctx->cur->cur_pos.h = 0;
       break;
     }
+    // カーソルを下に移動（パラメータ n 回分）
     case 'B':
     {
       int n = (palms_counter > 0 && palms[0] > 0) ? palms[0] : 1;
@@ -815,6 +889,7 @@ void ls_chr_parse(struct term_context *ctx, char buff, Color *now_fg_color, Colo
       if (ctx->cur->cur_pos.h >= ctx->term_size.h) ctx->cur->cur_pos.h = ctx->term_size.h - 1;
       break;
     }
+    // カーソルを右に移動（パラメータ n 回分）
     case 'C':
     {
       int n = (palms_counter > 0 && palms[0] > 0) ? palms[0] : 1;
@@ -822,6 +897,7 @@ void ls_chr_parse(struct term_context *ctx, char buff, Color *now_fg_color, Colo
       if (ctx->cur->cur_pos.w >= ctx->term_size.w) ctx->cur->cur_pos.w = ctx->term_size.w - 1;
       break;
     }
+    // カーソルを左に移動（パラメータ n 回分）
     case 'D':
     {
       int n = (palms_counter > 0 && palms[0] > 0) ? palms[0] : 1;
@@ -829,18 +905,21 @@ void ls_chr_parse(struct term_context *ctx, char buff, Color *now_fg_color, Colo
       if (ctx->cur->cur_pos.w < 0) ctx->cur->cur_pos.w = 0;
       break;
     }
+    // 指定数の文字を削除 (DCH: delete characters)
     case 'P':
       {
       int n = (palms_counter > 0 && palms[0] > 0) ? palms[0] : 1;
       char_array_alignment(ctx,n);
       break;
       }
+    // 指定数の文字を空白で上書き（置換）する
     case 'x':
       {
         int n = (palms_counter > 0 && palms[0] > 0) ? palms[0] : 1;
         erase_chr(ctx,n);
         break;
       }
+    // モードのセット/リセット（private でカーソル点滅や代替バッファ等を制御）
     case 'h':
     case 'l':
       bool is_on = (buff == 'h'); 
@@ -885,6 +964,7 @@ void ls_chr_parse(struct term_context *ctx, char buff, Color *now_fg_color, Colo
         }
       } 
       break;
+    // 指定数分の空白を挿入（ICH: insert characters）
     case '@':
     {
       int n = (palms_counter > 0 && palms[0] > 0) ? palms[0] : 1;
@@ -896,6 +976,7 @@ void ls_chr_parse(struct term_context *ctx, char buff, Color *now_fg_color, Colo
 
 void osc_mode(char *buff, struct term_context *ctx, char *osc_pal_chr){
   switch(ctx->palms[0]){
+    // OSC 0/1/2: ウィンドウタイトルなどの設定（プロセス/ウィンドウ名を反映）
     case 0:
     case 1:
     case 2:
@@ -909,6 +990,7 @@ void osc_mode(char *buff, struct term_context *ctx, char *osc_pal_chr){
       }
       break;
     }
+    // OSC 7: カレントディレクトリ(file://)情報を取得して保存
     case 7:
       {
         free(ctx->abs_path_name);
@@ -923,11 +1005,14 @@ void osc_mode(char *buff, struct term_context *ctx, char *osc_pal_chr){
         }
         break;
       }
+    // OSC 8: ハイパーリンク操作（ここでは未処理/無視）
     case 8:
       break;
+    // OSC 9 / 777: 拡張用途（未実装・無視）
     case 9:
     case 777:
       break;
+    // OSC 10/11: フォア/バックグラウンド色を指定（rgb: や # 形式を処理）
     case 10:
     case 11:
       {
@@ -950,8 +1035,10 @@ void osc_mode(char *buff, struct term_context *ctx, char *osc_pal_chr){
       }
       break;
      }
+    // OSC 12: カーソル色等（未実装だがここで扱う想定）
     case 12:
       break;
+    // OSC 52: base64 で渡されたデータを復号してクリップボードへ設定
     case 52:{
       char *decode_result = base64_decoder(osc_pal_chr);
       if (decode_result == NULL) break;
@@ -959,6 +1046,7 @@ void osc_mode(char *buff, struct term_context *ctx, char *osc_pal_chr){
       free(decode_result);
       break;
     }
+    // その他の OSC: 未知のシーケンスは何もしない（無視）
     default:
       break;
   }
@@ -1243,7 +1331,7 @@ void error_log_write(char *error_statement){
 void window_resized_update_memb(struct pos *screen_pixel,struct pos *term_size,struct term_context *ctx){
   screen_pixel->w=GetScreenWidth();
   screen_pixel->h=GetScreenHeight();
-  SetWindowSize(screen_pixel->w, screen_pixel->h);
+  
   term_size->w = (int)(screen_pixel->w) / 8;
   term_size->h = (int)screen_pixel->h / 16;
 }
