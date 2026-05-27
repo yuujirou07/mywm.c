@@ -231,6 +231,10 @@ int main(void) {
     printf("window error");
     return 0;
   }
+  //プログラム終了キー無効化
+  SetExitKey(KEY_NULL);
+
+
   //Font myfont = LoadFontEx("/usr/share/fonts/TTF/TerminusTTF.ttf", 256, NULL, 0);
   Font myfont = LoadFontEx("/usr/share/fonts/TTF/TerminusTTF.ttf", 256, NULL, 0);
   SetTextureFilter(myfont.texture, TEXTURE_FILTER_POINT);
@@ -385,6 +389,8 @@ int main(void) {
   
   while (!WindowShouldClose()) {
     int nfds = epoll_wait(epoll_fd_list,epoll_list,EVENT_WAIT_MAX, 1);
+
+    //ペースト処理
     if ((IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) && IsKeyPressed(KEY_V)){
       if(write_buff_overflow==true && nfds>0){
         for(int i=0;i<nfds;i++){
@@ -398,7 +404,7 @@ int main(void) {
           }
         }
       }
-      else if(write_buff_overflow==false){
+      else if(write_buff_overflow==true){
         if(clip_bord_chr == NULL && (clip_bord_chr = GetClipboardText()) == NULL) {
           break;
         }
@@ -455,8 +461,7 @@ int main(void) {
         }
       }
       while (GetCharPressed() > 0) {} //ショートカットキーのバッファがたまっているので捨てる   
-    }
-    else{ 
+    }else{ 
       int n = 0;
       while ((n = GetCharPressed()) > 0) {
         if (n < 32 || n == 127) continue; 
@@ -477,8 +482,8 @@ int main(void) {
     }
     if (IsKeyPressed(KEY_RIGHT)){
       //右のセルが空白ならカーソルをブロックする
-      if(ctx.cur->cur_pos.w<ctx.term_size.w){
-        if(ctx.cur->cur_pos.w<ctx.temp_cur_pos.w+1 || ctx.term_cell[ctx.cur->cur_pos.h * ctx.term_size.w + ctx.cur->cur_pos.w + 1].character!=' '){
+      if(ctx.cur->cur_pos.w < ctx.term_size.w){
+        if(ctx.cur->cur_pos.w < ctx.temp_cur_pos.w+1 || ctx.term_cell[ctx.cur->cur_pos.h * ctx.term_size.w + ctx.cur->cur_pos.w + 1].character!=' '){
           write(master_fd,"\x1b[C",strlen("\x1b[C"));
         }
       }
@@ -493,37 +498,38 @@ int main(void) {
     if(nfds>0){
       for(int i=0;i<nfds;i++){
         //もしfdがmaster_fdだったら
-        if(((struct clientinfo *)epoll_list[i].data.ptr)->fd==master_fd){
-          if(epoll_list[i].events & EPOLLIN){
-            while (1) {
-              ssize_t buf_size = read(master_fd, read_buf, term_cell_alloc_size - 1);
-              if (buf_size > 0){
-                bash_str_parse(read_buf, buf_size, &ctx);
-              }
-              else if(buf_size==0){
-                break;
-              }
-              else if (buf_size == -1) {
-                // -1 の場合は errno を確認する
-                if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                  // 受信バッファが空になったので、正常に読み取りループを抜ける
-                  break;
-                } else {
-                  // それ以外の本当のエラー
-                  error_log_write("read error");
-                  break;
-                }
-              }
-            }
+        if(((struct clientinfo *)epoll_list[i].data.ptr)->fd!=master_fd)
+          continue;
+
+        if((epoll_list[i].events & EPOLLIN)==false)
+          break;
+        
+        while (1) {
+          ssize_t buf_size = read(master_fd, read_buf, term_cell_alloc_size - 1);
+          if (buf_size > 0){
+            bash_str_parse(read_buf, buf_size, &ctx);
+          }
+          else if(buf_size==0){
             break;
           }
+          else if (buf_size == -1) {
+            // -1 の場合は errno を確認する
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+              // 受信バッファが空になったので、正常に読み取りループを抜ける
+              break;
+            } else {
+              // それ以外の本当のエラー
+              error_log_write("read error");
+              break;
+            }
+          }
         }
+        break;    
       }
     }
     
-  
     //リサイズ処理//////////////
-    if(IsWindowResized()){
+    if(0){
       struct pos old_term_size=term_size;
       int old_total=total;
       window_resized_update_memb(&screen_pixel,&term_size,&ctx);
@@ -599,7 +605,6 @@ int main(void) {
       
     }
   
-
     
 
     BeginDrawing();
@@ -726,7 +731,7 @@ void bash_str_parse(char *buff, ssize_t size, struct term_context *ctx) {
             }
             continue;
             break;
-            
+   
         case IDK:
             ctx->bash_parser_required_memb.state = GROUND;
             ctx->bash_parser_required_memb.mode = IDK;
@@ -1419,5 +1424,5 @@ void unicode_utf8_encoder(char *utf8,int unicode, int *len){
 } 
 
 void reflow_terminal_text(struct term_context *ctx, struct pos old_term_size, struct term_cell **temp_term_cell_ptr,int term_cell_alloc_size) {
-
+  
 }
