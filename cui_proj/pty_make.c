@@ -22,6 +22,8 @@
 #define EVENT_WAIT_MAX 16
 #define DEFAULT_SCREEN_SIZE_W 500
 #define DEFAULT_SCREEN_SIZE_H 500
+#define DEFAULT_KEY_REPEAT_INTERVAL 0.5
+#define DEFAULT_CUR_BLINK_RESTART_TIMEOUT_SEC 0.5
 
 struct pos {
   int w;
@@ -46,6 +48,13 @@ struct cursor {
       int h;
     } cur_pos;
     Font font;
+
+    
+    bool now_writing;
+    double writing_st_time;
+    double writing_end_time;
+
+
 };
 
 struct csi_data {
@@ -89,6 +98,11 @@ enum visiavle_chr {
 enum now_str_ovf{
   Y,
   N
+};
+
+enum repeat_key{
+  ALPHABET,
+  OTHER
 };
 
 struct line_info {
@@ -159,7 +173,21 @@ struct term_context {
   }bash_parser_required_memb;
 };
 
+struct check_key{
+  //リピート判定用
+  int check_key_repeat;
+  //キーコード
+  char utf8[4];
+  // 有効配列
+  int len;
+  //キーのリピートタイミング
+  double key_repeat_timing;
+};
 
+struct setting_data{
+  double key_repeat_interval;//キーリーピートのタイミング
+  double cursor_blink_restart_timeout_seconds;
+};
 Color conbert_num_to_color(char *color_str,int mode);
 struct return_binary *char_conbert_binary_arry(char *osc_pal_chr);
 struct csi_data csi_mode_pal_parse(char *buff, int *i, int size);
@@ -188,6 +216,8 @@ void draw_cursor(struct cursor *cur, double *current_time, struct term_context *
 void bash_str_parse(char *buff, ssize_t size, struct term_context *ctx);
 void csi_mode_parse(char *buff, int *i, int size);
 void load_cur_font(struct cur_mgr *cur_mgr);
+void load_settings(struct setting_data *data);
+void set_default_settings(struct setting_data *data);
 
 char *base64_decoder(char *osc_pal_chr);
 char ** split_line(int cols, char *buff_str);
@@ -226,13 +256,12 @@ int main(void) {
   int current_moniter_refreshrate = GetMonitorRefreshRate(current_monitor);
 
   InitWindow(screen_pixel.w, screen_pixel.h, "bash");
+
   SetTargetFPS(current_moniter_refreshrate);
   if (!IsWindowReady()) {
     printf("window error");
     return 0;
   }
-  //プログラム終了キー無効化
-  SetExitKey(KEY_NULL);
 
 
   //Font myfont = LoadFontEx("/usr/share/fonts/TTF/TerminusTTF.ttf", 256, NULL, 0);
@@ -330,18 +359,23 @@ int main(void) {
   struct term_context ctx;
   struct term_cell *temp_term_cell = NULL; 
   struct line_info *lines = NULL;
+  struct check_key input_key;
+  struct setting_data setting_data;
 
   double current_time = 0;
   char *read_buf = NULL;
   const char* clip_bord_chr=NULL;
   bool write_buff_overflow=false;
+
+  input_key.check_key_repeat = 0;
+  input_key.key_repeat_timing = 0;
   
   read_buf      =malloc(term_cell_alloc_size);
   temp_term_cell=calloc(term_cell_alloc_size,sizeof(struct term_cell));
   lines         =calloc(term_size.h,sizeof(struct line_info));
   cur_mg        =calloc(1,sizeof(struct cur_mgr));
 
-  // ctx構造体の直接初期化
+  // ctx構造体直接初期化
   ctx.term_cell = calloc(term_cell_alloc_size, sizeof(struct term_cell));
   ctx.alt_term_cell = NULL;
   ctx.cur = malloc(sizeof(struct cursor));
@@ -357,7 +391,7 @@ int main(void) {
   ctx.lines = lines;
   ctx.master_fd = master_fd;
 
-  // curソル初期化
+  // カーソル初期化
   ctx.cur->shape = malloc(2);
   ctx.cur->lighting.blinking = true;
   ctx.cur->lighting.speed_ms = 500;
@@ -365,6 +399,10 @@ int main(void) {
   ctx.cur->lighting.now_right = 0;
   ctx.cur->cur_pos.w = 0;
   ctx.cur->cur_pos.h = 0;
+  ctx.cur->writing_st_time = 0;
+  ctx.cur->writing_end_time = 0;
+  ctx.cur->now_writing = false;
+
 
   // bash_parser_required_memb初期化
   ctx.bash_parser_required_memb.state = GROUND;
@@ -378,7 +416,16 @@ int main(void) {
   ctx.bash_parser_required_memb.osc_state = NORMAL;
 
   result = init_cur_mgr(cur_mg);
-  
+  load_settings(&setting_data);
+
+  bool back_space_repeat = false;
+  double back_space_repeat_st = 0;
+  double back_space_repea_ed = 0;
+  double back_space_repeat_start = 0;
+
+  double chr_repeat_interval = 0; 
+
+
   if (result == 1) {
     error_log_write("can not init cur_mgr code 245");
     return 0;
@@ -386,39 +433,49 @@ int main(void) {
 
   load_cur_font(cur_mg);
   cur_font_set(ctx.cur, cur_mg, 1);
-  
-  while (!WindowShouldClose()) {
+
+  while (!WindowShouldClose())
+  {
     int nfds = epoll_wait(epoll_fd_list,epoll_list,EVENT_WAIT_MAX, 1);
 
     //ペースト処理
-    if ((IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) && IsKeyPressed(KEY_V)){
-      if(write_buff_overflow==true && nfds>0){
+    if ((IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) && IsKeyPressed(KEY_V))
+    {
+      if(write_buff_overflow==true && nfds>0)
+      {
         for(int i=0;i<nfds;i++){
           //もしepoll_list[i]番目のfdがmaster_fdだったら
           if(((struct clientinfo*)epoll_list[i].data.ptr)->fd!=master_fd)continue;
           //もし書き込み可能かwriteの書き込みバッファが溢れていなかったら
           if(epoll_list[i].events & EPOLLOUT){
-            if(clip_bord_chr == NULL && (clip_bord_chr = GetClipboardText()) == NULL) {
+            if(clip_bord_chr == NULL && (clip_bord_chr = GetClipboardText()) == NULL) 
+            {
               break;
             }
           }
         }
       }
-      else if(write_buff_overflow==true){
-        if(clip_bord_chr == NULL && (clip_bord_chr = GetClipboardText()) == NULL) {
+      else if(write_buff_overflow==true)
+      {
+        if(clip_bord_chr == NULL && (clip_bord_chr = GetClipboardText()) == NULL)
+        {
           break;
         }
       }
       else break;
 
-      if(clip_bord_chr!=NULL){
+      if(clip_bord_chr!=NULL)
+      {
         size_t len = strlen(clip_bord_chr);   
-        if(len> 0) {
+        if(len> 0) 
+        {
           char temp_clip_bord_chr[len+1];
           int temp_clip_bord_chr_counter=0;
-          for (size_t i = 0; i < len; i++) {
+          for (size_t i = 0; i < len; i++) 
+          {
             char c = (char)clip_bord_chr[i];
-            if ((c >= 32 && c <= 126) || c == '\n' || c == '\r' || c == '\t') {
+            if ((c >= 32 && c <= 126) || c == '\n' || c == '\r' || c == '\t')
+            {
               temp_clip_bord_chr[temp_clip_bord_chr_counter++]=c;
             }
           }
@@ -426,64 +483,104 @@ int main(void) {
           //何バイト読み込んだか
           ssize_t now_fd_input_size=write(master_fd,temp_clip_bord_chr,strlen(temp_clip_bord_chr));
           //次のループで再度書き込む位置を保存しておきたいのでclipbord_chr変数から書き込んだバイト数のポインタを加算する
-          if(now_fd_input_size>0){
+          if(now_fd_input_size>0)
+          {
             clip_bord_chr+=now_fd_input_size;
             //もし送られたバイト数がクリップボードbuffのデータより大きかったら初期化する
-            if(len<=now_fd_input_size){
+            if(len<=now_fd_input_size)
+            {
               clip_bord_chr=NULL;
             }
           }
-          else if(now_fd_input_size==0){
+          else if(now_fd_input_size==0)
+          {
             clip_bord_chr=NULL;
             write_buff_overflow=false;
             master_fd_ev_poll.events=EPOLLIN;
-            if(epoll_ctl(epoll_fd_list,EPOLL_CTL_MOD ,master_fd,&master_fd_ev_poll)!=0){
+            if(epoll_ctl(epoll_fd_list,EPOLL_CTL_MOD ,master_fd,&master_fd_ev_poll)!=0)
+            {
               char err_buff[128];
               snprintf(err_buff,128,"epoll_ctl func error errno = %d",errno);
               error_log_write(err_buff);
             }
           }
           //バッファが入らなかった場合EPOLLOUTに変更する
-          else if(now_fd_input_size==-1 && errno==EAGAIN){
+          else if(now_fd_input_size==-1 && errno==EAGAIN)
+          {
+
             master_fd_ev_poll.events=EPOLLOUT;
             write_buff_overflow=true;
-            if(epoll_ctl(epoll_fd_list,EPOLL_CTL_MOD ,master_fd,&master_fd_ev_poll)!=0){
+
+            if(epoll_ctl(epoll_fd_list,EPOLL_CTL_MOD ,master_fd,&master_fd_ev_poll)!=0)
+            {
               char err_buff[128];
               snprintf(err_buff,128,"epoll_ctl func error errno = %d",errno);
               error_log_write(err_buff);
             }
             break;
           }
-          else {//エラーの場合
+          else
+          {//エラーの場合
             error_log_write("write error");
             return 0;
           }
         }
       }
       while (GetCharPressed() > 0) {} //ショートカットキーのバッファがたまっているので捨てる   
-    }else{ 
-      int n = 0;
-      while ((n = GetCharPressed()) > 0) {
-        if (n < 32 || n == 127) continue; 
-        else if (IsAnyKeyReleased()) break;
+    }else
+    { 
+
+      ////英数字入力処理////////////
+      int key_code = 0;  
+      while ((key_code = GetCharPressed()) > 0 )
+      {
+
+        if (key_code  < 32 || key_code  >127)
+          continue; 
+        else if (IsAnyKeyReleased())
+          break;
+
         char utf8[4]={0};
         int len=0;
-        unicode_utf8_encoder(utf8,n,&len);
+        unicode_utf8_encoder(utf8,key_code ,&len);
+
+        if(input_key.check_key_repeat <= 0)
+        {
+          memcpy(input_key.utf8,utf8,sizeof(char) * 4);
+          input_key.len = len;
+        }
+
+        input_key.key_repeat_timing = GetTime();
+        input_key.check_key_repeat++;
+        ctx.cur->now_writing = true;
+
         write(master_fd,utf8, len);
       }
     }
-    if (IsKeyPressed(KEY_ENTER)) {
+    if (IsKeyPressed(KEY_ENTER)) 
+    {
       char enter_key = 13;
       write(master_fd, &enter_key, 1);
     }
-    if (IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE)) {
-      char c = 0x7f; 
+
+    if (IsKeyPressed(KEY_BACKSPACE))
+    {
+
+      char c = 0x7f;
+      back_space_repeat = true;
+      back_space_repeat_start = GetTime();
+
       write(master_fd, &c, 1);
+      
     }
-    if (IsKeyPressed(KEY_RIGHT)){
+    if (IsKeyPressed(KEY_RIGHT))
+    {
       //右のセルが空白ならカーソルをブロックする
-      if(ctx.cur->cur_pos.w < ctx.term_size.w){
-        if(ctx.cur->cur_pos.w < ctx.temp_cur_pos.w+1 || ctx.term_cell[ctx.cur->cur_pos.h * ctx.term_size.w + ctx.cur->cur_pos.w + 1].character!=' '){
+      if(ctx.cur->cur_pos.w < ctx.term_size.w)
+      {
+        if(ctx.cur->cur_pos.w < ctx.temp_cur_pos.w+1 || 
+          ctx.term_cell[ctx.cur->cur_pos.h * ctx.term_size.w + ctx.cur->cur_pos.w + 1].character!=' ')
+          {
           write(master_fd,"\x1b[C",strlen("\x1b[C"));
         }
       }
@@ -495,8 +592,10 @@ int main(void) {
     if (IsKeyPressed(KEY_LEFT)){
       write(master_fd,"\x1b[D",strlen("\x1b[D"));
     }
-    if(nfds>0){
-      for(int i=0;i<nfds;i++){
+    if(nfds>0)
+    {
+      for(int i=0;i<nfds;i++)
+      {
         //もしfdがmaster_fdだったら
         if(((struct clientinfo *)epoll_list[i].data.ptr)->fd!=master_fd)
           continue;
@@ -504,20 +603,24 @@ int main(void) {
         if((epoll_list[i].events & EPOLLIN)==false)
           break;
         
-        while (1) {
+        while (1) 
+        {
           ssize_t buf_size = read(master_fd, read_buf, term_cell_alloc_size - 1);
-          if (buf_size > 0){
+          if (buf_size > 0)
             bash_str_parse(read_buf, buf_size, &ctx);
-          }
-          else if(buf_size==0){
+          
+          else if(buf_size==0)
             break;
-          }
-          else if (buf_size == -1) {
+          
+          else if (buf_size == -1)
+          {
             // -1 の場合は errno を確認する
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) 
+            {
               // 受信バッファが空になったので、正常に読み取りループを抜ける
               break;
-            } else {
+            } else 
+            {
               // それ以外の本当のエラー
               error_log_write("read error");
               break;
@@ -527,11 +630,95 @@ int main(void) {
         break;    
       }
     }
+
+    ////英数字キーリピート処理//////
+    if(input_key.check_key_repeat > 0){
+
+      double repeat_ed = GetTime();
+      bool use_goto=false;
+
+      if(IsAnyKeyReleased())
+      {
+        input_key.check_key_repeat=0;
+        use_goto = true;
+      }
     
+    
+      if(repeat_ed - input_key.key_repeat_timing < setting_data.key_repeat_interval)
+        use_goto = true;
+
+      if(use_goto)
+        goto KEY_REPEAT_END_POINT;
+
+      if(GetTime() - chr_repeat_interval < 0.05)
+        goto KEY_REPEAT_END_POINT;
+
+      
+      write(master_fd,input_key.utf8,input_key.len);
+
+      //書き込み中はカーソルの点滅をなくす
+      ctx.cur->now_writing = true;
+      chr_repeat_interval = GetTime();
+    }
+     //キーリピート分岐抜け
+    KEY_REPEAT_END_POINT:
+
+
+
+    //バックスペースリピート処理
+    if(back_space_repeat)
+    {
+      if((GetTime() - back_space_repeat_start) < 0.6)
+        goto BACK_SPACE_REPEAT_END_POINT;
+
+      if(back_space_repeat_st<=0)
+        back_space_repeat_st = GetTime();
+
+      back_space_repea_ed = GetTime();
+     
+      if(IsKeyUp(KEY_BACKSPACE))
+      {
+        back_space_repeat_start = 0;
+        goto BACK_SPACE_REPEAT_END_POINT;
+      }
+
+      if(back_space_repea_ed -back_space_repeat_st < 0.05)
+        goto BACK_SPACE_REPEAT_END_POINT;
+     
+      char c = 0x7f;
+      write(master_fd, &c, 1);
+      back_space_repeat_st = back_space_repea_ed;
+
+      //書き込み中はカーソルの点滅をなくす
+      ctx.cur->now_writing = true;
+    }
+    BACK_SPACE_REPEAT_END_POINT:
+
+
+
+    ////マウスカーソル点滅再開処理//////
+    if( ctx.cur->now_writing == true){
+      if(ctx.cur->writing_st_time <= 0)
+        ctx.cur->writing_st_time = GetTime();
+ 
+      ctx.cur->writing_end_time = GetTime();
+      
+      if(ctx.cur->writing_end_time - ctx.cur->writing_st_time < setting_data.cursor_blink_restart_timeout_seconds)
+        goto CUR_RIGTHING_END_POINT;
+
+
+      ctx.cur->now_writing = false;
+      ctx.cur->writing_st_time = 0;
+      ctx.cur->writing_end_time = 0;
+    }
+    //マウスカーソル分岐抜け
+    CUR_RIGTHING_END_POINT:
+    
+
     //リサイズ処理//////////////
     if(0){
       struct pos old_term_size=term_size;
-      int old_total=total;
+      //int old_total=total;
       window_resized_update_memb(&screen_pixel,&term_size,&ctx);
   
       total=term_size.h*term_size.w;
@@ -605,7 +792,7 @@ int main(void) {
       
     }
   
-    
+
 
     BeginDrawing();
     ClearBackground(BLACK);
@@ -1137,11 +1324,16 @@ char *mymemcpy(char *start, char *end, enum last_chr_mode mode){
 
 void draw_cursor(struct cursor *cur, double *current_time, struct term_context *ctx){
   if (!cur->lighting.blinking) return;
+
   double now_time = GetTime();
-  if (now_time - *current_time >= cur->lighting.speed_ms / 1000) {
+
+  if(cur->now_writing)
+    cur->lighting.now_right = true;
+  else if (now_time - *current_time >= cur->lighting.speed_ms / 1000){
     *current_time = now_time;
     cur->lighting.now_right = !cur->lighting.now_right;
   }
+  
   if (cur->lighting.now_right) {
     int draw_w = cur->cur_pos.w >= ctx->term_size.w ? ctx->term_size.w - 1 : cur->cur_pos.w;
     DrawTextEx(
@@ -1382,12 +1574,19 @@ void erase_chr(struct term_context *ctx,int n){
 void error_log_write(char *error_statement){
   FILE *error_f;
   error_f=fopen("error_log.txt","a");
+
   if(error_f==NULL){
     perror("cant open error_log.txt");
     exit(1);
   }
-  ssize_t size=fputs(error_statement,error_f);
-  if(size<0)perror("can not write on error_log.txt");
+  char buff[strlen(error_statement  )+1];
+
+  snprintf(buff,strlen(error_statement  )+1,"%s\n",error_statement);
+
+  ssize_t size=fputs(buff,error_f);
+  if(size<0)
+    perror("can not write on error_log.txt");
+
   fclose(error_f);
 }
 void window_resized_update_memb(struct pos *screen_pixel,struct pos *term_size,struct term_context *ctx){
@@ -1425,4 +1624,21 @@ void unicode_utf8_encoder(char *utf8,int unicode, int *len){
 
 void reflow_terminal_text(struct term_context *ctx, struct pos old_term_size, struct term_cell **temp_term_cell_ptr,int term_cell_alloc_size) {
   
+}
+
+
+void load_settings(struct setting_data *data){
+
+  FILE *settings_file = fopen("pty_make_settings.json","r");
+
+  //開けなかったらデフォルト設定
+  if(settings_file == NULL){
+    error_log_write("can not open settings.json");
+    set_default_settings(data);
+  }
+}
+
+void set_default_settings(struct setting_data *data){
+  data->key_repeat_interval = DEFAULT_KEY_REPEAT_INTERVAL;
+  data->cursor_blink_restart_timeout_seconds = DEFAULT_CUR_BLINK_RESTART_TIMEOUT_SEC;
 }
