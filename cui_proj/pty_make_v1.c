@@ -13,9 +13,9 @@
 #include <termios.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
-#include<sys/epoll.h>
-#include<errno.h>
-#include<sys/wait.h>
+#include <sys/epoll.h>
+#include <errno.h>
+#include <sys/wait.h>
 
 #define ESC_PAL_MAX 32
 #define cur_font_load_max 32
@@ -23,7 +23,15 @@
 #define DEFAULT_SCREEN_SIZE_W 500
 #define DEFAULT_SCREEN_SIZE_H 500
 #define DEFAULT_KEY_REPEAT_INTERVAL 0.5
-#define DEFAULT_CUR_BLINK_RESTART_TIMEOUT_SEC 0.5
+#define DEFAULT_CUR_BLINK_RESTART_TIMEOUT_SEC 0.6
+
+enum key_type{
+  ALPBT_NUM,
+  BS,
+  LEFT_ALLOW,
+  RIGHT_ALLOW,
+  NONE
+};
 
 struct pos {
   int w;
@@ -137,18 +145,53 @@ struct clientinfo {
     char buf[1024];
 };
 
+struct check_key{
+  enum key_type key_type;
+  //リピート判定用
+  int check_key_repeat;
+  // 有効配列
+  int len;
+  //キーコード
+  char utf8[4];
+  //キーのリピートタイミング
+  double key_repeat_timing;
+
+  bool  key_repeat_state;
+};
+
+struct key_repeat {
+
+  double key_repeat_st;
+  double key_repeat_ed;
+  double key_repeat_interbal_st;
+  double key_repeat_interbal_ed;
+  double key_repeat_interval;
+
+  struct check_key key_data;
+  
+};
+
 struct term_context {
   struct term_cell *term_cell;
   struct term_cell *alt_term_cell;
   struct cursor *cur;
   struct cursor *save_cur;
+  struct line_info *lines;
   struct pos term_size;
   struct pos temp_cur_pos;
-  struct line_info *lines;
+  struct pos home_pos;
+
+  //DECSTBM - DEC Set Top and Bottom Margins
+  // コマンドで使う構造体
+  struct margin{
+    int top_margin;
+    int bottom_margin;
+    bool decstbm_state;
+  } fixrd_cur_scr_range;
 
   int *palms;
   int *palms_counter;
-  int term_cell_alloc_size;
+  int *term_cell_alloc_size;
   int total_cells;
   int master_fd;
   bool paste_mode;
@@ -162,6 +205,8 @@ struct term_context {
 
     Color now_fg_color;
     Color now_bg_color;
+    bool now_is_bold;
+    bool now_is_reverse;
 
     int osc_pal_chr_counter;
     int val;
@@ -173,29 +218,24 @@ struct term_context {
   }bash_parser_required_memb;
 };
 
-struct check_key{
-  //リピート判定用
-  int check_key_repeat;
-  //キーコード
-  char utf8[4];
-  // 有効配列
-  int len;
-  //キーのリピートタイミング
-  double key_repeat_timing;
-};
-
 struct setting_data{
   double key_repeat_interval;//キーリーピートのタイミング
   double cursor_blink_restart_timeout_seconds;
 };
+
+
 Color conbert_num_to_color(char *color_str,int mode);
+Color xterm_256color(int n);
+
 struct return_binary *char_conbert_binary_arry(char *osc_pal_chr);
 struct csi_data csi_mode_pal_parse(char *buff, int *i, int size);
+struct term_cell *allocate_cell(struct term_cell* term_cell,int size);
 
 enum mode_state get_mode(char *buff, int *i, int size);
 enum visiavle_chr check_visible_chr(char buff);
 enum parse_state buff_state_check(char buff, enum parse_state now_state);
 
+void key_repeat(struct key_repeat *rp_key,int master_fd,struct setting_data setting_data,struct term_context *ctx);
 void reflow_terminal_text(struct term_context *ctx, struct pos old_term_size, struct term_cell **temp_term_cell,int term_cell_alloc_size);
 void unicode_utf8_encoder(char *utf8,int unicode, int *len);
 void window_resized_update_memb(struct pos *screen_size,struct pos *term_size,struct term_context *ctx);
@@ -218,6 +258,9 @@ void csi_mode_parse(char *buff, int *i, int size);
 void load_cur_font(struct cur_mgr *cur_mgr);
 void load_settings(struct setting_data *data);
 void set_default_settings(struct setting_data *data);
+void scroll_region_up(struct term_context *ctx);
+void scroll_region_down(struct term_context *ctx);
+void esc_single_dispatch(struct term_context *ctx, char c);
 
 char *base64_decoder(char *osc_pal_chr);
 char ** split_line(int cols, char *buff_str);
@@ -228,7 +271,7 @@ int init_cur_mgr(struct cur_mgr *cur_mgr);
 int check_key();
 
 bool IsAnyKeyReleased(void);
-
+bool ctl_c_sig_check(int *counter,int master_fd);
 
 
 int main(void) {
@@ -333,6 +376,7 @@ int main(void) {
   }
   struct epoll_event master_fd_ev_poll;
   struct epoll_event epoll_list[EVENT_WAIT_MAX];
+
   memset(&master_fd_ev_poll,0,sizeof(master_fd_ev_poll));
   //読み込み監視
   master_fd_ev_poll.events=EPOLLIN;
@@ -352,28 +396,29 @@ int main(void) {
     return 1;
   }
   // 変数の初期化
+  int key_slash = 0;
   int term_cell_alloc_size=total*4;
   int result=0;
+  int is_released_ctl_c = 0;
 
   struct cur_mgr *cur_mg = NULL; 
   struct term_context ctx;
   struct term_cell *temp_term_cell = NULL; 
   struct line_info *lines = NULL;
-  struct check_key input_key;
   struct setting_data setting_data;
+  struct key_repeat key;
 
   double current_time = 0;
   char *read_buf = NULL;
   const char* clip_bord_chr=NULL;
   bool write_buff_overflow=false;
-
-  input_key.check_key_repeat = 0;
-  input_key.key_repeat_timing = 0;
   
-  read_buf      =malloc(term_cell_alloc_size);
-  temp_term_cell=calloc(term_cell_alloc_size,sizeof(struct term_cell));
-  lines         =calloc(term_size.h,sizeof(struct line_info));
-  cur_mg        =calloc(1,sizeof(struct cur_mgr));
+  read_buf      = malloc(term_cell_alloc_size);
+  temp_term_cell= calloc(term_cell_alloc_size,sizeof(struct term_cell));
+  lines         = calloc(term_size.h,sizeof(struct line_info));
+  cur_mg        = calloc(1,sizeof(struct cur_mgr));
+
+  key.key_data.key_type = NONE;
 
   // ctx構造体直接初期化
   ctx.term_cell = calloc(term_cell_alloc_size, sizeof(struct term_cell));
@@ -390,6 +435,7 @@ int main(void) {
   ctx.insert_mode = false;
   ctx.lines = lines;
   ctx.master_fd = master_fd;
+  ctx.term_cell_alloc_size = &term_cell_alloc_size;
 
   // カーソル初期化
   ctx.cur->shape = malloc(2);
@@ -402,6 +448,7 @@ int main(void) {
   ctx.cur->writing_st_time = 0;
   ctx.cur->writing_end_time = 0;
   ctx.cur->now_writing = false;
+  ctx.home_pos = (struct pos){0.0};
 
 
   // bash_parser_required_memb初期化
@@ -413,24 +460,22 @@ int main(void) {
   ctx.bash_parser_required_memb.has_val = 0;
   ctx.bash_parser_required_memb.now_fg_color = WHITE;
   ctx.bash_parser_required_memb.now_bg_color = BLACK;
+  ctx.bash_parser_required_memb.now_is_bold = false;
+  ctx.bash_parser_required_memb.now_is_reverse = false;
   ctx.bash_parser_required_memb.osc_state = NORMAL;
+
+  memset(&ctx.fixrd_cur_scr_range,0,sizeof(struct margin));
+  memset (&key,0,sizeof(struct key_repeat));
+  key.key_data.key_type = NONE;
 
   result = init_cur_mgr(cur_mg);
   load_settings(&setting_data);
-
-  bool back_space_repeat = false;
-  double back_space_repeat_st = 0;
-  double back_space_repea_ed = 0;
-  double back_space_repeat_start = 0;
-
-  double chr_repeat_interval = 0; 
 
 
   if (result == 1) {
     error_log_write("can not init cur_mgr code 245");
     return 0;
   }
-
   load_cur_font(cur_mg);
   cur_font_set(ctx.cur, cur_mg, 1);
 
@@ -441,14 +486,20 @@ int main(void) {
     //ペースト処理
     if ((IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) && IsKeyPressed(KEY_V))
     {
+      // [AI生成] 前フレームで write() が EAGAIN を返した（カーネルの送信バッファが満杯）場合、
+      // epoll を EPOLLOUT に切り替えて「空きができたら通知」を待っている。
+      // 今フレームの epoll_wait で EPOLLOUT イベントが来た = 書き込み再開可能。
       if(write_buff_overflow==true && nfds>0)
       {
-        for(int i=0;i<nfds;i++){
+        for(int i=0;i<nfds;i++)
+        {
           //もしepoll_list[i]番目のfdがmaster_fdだったら
-          if(((struct clientinfo*)epoll_list[i].data.ptr)->fd!=master_fd)continue;
+          if(((struct clientinfo*)epoll_list[i].data.ptr)->fd!=master_fd)
+            continue;
           //もし書き込み可能かwriteの書き込みバッファが溢れていなかったら
-          if(epoll_list[i].events & EPOLLOUT){
-            if(clip_bord_chr == NULL && (clip_bord_chr = GetClipboardText()) == NULL) 
+          if(epoll_list[i].events & EPOLLOUT)
+          {
+            if(clip_bord_chr == NULL && (clip_bord_chr = GetClipboardText()) == NULL)
             {
               break;
             }
@@ -462,8 +513,11 @@ int main(void) {
           break;
         }
       }
-      else break;
-
+      else 
+      {
+        clip_bord_chr = GetClipboardText();
+      }
+      
       if(clip_bord_chr!=NULL)
       {
         size_t len = strlen(clip_bord_chr);   
@@ -504,7 +558,8 @@ int main(void) {
               error_log_write(err_buff);
             }
           }
-          //バッファが入らなかった場合EPOLLOUTに変更する
+          // [AI生成] write() が EAGAIN を返した = カーネルの送信バッファが満杯でこれ以上送れない。
+          // epoll を EPOLLOUT に切り替え、次にバッファが空いた時点で再度通知を受け取る。
           else if(now_fd_input_size==-1 && errno==EAGAIN)
           {
 
@@ -527,8 +582,9 @@ int main(void) {
         }
       }
       while (GetCharPressed() > 0) {} //ショートカットキーのバッファがたまっているので捨てる   
-    }else
-    { 
+    }
+    else if(ctl_c_sig_check(&is_released_ctl_c,master_fd)==false)
+    {
 
       ////英数字入力処理////////////
       int key_code = 0;  
@@ -544,19 +600,29 @@ int main(void) {
         int len=0;
         unicode_utf8_encoder(utf8,key_code ,&len);
 
-        if(input_key.check_key_repeat <= 0)
-        {
-          memcpy(input_key.utf8,utf8,sizeof(char) * 4);
-          input_key.len = len;
+        if(key_code =='\\' || key_code == '_')
+          key_slash++;
+        else 
+          key_slash = 0;
+
+        if(key_slash <= 1){
+          if(key.key_data.key_type == NONE && key_slash < 1)
+          {
+            memcpy(&key.key_data.utf8,utf8,sizeof(char) * 4);
+            key.key_data.len = len;
+            key.key_repeat_st = GetTime();
+            key.key_data.key_type = ALPBT_NUM;
+          }
+
+
+          ctx.cur->now_writing = true;
+          write(master_fd,utf8, len);
         }
-
-        input_key.key_repeat_timing = GetTime();
-        input_key.check_key_repeat++;
-        ctx.cur->now_writing = true;
-
-        write(master_fd,utf8, len);
       }
+      if(key_slash > 1)
+        key_slash  = 0;
     }
+
     if (IsKeyPressed(KEY_ENTER)) 
     {
       char enter_key = 13;
@@ -565,12 +631,15 @@ int main(void) {
 
     if (IsKeyPressed(KEY_BACKSPACE))
     {
-
       char c = 0x7f;
-      back_space_repeat = true;
-      back_space_repeat_start = GetTime();
 
       write(master_fd, &c, 1);
+      if(key.key_data.key_type == NONE)
+      {
+        key.key_data.key_repeat_state = true;
+        key.key_repeat_st = GetTime();
+        key.key_data.key_type = BS;
+      }
       
     }
     if (IsKeyPressed(KEY_RIGHT))
@@ -580,8 +649,16 @@ int main(void) {
       {
         if(ctx.cur->cur_pos.w < ctx.temp_cur_pos.w+1 || 
           ctx.term_cell[ctx.cur->cur_pos.h * ctx.term_size.w + ctx.cur->cur_pos.w + 1].character!=' ')
-          {
+        {
+
           write(master_fd,"\x1b[C",strlen("\x1b[C"));
+
+          if(key.key_data.key_type == NONE)
+          {
+            key.key_data.key_repeat_state = true;
+            key.key_repeat_st = GetTime();
+            key.key_data.key_type = RIGHT_ALLOW;
+          }     
         }
       }
     }
@@ -591,6 +668,12 @@ int main(void) {
     if (IsKeyPressed(KEY_F10)) write(master_fd, "\x1b[21~", 5);
     if (IsKeyPressed(KEY_LEFT)){
       write(master_fd,"\x1b[D",strlen("\x1b[D"));
+      if(key.key_data.key_type == NONE)
+      {
+        key.key_data.key_repeat_state = true;
+        key.key_repeat_st = GetTime();
+        key.key_data.key_type = LEFT_ALLOW;
+      }     
     }
     if(nfds>0)
     {
@@ -631,69 +714,8 @@ int main(void) {
       }
     }
 
-    ////英数字キーリピート処理//////
-    if(input_key.check_key_repeat > 0){
-
-      double repeat_ed = GetTime();
-      bool use_goto=false;
-
-      if(IsAnyKeyReleased())
-      {
-        input_key.check_key_repeat=0;
-        use_goto = true;
-      }
-    
-    
-      if(repeat_ed - input_key.key_repeat_timing < setting_data.key_repeat_interval)
-        use_goto = true;
-
-      if(use_goto)
-        goto KEY_REPEAT_END_POINT;
-
-      if(GetTime() - chr_repeat_interval < 0.05)
-        goto KEY_REPEAT_END_POINT;
-
-      
-      write(master_fd,input_key.utf8,input_key.len);
-
-      //書き込み中はカーソルの点滅をなくす
-      ctx.cur->now_writing = true;
-      chr_repeat_interval = GetTime();
-    }
-     //キーリピート分岐抜け
-    KEY_REPEAT_END_POINT:
-
-
-
-    //バックスペースリピート処理
-    if(back_space_repeat)
-    {
-      if((GetTime() - back_space_repeat_start) < 0.6)
-        goto BACK_SPACE_REPEAT_END_POINT;
-
-      if(back_space_repeat_st<=0)
-        back_space_repeat_st = GetTime();
-
-      back_space_repea_ed = GetTime();
-     
-      if(IsKeyUp(KEY_BACKSPACE))
-      {
-        back_space_repeat_start = 0;
-        goto BACK_SPACE_REPEAT_END_POINT;
-      }
-
-      if(back_space_repea_ed -back_space_repeat_st < 0.05)
-        goto BACK_SPACE_REPEAT_END_POINT;
-     
-      char c = 0x7f;
-      write(master_fd, &c, 1);
-      back_space_repeat_st = back_space_repea_ed;
-
-      //書き込み中はカーソルの点滅をなくす
-      ctx.cur->now_writing = true;
-    }
-    BACK_SPACE_REPEAT_END_POINT:
-
+    // キーリピート関数
+    key_repeat(&key,master_fd,setting_data,&ctx);
 
 
     ////マウスカーソル点滅再開処理//////
@@ -835,16 +857,139 @@ int main(void) {
   close(epoll_fd_list);
 }
 
+void scroll_region_up(struct term_context *ctx) {
+  int W      = ctx->term_size.w;
+  int top    = ctx->fixrd_cur_scr_range.decstbm_state ? ctx->fixrd_cur_scr_range.top_margin    : 0;
+  int bottom = ctx->fixrd_cur_scr_range.decstbm_state ? ctx->fixrd_cur_scr_range.bottom_margin : ctx->term_size.h - 1;
+  if (top >= bottom || bottom >= ctx->term_size.h) return;
+  // [AI生成] top+1行目から bottom行目を1行分上にシフト。src/dstが重なるためmemcpyではなくmemmoveが必要
+  memmove(&ctx->term_cell[top * W], &ctx->term_cell[(top + 1) * W],
+    sizeof(struct term_cell) * W * (bottom - top));
+  // [AI生成] シフトで空いた最終行をクリア
+  for (int c = bottom * W; c < (bottom + 1) * W; c++) {
+    ctx->term_cell[c].character   = ' ';
+    ctx->term_cell[c].bg_color    = ctx->bash_parser_required_memb.now_bg_color;
+    ctx->term_cell[c].fg_color    = ctx->bash_parser_required_memb.now_fg_color;
+    ctx->term_cell[c].is_bold     = false;
+    ctx->term_cell[c].is_real_chr = false;
+  }
+  memmove(&ctx->lines[top], &ctx->lines[top + 1], sizeof(struct line_info) * (bottom - top));
+  ctx->lines[bottom].is_wrapped = false;
+}
+
+void scroll_region_down(struct term_context *ctx) {
+  int W      = ctx->term_size.w;
+  int top    = ctx->fixrd_cur_scr_range.decstbm_state ? ctx->fixrd_cur_scr_range.top_margin    : 0;
+  int bottom = ctx->fixrd_cur_scr_range.decstbm_state ? ctx->fixrd_cur_scr_range.bottom_margin : ctx->term_size.h - 1;
+  if (top >= bottom || bottom >= ctx->term_size.h) return;
+  // [AI生成] top行目から bottom-1行目を1行分下にシフト。src/dstが重なるためmemmoveが必要
+  memmove(&ctx->term_cell[(top + 1) * W], &ctx->term_cell[top * W],
+    sizeof(struct term_cell) * W * (bottom - top));
+  // [AI生成] シフトで空いた先頭行をクリア
+  for (int c = top * W; c < (top + 1) * W; c++) {
+    ctx->term_cell[c].character   = ' ';
+    ctx->term_cell[c].bg_color    = ctx->bash_parser_required_memb.now_bg_color;
+    ctx->term_cell[c].fg_color    = ctx->bash_parser_required_memb.now_fg_color;
+    ctx->term_cell[c].is_bold     = false;
+    ctx->term_cell[c].is_real_chr = false;
+  }
+  memmove(&ctx->lines[top + 1], &ctx->lines[top], sizeof(struct line_info) * (bottom - top));
+  ctx->lines[top].is_wrapped = false;
+}
+
+Color xterm_256color(int n) {
+  if (n < 0 || n > 255) return WHITE;
+  const Color base[8] = {
+    {0,0,0,255},{170,0,0,255},{0,170,0,255},{170,85,0,255},
+    {0,0,170,255},{170,0,170,255},{0,170,170,255},{170,170,170,255}
+  };
+  const Color bright[8] = {
+    {85,85,85,255},{255,85,85,255},{85,255,85,255},{255,255,85,255},
+    {85,85,255,255},{255,85,255,255},{85,255,255,255},{255,255,255,255}
+  };
+  if (n < 8)  return base[n];
+  if (n < 16) return bright[n - 8];
+  if (n < 232) {
+    // [AI生成] 16〜231: xterm が定義する 6x6x6 の RGB カラーキューブ (216色)
+    // n-16 を3桁の6進数として解釈し、各桁をR/G/Bに割り当てる
+    int idx = n - 16;
+    int b = idx % 6; idx /= 6; // [AI生成] 6進数の1桁目 (最下位)
+    int g = idx % 6; idx /= 6; // [AI生成] 6進数の2桁目
+    int r = idx;               // [AI生成] 6進数の3桁目 (最上位)
+    // [AI生成] 値0→0, 1〜5→55+40*n の xterm 公式変換
+    return (Color){r ? 55 + r*40 : 0, g ? 55 + g*40 : 0, b ? 55 + b*40 : 0, 255};
+  }
+  // [AI生成] 232〜255: グレースケール (8〜238, 10刻み)
+  int v = 8 + (n - 232) * 10;
+  return (Color){v, v, v, 255};
+}
+
+void esc_single_dispatch(struct term_context *ctx, char c) {
+  switch (c) {
+    case '7':  // DECSC: カーソル位置を保存
+      *(ctx->save_cur) = *(ctx->cur);
+      break;
+    case '8':  // DECRC: カーソル位置を復元
+      *(ctx->cur) = *(ctx->save_cur);
+      break;
+    case 'M':  // RI: 逆スクロール（カーソルが先頭行なら下スクロール）
+    {
+      int top = ctx->fixrd_cur_scr_range.decstbm_state
+        ? ctx->fixrd_cur_scr_range.top_margin : 0;
+      if (ctx->cur->cur_pos.h > top)
+        ctx->cur->cur_pos.h--;
+      else
+        scroll_region_down(ctx);
+      break;
+    }
+    case 'E':  // NEL: 次の行の先頭へ
+      ctx->cur->cur_pos.w = 0;
+      ctx->cur->cur_pos.h++;
+      break;
+    case 'c':  // RIS: ターミナル全体リセット
+      for (int i = 0; i < ctx->term_size.h * ctx->term_size.w; i++) {
+        ctx->term_cell[i].character   = ' ';
+        ctx->term_cell[i].fg_color    = WHITE;
+        ctx->term_cell[i].bg_color    = BLACK;
+        ctx->term_cell[i].is_bold     = false;
+        ctx->term_cell[i].is_real_chr = false;
+      }
+      ctx->cur->cur_pos.w = 0;
+      ctx->cur->cur_pos.h = 0;
+      break;
+    case '=':  // DECKPAM: キーパッドアプリケーションモード（無視）
+    case '>':  // DECKPNM: キーパッド数値モード（無視）
+    default:
+      break;
+  }
+}
+
 void bash_str_parse(char *buff, ssize_t size, struct term_context *ctx) {
 
   for (int i = 0; i < size; i++) {
     if (ctx->bash_parser_required_memb.state == SQE_START) {
       if (ctx->bash_parser_required_memb.mode == IDK) {
-        ctx->bash_parser_required_memb.mode = get_mode(buff, &i, size);
-        continue; 
+        char esc_char = buff[i];
+        if (esc_char == '[') {
+          ctx->bash_parser_required_memb.mode = CSI_MODE;
+        } else if (esc_char == ']') {
+          ctx->bash_parser_required_memb.mode = OSC_MODE;
+        } else {
+          // 2文字ESCシーケンス: ESC ( / ESC ) は次の1文字を消費して無視
+          if (esc_char == '(' || esc_char == ')') {
+            if (i + 1 < size) i++;
+          } else {
+            esc_single_dispatch(ctx, esc_char);
+          }
+          ctx->bash_parser_required_memb.state = GROUND;
+        }
+        continue;
       }
       switch (ctx->bash_parser_required_memb.mode) {
         case OSC_MODE:
+            // [AI生成] OSC の終端は BEL (\a) か、ST (ESC \) の2文字シーケンス。
+            // ESC を見たら osc_state を OSC_EXPECT_ST にセットし、
+            // 次の文字が '\\' なら終端確定として処理を実行する。
             if (buff[i] == '\x1b') ctx->bash_parser_required_memb.osc_state = OSC_EXPECT_ST;
             else if (buff[i] == '\a' || (ctx->bash_parser_required_memb.osc_state == OSC_EXPECT_ST && buff[i] == '\\')) {
               if (ctx->bash_parser_required_memb.has_val) {
@@ -894,6 +1039,8 @@ void bash_str_parse(char *buff, ssize_t size, struct term_context *ctx) {
                 ctx->bash_parser_required_memb.val = 0;
                 ctx->bash_parser_required_memb.has_val = false;
 
+            // [AI生成] '?' はDEC private シーケンスの印（例: ESC[?25h でカーソル表示）。
+            // is_private フラグを立てておき、終端文字到達時に ls_chr_parse 内で分岐する。
             } else if (buff[i] == '?') ctx->bash_parser_required_memb.is_private = true;
 
             else if (buff[i] >= 0x40 && buff[i] <= 0x7E) {
@@ -936,18 +1083,24 @@ void bash_str_parse(char *buff, ssize_t size, struct term_context *ctx) {
           ctx->cur->cur_pos.w = 0;
           continue;
       } else if (buff[i] == '\n') {
-          if (ctx->cur->cur_pos.h >= 0 && ctx->cur->cur_pos.h < ctx->term_size.h) {
+          if (ctx->cur->cur_pos.h >= 0 && ctx->cur->cur_pos.h < ctx->term_size.h)
               ctx->lines[ctx->cur->cur_pos.h].is_wrapped = false;
+          // スクロール領域の底にいる場合は領域内スクロール、それ以外は行を下へ
+          if (ctx->fixrd_cur_scr_range.decstbm_state &&
+              ctx->cur->cur_pos.h == ctx->fixrd_cur_scr_range.bottom_margin) {
+              scroll_region_up(ctx);
+          } else {
+              ctx->cur->cur_pos.h++;
           }
-          ctx->cur->cur_pos.w = 0;
-          ctx->cur->cur_pos.h++;
       } else if (buff[i] == '\a') {
           continue;
       } else {
         if (ctx->insert_mode) {
             char_arry_insert_chr(ctx, 1);
         }
-        // 次の文字を描画する直前に、カーソルが画面端に達していたら改行する（Delayed Wrap）
+        // [AI生成] Delayed Wrap: VT100の仕様で、画面端に達した時点では折り返さず、
+        // 次の可視文字を書こうとした瞬間に初めて改行する。
+        // これにより行末ぴったりに文字が収まった場合に不要な空行が生まれない。
         if (ctx->cur->cur_pos.w >= ctx->term_size.w) {
             if (ctx->cur->cur_pos.h >= 0 && ctx->cur->cur_pos.h < ctx->term_size.h) {
                 ctx->lines[ctx->cur->cur_pos.h].is_wrapped = true;
@@ -955,14 +1108,18 @@ void bash_str_parse(char *buff, ssize_t size, struct term_context *ctx) {
             ctx->cur->cur_pos.w = 0;
             ctx->cur->cur_pos.h++;
             
-            if (ctx->cur->cur_pos.h >= ctx->term_size.h) {
+            if (ctx->fixrd_cur_scr_range.decstbm_state &&
+                ctx->cur->cur_pos.h > ctx->fixrd_cur_scr_range.bottom_margin) {
+                scroll_region_up(ctx);
+                ctx->cur->cur_pos.h = ctx->fixrd_cur_scr_range.bottom_margin;
+            } else if (ctx->cur->cur_pos.h >= ctx->term_size.h) {
                 memmove(ctx->term_cell, ctx->term_cell + ctx->term_size.w, (ctx->total_cells - ctx->term_size.w) * sizeof(struct term_cell));
                 memmove(ctx->lines, ctx->lines + 1, (ctx->term_size.h - 1) * sizeof(struct line_info));
                 ctx->lines[ctx->term_size.h - 1].is_wrapped = false;
                 for (int c = 0; c < ctx->term_size.w; c++) {
-                  int last_line_idx = (ctx->term_size.h - 1) * ctx->term_size.w + c;
-                  ctx->term_cell[last_line_idx].character = ' ';
-                  ctx->term_cell[last_line_idx].is_real_chr = false;
+                    int last_line_idx = (ctx->term_size.h - 1) * ctx->term_size.w + c;
+                    ctx->term_cell[last_line_idx].character = ' ';
+                    ctx->term_cell[last_line_idx].is_real_chr = false;
                 }
                 ctx->cur->cur_pos.h = ctx->term_size.h - 1;
             }
@@ -971,31 +1128,44 @@ void bash_str_parse(char *buff, ssize_t size, struct term_context *ctx) {
         //可視文字処理
         int idx = ctx->cur->cur_pos.h * ctx->term_size.w + ctx->cur->cur_pos.w;
         if (idx >= 0 && idx < ctx->term_size.h * ctx->term_size.w) {
-            ctx->term_cell[idx].character = buff[i];
-            ctx->term_cell[idx].fg_color = ctx->bash_parser_required_memb.now_fg_color;
-            ctx->term_cell[idx].bg_color = ctx->bash_parser_required_memb.now_bg_color;
-            ctx->term_cell[idx].is_real_chr = true;
-            //カーソル移動可能範囲更新
-            ctx->temp_cur_pos.h=ctx->cur->cur_pos.h;
-            ctx->temp_cur_pos.w=ctx->cur->cur_pos.w;
 
+            bool rev = ctx->bash_parser_required_memb.now_is_reverse;
+
+            ctx->term_cell[idx].character = buff[i];
+
+            ctx->term_cell[idx].fg_color  = rev
+                ? ctx->bash_parser_required_memb.now_bg_color
+                : ctx->bash_parser_required_memb.now_fg_color;
+                
+            ctx->term_cell[idx].bg_color  = rev
+                ? ctx->bash_parser_required_memb.now_fg_color
+                : ctx->bash_parser_required_memb.now_bg_color;
+                
+            ctx->term_cell[idx].is_bold     = ctx->bash_parser_required_memb.now_is_bold;
+            ctx->term_cell[idx].is_real_chr = true;
+            ctx->temp_cur_pos.h = ctx->cur->cur_pos.h;
+            ctx->temp_cur_pos.w = ctx->cur->cur_pos.w;
             ctx->cur->cur_pos.w++;
         }
       }
-      // 画面外スクロール処理
+      // 画面外スクロール処理（スクロール領域未使用時のみ全体スクロール）
       if (ctx->cur->cur_pos.h >= ctx->term_size.h) {
-        int total_cells = ctx->total_cells;
-        memmove(ctx->term_cell, ctx->term_cell + ctx->term_size.w, (total_cells - ctx->term_size.w) * sizeof(struct term_cell));
-        memmove(ctx->lines, ctx->lines + 1, (ctx->term_size.h - 1) * sizeof(struct line_info));
-        ctx->lines[ctx->term_size.h - 1].is_wrapped = false;
-        for (int c = 0; c < ctx->term_size.w; c++) {
-          int last_line_idx = (ctx->term_size.h - 1) * ctx->term_size.w + c;
-          ctx->term_cell[last_line_idx].character = ' ';
-          ctx->term_cell[last_line_idx].bg_color = BLACK;
-          ctx->term_cell[last_line_idx].fg_color = WHITE;
-          ctx->term_cell[last_line_idx].is_real_chr = false;
+        if (ctx->fixrd_cur_scr_range.decstbm_state) {
+          ctx->cur->cur_pos.h = ctx->term_size.h - 1;
+        } else {
+          int total_cells = ctx->total_cells;
+          memmove(ctx->term_cell, ctx->term_cell + ctx->term_size.w, (total_cells - ctx->term_size.w) * sizeof(struct term_cell));
+          memmove(ctx->lines, ctx->lines + 1, (ctx->term_size.h - 1) * sizeof(struct line_info));
+          ctx->lines[ctx->term_size.h - 1].is_wrapped = false;
+          for (int c = 0; c < ctx->term_size.w; c++) {
+            int last_line_idx = (ctx->term_size.h - 1) * ctx->term_size.w + c;
+            ctx->term_cell[last_line_idx].character = ' ';
+            ctx->term_cell[last_line_idx].bg_color = BLACK;
+            ctx->term_cell[last_line_idx].fg_color = WHITE;
+            ctx->term_cell[last_line_idx].is_real_chr = false;
+          }
+          ctx->cur->cur_pos.h = ctx->term_size.h - 1;
         }
-        ctx->cur->cur_pos.h = ctx->term_size.h - 1;
       }
     }
   }
@@ -1007,18 +1177,58 @@ void ls_chr_parse(struct term_context *ctx, char buff, Color *now_fg_color, Colo
 
   switch(buff){
     // SGR: 色や表示属性（リセットや文字色/背景色）を設定する
-    case 'm': 
+    case 'm':
       for (int i = 0; i < palms_counter; i++) {
         int code = palms[i];
-        if (code == 0) { 
+        if (code == 0) {
           *now_fg_color = WHITE;
           *now_bg_color = BLACK;
-        } else if (code >= 30 && code <= 37) { 
+          ctx->bash_parser_required_memb.now_is_bold    = false;
+          ctx->bash_parser_required_memb.now_is_reverse = false;
+        } else if (code == 1) {
+          ctx->bash_parser_required_memb.now_is_bold = true;
+        } else if (code == 7) {
+          ctx->bash_parser_required_memb.now_is_reverse = true;
+        } else if (code == 22) {
+          ctx->bash_parser_required_memb.now_is_bold = false;
+        } else if (code == 27) {
+          ctx->bash_parser_required_memb.now_is_reverse = false;
+        } else if (code >= 30 && code <= 37) {
           Color colors[] = {BLACK, RED, GREEN, YELLOW, BLUE, MAGENTA, SKYBLUE, WHITE};
           *now_fg_color = colors[code - 30];
-        } else if (code >= 40 && code <= 47) { 
+        } else if (code == 39) {
+          *now_fg_color = WHITE;
+        } else if (code >= 40 && code <= 47) {
           Color colors[] = {BLACK, RED, GREEN, YELLOW, BLUE, MAGENTA, SKYBLUE, WHITE};
           *now_bg_color = colors[code - 40];
+        } else if (code == 49) {
+          *now_bg_color = BLACK;
+        } else if (code >= 90 && code <= 97) {
+          Color colors[] = {
+            {85,85,85,255},{255,85,85,255},{85,255,85,255},{255,255,85,255},
+            {85,85,255,255},{255,85,255,255},{85,255,255,255},{255,255,255,255}
+          };
+          *now_fg_color = colors[code - 90];
+        } else if (code >= 100 && code <= 107) {
+          Color colors[] = {
+            {85,85,85,255},{255,85,85,255},{85,255,85,255},{255,255,85,255},
+            {85,85,255,255},{255,85,255,255},{85,255,255,255},{255,255,255,255}
+          };
+          *now_bg_color = colors[code - 100];
+        } else if ((code == 38 || code == 48) && i + 1 < palms_counter) {
+          if (palms[i+1] == 5 && i + 2 < palms_counter) {
+            // 256色
+            Color c = xterm_256color(palms[i+2]);
+            if (code == 38) *now_fg_color = c;
+            else            *now_bg_color = c;
+            i += 2;
+          } else if (palms[i+1] == 2 && i + 4 < palms_counter) {
+            // truecolor
+            Color c = {palms[i+2], palms[i+3], palms[i+4], 255};
+            if (code == 38) *now_fg_color = c;
+            else            *now_bg_color = c;
+            i += 4;
+          }
         }
       }
       break;
@@ -1038,6 +1248,23 @@ void ls_chr_parse(struct term_context *ctx, char buff, Color *now_fg_color, Colo
       ctx->cur->cur_pos.w = col;
       break;
     }
+    //スクロール領域 DECSTBM）
+    case 'r':
+    {
+      // VT100は1-indexed; 0-indexedに変換して保存
+      int top    = (palms_counter > 0 && palms[0] > 0) ? palms[0] - 1 : 0;
+      int bottom = (palms_counter > 1 && palms[1] > 0) ? palms[1] - 1 : ctx->term_size.h - 1;
+      ctx->fixrd_cur_scr_range.top_margin    = top;
+      ctx->fixrd_cur_scr_range.bottom_margin = bottom;
+      ctx->fixrd_cur_scr_range.decstbm_state = true;
+
+      // カーソルをスクロール領域の先頭行へ移動
+      ctx->cur->cur_pos.h = top;
+      ctx->cur->cur_pos.w = 0;
+      ctx->home_pos = (struct pos){0, top};
+      break;
+    }
+    
     // 端末画面の消去（モード2などで全体クリア）
     case 'J':
     {
@@ -1139,6 +1366,16 @@ void ls_chr_parse(struct term_context *ctx, char buff, Color *now_fg_color, Colo
       if (ctx->cur->cur_pos.w < 0) ctx->cur->cur_pos.w = 0;
       break;
     }
+    //カーソル水平絶対位置指定
+    case 'G':
+    {
+      // VT100は1-indexed; palms[0]==0はデフォルト列1扱い
+      int width = (palms[0] > 0) ? palms[0] - 1 : 0;
+      if(width >= ctx->term_size.w)
+        width = ctx->term_size.w - 1;
+      ctx->cur->cur_pos.w = width;
+      break;
+    }
     // 指定数の文字を削除 (DCH: delete characters)
     case 'P':
       {
@@ -1159,6 +1396,14 @@ void ls_chr_parse(struct term_context *ctx, char buff, Color *now_fg_color, Colo
       bool is_on = (buff == 'h'); 
       if (is_private && palms_counter > 0) {
         switch (palms[0]) {
+          case 6:
+          {
+            if(!ctx->bash_parser_required_memb.is_private)
+              break;
+            //ホームポジション更新
+            ctx->home_pos = (struct pos){0,0};
+            break;
+          }
           case 25:
             ctx->cur->lighting.blinking = is_on; 
             break;
@@ -1199,6 +1444,49 @@ void ls_chr_parse(struct term_context *ctx, char buff, Color *now_fg_color, Colo
         }
       } 
       break;
+      // 行削除(M) / 行挿入(L)
+    case 'M':
+    case 'L':
+    {
+      int R = ctx->cur->cur_pos.h;
+      int W = ctx->term_size.w;
+      int bottom_row = ctx->fixrd_cur_scr_range.decstbm_state
+        ? ctx->fixrd_cur_scr_range.bottom_margin
+        : ctx->term_size.h - 1;
+
+      if(buff == 'M')
+      {
+        // DL: カーソル行を削除し、下の行をスクロール領域内で上にシフト
+        if(R < bottom_row)
+          memmove(&ctx->term_cell[R * W], &ctx->term_cell[(R + 1) * W],
+            sizeof(struct term_cell) * W * (bottom_row - R));
+        // スクロール領域の最終行をクリア
+        for(int i = bottom_row * W; i < (bottom_row + 1) * W; i++){
+          ctx->term_cell[i].bg_color    = ctx->bash_parser_required_memb.now_bg_color;
+          ctx->term_cell[i].fg_color    = ctx->bash_parser_required_memb.now_fg_color;
+          ctx->term_cell[i].character   = ' ';
+          ctx->term_cell[i].is_bold     = false;
+          ctx->term_cell[i].is_real_chr = false;
+        }
+      }
+      else
+      {
+        // IL: カーソル行に空行を挿入し、下の行をスクロール領域内で下にシフト
+        if(R < bottom_row)
+          memmove(&ctx->term_cell[(R + 1) * W], &ctx->term_cell[R * W],
+            sizeof(struct term_cell) * W * (bottom_row - R));
+        // カーソル行をクリア
+        for(int i = R * W; i < (R + 1) * W; i++){
+          ctx->term_cell[i].bg_color    = ctx->bash_parser_required_memb.now_bg_color;
+          ctx->term_cell[i].fg_color    = ctx->bash_parser_required_memb.now_fg_color;
+          ctx->term_cell[i].character   = ' ';
+          ctx->term_cell[i].is_bold     = false;
+          ctx->term_cell[i].is_real_chr = false;
+        }
+      }
+
+      break;
+    }
     // 指定数分の空白を挿入（ICH: insert characters）
     case '@':
     {
@@ -1214,6 +1502,30 @@ void ls_chr_parse(struct term_context *ctx, char buff, Color *now_fg_color, Colo
         int len = snprintf(response, sizeof(response), "\x1b[%d;%dR", ctx->cur->cur_pos.h + 1, ctx->cur->cur_pos.w + 1);
         write(ctx->master_fd, response, len);
       }
+      break;
+    }
+    // SU: n行上にスクロール
+    case 'S':
+    {
+      int n = (palms_counter > 0 && palms[0] > 0) ? palms[0] : 1;
+      for (int j = 0; j < n; j++)
+        scroll_region_up(ctx);
+      break;
+    }
+    // SD: n行下にスクロール
+    case 'T':
+    {
+      int n = (palms_counter > 0 && palms[0] > 0) ? palms[0] : 1;
+      for (int j = 0; j < n; j++)
+        scroll_region_down(ctx);
+      break;
+    }
+    // VPA: 垂直絶対位置（行のみ移動、列は保持）
+    case 'd':
+    {
+      int row = (palms_counter > 0 && palms[0] > 0) ? palms[0] - 1 : 0;
+      if (row >= ctx->term_size.h) row = ctx->term_size.h - 1;
+      ctx->cur->cur_pos.h = row;
       break;
     }
     }
@@ -1329,6 +1641,7 @@ void draw_cursor(struct cursor *cur, double *current_time, struct term_context *
 
   if(cur->now_writing)
     cur->lighting.now_right = true;
+
   else if (now_time - *current_time >= cur->lighting.speed_ms / 1000){
     *current_time = now_time;
     cur->lighting.now_right = !cur->lighting.now_right;
@@ -1427,34 +1740,43 @@ char *base64_decoder(char *osc_pal_chr){
   char *converted_chr = NULL;
   char *result = strchr(osc_pal_chr, ';');
     if (result == NULL) return NULL;
-    if (*(result + 1) == 'c') {
+    if (*(result + 1) == 'c') 
+    {
       char *str_ptr_st = strchr(result + 1, ';');
       if (str_ptr_st == NULL) return NULL;
       char str_ptr[strlen(str_ptr_st)+1];
       strcpy(str_ptr, str_ptr_st + 1);
       struct return_binary *char_bin = char_conbert_binary_arry(str_ptr);
-      if (char_bin != NULL) {
+      if (char_bin != NULL) 
+      {
         int remainder = char_bin->char_binary_counter % 8;
-        if (remainder != 0) {
+        if (remainder != 0) 
+        {
           int add_bits = 8 - remainder;
           int *temp = realloc(char_bin->char_binary, sizeof(int) * (char_bin->char_binary_counter + (8 - (char_bin->char_binary_counter % 8))));
-          if (temp == NULL) {
+          if (temp == NULL) 
+          {
             free(char_bin->char_binary);
             free(char_bin);
             perror("char_bin realloc error");
             return NULL;
           }
           char_bin->char_binary = temp;
-          for (int i = 0; i < add_bits; i++){
+          for (int i = 0; i < add_bits; i++)
+          {
             char_bin->char_binary[char_bin->char_binary_counter + i] = 0;
           }
           char_bin->char_binary_counter += 8 - (char_bin->char_binary_counter % 8);
         }
         int final_len = char_bin->char_binary_counter / 8;
         converted_chr = malloc(sizeof(char) * ((char_bin->char_binary_counter / 8) + 1));
-        for (int i = 0; i < char_bin->char_binary_counter / 8; i++){
+        // [AI生成] 8ビットずつ取り出して1バイトに組み立てる。
+        // ビット列は MSB 優先で格納されているので、左シフトしながら OR するだけで正しい値になる。
+        for (int i = 0; i < char_bin->char_binary_counter / 8; i++)
+        {
           int total = 0;
-          for (int c = 0; c < 8; c++){
+          for (int c = 0; c < 8; c++)
+          {
             int bit = char_bin->char_binary[i * 8 + c];
             total = (total << 1) | bit;
           }
@@ -1468,7 +1790,8 @@ char *base64_decoder(char *osc_pal_chr){
     return converted_chr;
 }
 
-struct return_binary *char_conbert_binary_arry(char *osc_pal_chr){
+struct return_binary *char_conbert_binary_arry(char *osc_pal_chr)
+{
   size_t len = strlen(osc_pal_chr);
   if (len == 0) return NULL;
   struct return_binary *char_conbert_binary = calloc(1, sizeof(struct return_binary));
@@ -1489,6 +1812,10 @@ void conbert_chr_to_binary_table(struct return_binary *char_conbert_binary, char
   const char base64_table[64] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   const char *result = strchr(base64_table, buff);
   if (result != NULL) {
+    // [AI生成] Base64の1文字は0〜63のインデックス（6ビット）に対応する。
+    // i=5→i=0の逆順ループで LSB から 1ビットずつ取り出し、
+    // 配列上は [counter+0]=MSB, [counter+5]=LSB の大端(big-endian)順で格納する。
+    // こうすることで後段の再組み立て（i=0から順に左シフト）でそのまま正しい値になる。
     int pos = result - base64_table;
     for (int i = 5; i >= 0; i--){
       if (pos % 2 == 0) {
@@ -1506,13 +1833,15 @@ void change_fg_color(struct term_context *ctx,Color c_col){
   ctx->bash_parser_required_memb.now_fg_color=c_col;
 }
 void change_bg_color(struct term_context *ctx,Color c_col){
-  ctx->bash_parser_required_memb.now_fg_color=c_col;
+  ctx->bash_parser_required_memb.now_bg_color=c_col;
 }
 
 Color conbert_num_to_color(char *color_str,int mode){
   Color target_color={0};
   int r = 0, g = 0, b = 0;
   if(mode==0){
+    // [AI生成] X11 の rgb: 形式は "rrrr/gggg/bbbb" (各チャンネル最大4桁の16進数)。
+    // 上位2桁だけを 8bit 値として使う（%02x で先頭2桁を読む）。
     char hex_r[5] = {0}, hex_g[5] = {0}, hex_b[5] = {0};
     if(sscanf(color_str, "%4[^/]/%4[^/]/%4s", hex_r, hex_g, hex_b) == 3) {
         // 文字列の長さに応じて、最初の2桁(8ビット)だけを評価する
@@ -1537,6 +1866,8 @@ Color conbert_num_to_color(char *color_str,int mode){
   return target_color;
 }
 
+// [AI生成] DCH (Delete Characters): カーソル位置から n 文字削除し、右の文字を左にシフト。
+// 前方（小インデックス方向）から順にコピーすることで src/dst の重なりを避けられる。
 void char_array_alignment(struct term_context *ctx,int n){
   int loop= ctx->term_size.w - ctx->cur->cur_pos.w;
   int idx = ctx->cur->cur_pos.h * ctx->term_size.w + ctx->cur->cur_pos.w;
@@ -1545,11 +1876,14 @@ void char_array_alignment(struct term_context *ctx,int n){
     // 文字だけでなく、色情報なども含めて構造体ごとコピーする
     ctx->term_cell[idx + i] = ctx->term_cell[idx + i + n];
   }
+  // [AI生成] シフトで空いた末尾 n セルをスペースで埋める
   for(int i = loop - n; i < loop; i++){
     ctx->term_cell[idx + i].character = ' ';
     ctx->term_cell[idx + i].is_real_chr = false;
   }
 }
+// [AI生成] ICH (Insert Characters): カーソル位置に n 個のスペースを挿入し、右の文字を押し出す。
+// 後方（大インデックス方向）から順にコピーしないと、まだコピーしていない src を上書きしてしまう。
 void char_arry_insert_chr(struct term_context *ctx,int n){
   int loop= ctx->term_size.w - ctx->cur->cur_pos.w;
   int idx = ctx->cur->cur_pos.h * ctx->term_size.w + ctx->cur->cur_pos.w;
@@ -1557,6 +1891,7 @@ void char_arry_insert_chr(struct term_context *ctx,int n){
   for(int i = loop - 1; i >= n; i--){
     ctx->term_cell[idx + i] = ctx->term_cell[idx + i - n];
   }
+  // [AI生成] 挿入位置 n セルをスペースで埋める
   for(int i=0;i<n;i++){
     ctx->term_cell[idx + i].character=' ';
     ctx->term_cell[idx + i].is_real_chr = false;
@@ -1599,28 +1934,35 @@ void window_resized_update_memb(struct pos *screen_pixel,struct pos *term_size,s
   if (term_size->h <= 0) term_size->h = 1;
 }
 
-void unicode_utf8_encoder(char *utf8,int unicode, int *len){   
-  int n=unicode; 
+void unicode_utf8_encoder(char *utf8,int unicode, int *len){
+  // [AI生成] UTF-8エンコード規則:
+  //   1バイト: 0xxxxxxx                        (0x00〜0x7F)
+  //   2バイト: 110xxxxx 10xxxxxx               (0x80〜0x7FF)
+  //   3バイト: 1110xxxx 10xxxxxx 10xxxxxx      (0x800〜0xFFFF)
+  //   4バイト: 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx (0x10000〜)
+  // 先頭バイトのマスク(0xC0, 0xE0, 0xF0)はバイト数を示す識別子。
+  // 継続バイトは必ず 0x80 | (6ビット) の形になる。
+  int n=unicode;
     if (n <= 0x7F) {
         utf8[0] = (char)n;
         *len = 1;
     } else if (n <= 0x7FF) {
-        utf8[0] = (char)(0xC0 | (n >> 6));
-        utf8[1] = (char)(0x80 | (n & 0x3F));
+        utf8[0] = (char)(0xC0 | (n >> 6));        // [AI生成] 上位5ビット
+        utf8[1] = (char)(0x80 | (n & 0x3F));      // [AI生成] 下位6ビット
         *len = 2;
     } else if (n <= 0xFFFF) {
-        utf8[0] = (char)(0xE0 | (n >> 12));
+        utf8[0] = (char)(0xE0 | (n >> 12));        // [AI生成] 上位4ビット
         utf8[1] = (char)(0x80 | ((n >> 6) & 0x3F));
         utf8[2] = (char)(0x80 | (n & 0x3F));
         *len = 3;
     } else if (n <= 0x10FFFF) {
-        utf8[0] = (char)(0xF0 | (n >> 18));
+        utf8[0] = (char)(0xF0 | (n >> 18));        // [AI生成] 上位3ビット
         utf8[1] = (char)(0x80 | ((n >> 12) & 0x3F));
         utf8[2] = (char)(0x80 | ((n >> 6) & 0x3F));
         utf8[3] = (char)(0x80 | (n & 0x3F));
         *len = 4;
     }
-} 
+}
 
 void reflow_terminal_text(struct term_context *ctx, struct pos old_term_size, struct term_cell **temp_term_cell_ptr,int term_cell_alloc_size) {
   
@@ -1641,4 +1983,155 @@ void load_settings(struct setting_data *data){
 void set_default_settings(struct setting_data *data){
   data->key_repeat_interval = DEFAULT_KEY_REPEAT_INTERVAL;
   data->cursor_blink_restart_timeout_seconds = DEFAULT_CUR_BLINK_RESTART_TIMEOUT_SEC;
+}
+
+struct term_cell *allocate_cell(struct term_cell* term_cell,int size)
+{
+  struct term_cell * temp = realloc(term_cell,sizeof(struct term_cell)* size);
+  return temp;
+}
+
+void key_repeat(struct key_repeat *key,int master_fd,struct setting_data setting_data,struct term_context *ctx){
+  ////英数字キーリピート処理//////
+    // [AI生成] gotoはキーリピート判定の複数条件（キー離し / 初回ディレイ / 連射間隔）を
+    // ネストせずにまとめてスキップするために使っている。
+    // KEY_REPEAT_END_POINT に飛べば write() せずに次の処理へ進む。
+  switch(key->key_data.key_type){
+    case ALPBT_NUM:
+    {
+
+      if(IsAnyKeyReleased())
+      {
+        key->key_data.key_type = NONE;
+        break;
+      }
+
+      double now_time = GetTime();
+
+      // [AI生成] キーを押してから key_repeat_interval 秒以内は連射しない（初回ディレイ）
+      if(now_time - key->key_repeat_st < setting_data.key_repeat_interval)
+        break;
+
+      // [AI生成] 前回の連射から 50ms 未満ならまだ送らない（連射レート制限）
+      if(now_time - key->key_repeat_interval < 0.05)
+        break;
+
+
+      write(master_fd,key->key_data.utf8,key->key_data.len);
+
+      //書き込み中はカーソルの点滅をなくす
+      ctx->cur->now_writing = true;
+      key->key_repeat_interval = now_time;
+
+      break;
+    }
+    case BS:
+    {
+      //バックスペースリピート処理
+    if(key->key_data.key_type == BS)
+    {
+      key->key_repeat_interbal_ed  = GetTime();
+
+      if((GetTime() - key->key_repeat_st) < 0.6)
+        break;
+
+     
+      if(IsKeyUp(KEY_BACKSPACE))
+      {
+        key->key_data.key_type = NONE;
+        break;
+      }
+
+      if(key->key_repeat_interbal_ed - key->key_repeat_interbal_st < 0.05)
+        break;;
+     
+      char c = 0x7f;
+      write(master_fd, &c, 1);
+
+      key->key_repeat_interbal_st = key->key_repeat_interbal_ed;
+      
+      //書き込み中はカーソルの点滅をなくす
+      ctx->cur->now_writing = true;
+    }
+      break;
+    }
+    case RIGHT_ALLOW:
+    {
+      double time = GetTime();
+      if(time - key->key_repeat_st < setting_data.key_repeat_interval)
+        break;
+
+      if(IsKeyUp(KEY_RIGHT))
+      {
+        key->key_data.key_type = NONE;
+        break;
+      }
+
+      key->key_repeat_interbal_ed = time;
+
+      if(key->key_repeat_interbal_ed - key->key_repeat_interbal_st < 0.05)
+        break;
+
+      write(master_fd,"\x1b[C",strlen("\x1b[C"));
+
+      key->key_repeat_interbal_st = key->key_repeat_interbal_ed;
+
+      //書き込み中はカーソルの点滅をなくす
+      ctx->cur->now_writing = true;
+      break;
+    }
+    case LEFT_ALLOW:
+    {
+      double time = GetTime();
+      if(time - key->key_repeat_st < setting_data.key_repeat_interval)
+        break;
+
+      if(IsKeyUp(KEY_LEFT))
+      {
+        key->key_data.key_type = NONE;
+        break;
+      }
+
+      key->key_repeat_interbal_ed = time;
+
+      if(key->key_repeat_interbal_ed - key->key_repeat_interbal_st < 0.05)
+        break;
+
+      write(master_fd,"\x1b[D",strlen("\x1b[D"));
+
+      key->key_repeat_interbal_st = key->key_repeat_interbal_ed;
+
+      //書き込み中はカーソルの点滅をなくす
+      ctx->cur->now_writing = true;
+      break;
+    }
+    case NONE:
+    {
+      break;
+      
+    }
+  }
+  return;
+}
+
+bool ctl_c_sig_check(int *counter,int master_fd){
+   
+  if(*counter == 1 && IsKeyUp(KEY_LEFT_CONTROL)){
+    *counter = 0;
+    return 0;
+  }
+  if(*counter > 1 && IsKeyUp(KEY_C)){
+    *counter = 0;
+  }
+
+  if(*counter == 0 && IsKeyDown(KEY_LEFT_CONTROL))
+    (*counter)++;
+
+  else if(*counter == 1 && IsKeyDown(KEY_C))
+  {
+    write(master_fd,"\x03",1);
+    (*counter) ++;
+    return 1;
+  }
+  return 0;
 }
