@@ -24,12 +24,18 @@
 #define DEFAULT_SCREEN_SIZE_H 500
 #define DEFAULT_KEY_REPEAT_INTERVAL 0.5
 #define DEFAULT_CUR_BLINK_RESTART_TIMEOUT_SEC 0.6
+enum cur_allow_mode{
+  AP_MODE,
+  NORMAL_MODE
+};
 
 enum key_type{
   ALPBT_NUM,
   BS,
   LEFT_ALLOW,
   RIGHT_ALLOW,
+  UP_ALLOW,
+  DOWN_ALLOW,
   NONE
 };
 
@@ -44,6 +50,8 @@ struct cur_mgr {
 };
 
 struct cursor {
+  enum cur_allow_mode allow_mode;
+
     char *shape;
     int color;
     struct {
@@ -235,6 +243,7 @@ enum mode_state get_mode(char *buff, int *i, int size);
 enum visiavle_chr check_visible_chr(char buff);
 enum parse_state buff_state_check(char buff, enum parse_state now_state);
 
+void cur_allow_write(enum cur_allow_mode mode, int master_fd, int key_code);
 void key_repeat(struct key_repeat *rp_key,int master_fd,struct setting_data setting_data,struct term_context *ctx);
 void reflow_terminal_text(struct term_context *ctx, struct pos old_term_size, struct term_cell **temp_term_cell,int term_cell_alloc_size);
 void unicode_utf8_encoder(char *utf8,int unicode, int *len);
@@ -289,9 +298,6 @@ int main(void) {
 
   screen_pixel.h=DEFAULT_SCREEN_SIZE_H;
   screen_pixel.w=DEFAULT_SCREEN_SIZE_W;
-  term_size.w = (int)(screen_pixel.w - str_start_pos_x) / 8;
-  term_size.h = screen_pixel.h / 16;
-  total =  term_size.w*term_size.h;
 
   SetConfigFlags(FLAG_WINDOW_RESIZABLE);  
 
@@ -305,6 +311,16 @@ int main(void) {
     printf("window error");
     return 0;
   }
+
+  ToggleFullscreen();
+
+  screen_pixel.h = GetScreenHeight();
+  screen_pixel.w = GetScreenWidth();
+
+
+  term_size.w = (int)(screen_pixel.w - str_start_pos_x) / 8;
+  term_size.h = screen_pixel.h / 16;
+  total =  term_size.w*term_size.h;
 
 
   //Font myfont = LoadFontEx("/usr/share/fonts/TTF/TerminusTTF.ttf", 256, NULL, 0);
@@ -407,8 +423,10 @@ int main(void) {
   struct line_info *lines = NULL;
   struct setting_data setting_data;
   struct key_repeat key;
+  struct pos old_term_cell_size = term_size;
 
   double current_time = 0;
+  double last_resize_time = 0;
   char *read_buf = NULL;
   const char* clip_bord_chr=NULL;
   bool write_buff_overflow=false;
@@ -449,6 +467,7 @@ int main(void) {
   ctx.cur->writing_end_time = 0;
   ctx.cur->now_writing = false;
   ctx.home_pos = (struct pos){0.0};
+  ctx.cur->allow_mode = NORMAL_MODE;
 
 
   // bash_parser_required_memb初期化
@@ -463,11 +482,12 @@ int main(void) {
   ctx.bash_parser_required_memb.now_is_bold = false;
   ctx.bash_parser_required_memb.now_is_reverse = false;
   ctx.bash_parser_required_memb.osc_state = NORMAL;
+  ctx.cur->allow_mode = NORMAL_MODE;
 
   memset(&ctx.fixrd_cur_scr_range,0,sizeof(struct margin));
   memset (&key,0,sizeof(struct key_repeat));
-  key.key_data.key_type = NONE;
 
+  key.key_data.key_type = NONE;
   result = init_cur_mgr(cur_mg);
   load_settings(&setting_data);
 
@@ -651,29 +671,50 @@ int main(void) {
           ctx.term_cell[ctx.cur->cur_pos.h * ctx.term_size.w + ctx.cur->cur_pos.w + 1].character!=' ')
         {
 
-          write(master_fd,"\x1b[C",strlen("\x1b[C"));
+          cur_allow_write(ctx.cur->allow_mode, master_fd, KEY_RIGHT);
 
           if(key.key_data.key_type == NONE)
           {
             key.key_data.key_repeat_state = true;
             key.key_repeat_st = GetTime();
             key.key_data.key_type = RIGHT_ALLOW;
-          }     
+          }
         }
       }
     }
-    //fnキー入力処理  
+    //fnキー入力処理
     if (IsKeyPressed(KEY_F1))  write(master_fd, "\x1bOP", 3);
     if (IsKeyPressed(KEY_F2))  write(master_fd, "\x1bOQ", 3);
     if (IsKeyPressed(KEY_F10)) write(master_fd, "\x1b[21~", 5);
     if (IsKeyPressed(KEY_LEFT)){
-      write(master_fd,"\x1b[D",strlen("\x1b[D"));
+      cur_allow_write(ctx.cur->allow_mode, master_fd, KEY_LEFT);
       if(key.key_data.key_type == NONE)
       {
         key.key_data.key_repeat_state = true;
         key.key_repeat_st = GetTime();
         key.key_data.key_type = LEFT_ALLOW;
-      }     
+      }
+    }
+    if(IsKeyPressed(KEY_UP))
+    {
+      cur_allow_write(ctx.cur->allow_mode, master_fd, KEY_UP);
+      if(key.key_data.key_type == NONE)
+      {
+        key.key_data.key_repeat_state = true;
+        key.key_repeat_st = GetTime();
+        key.key_data.key_type = UP_ALLOW;
+      }
+    }
+    if(IsKeyPressed(KEY_DOWN))
+    {
+      cur_allow_write(ctx.cur->allow_mode, master_fd, KEY_DOWN);
+      if(key.key_data.key_type == NONE)
+      {
+        key.key_data.key_repeat_state = true;
+        key.key_repeat_st = GetTime();
+        key.key_data.key_type = DOWN_ALLOW;
+      }
+
     }
     if(nfds>0)
     {
@@ -737,37 +778,38 @@ int main(void) {
     CUR_RIGTHING_END_POINT:
     
 
-    //リサイズ処理//////////////
-    if(0){
-      struct pos old_term_size=term_size;
-      //int old_total=total;
+
+    if(IsWindowResized()){
+      last_resize_time = GetTime();
+    }
+
+    //リサイズ処理（デバウンス: 0.1秒間リサイズが止まってから実行）
+    if(last_resize_time > 0 && GetTime() - last_resize_time > 0.1){
+      old_term_cell_size = term_size;
+
+      //画面サイズ・セル数を更新
       window_resized_update_memb(&screen_pixel,&term_size,&ctx);
-  
+
       total=term_size.h*term_size.w;
-      //ctxの同期
       ctx.term_size=term_size;
       ctx.total_cells=total;
 
       ws.ws_col = term_size.w;
       ws.ws_row = term_size.h;
-      ws.ws_xpixel = screen_pixel.w;
-      ws.ws_ypixel = screen_pixel.h;
+      ws.ws_xpixel = (unsigned short)screen_pixel.w;
+      ws.ws_ypixel = (unsigned short)screen_pixel.h;
 
       ioctl(master_fd, TIOCSWINSZ, &ws);
-      // 子プロセスに SIGWINCH シグナルを送る
       kill(pid_id, SIGWINCH);
-      //bashに通知
+
       if(total>term_cell_alloc_size){
-        // 古い確保サイズを記憶しておく（read_bufのクリアに必要）
         int old_alloc_size = term_cell_alloc_size;
 
-        //確実に二倍にして確保する
         while(total>term_cell_alloc_size){
           term_cell_alloc_size*=2;
         }
         char *read_buff_temp = calloc(term_cell_alloc_size,sizeof(char));
         struct term_cell *main_term_cell_temp = realloc(ctx.term_cell,sizeof(struct term_cell)*term_cell_alloc_size);
-        //リサイズ時にterm_cellのバッファとして使う
         struct term_cell *temp_temp_term_cell=calloc(term_cell_alloc_size,sizeof(struct term_cell));
         struct term_cell *temp_alt_term_cell = calloc(term_cell_alloc_size,sizeof(struct term_cell));
 
@@ -792,8 +834,6 @@ int main(void) {
         ctx.alt_term_cell=temp_alt_term_cell;
         temp_term_cell=temp_temp_term_cell;
 
-
-        //term_cell拡張範囲の初期化
         for(int i=old_alloc_size;i<term_cell_alloc_size;i++){
           ctx.term_cell[i].bg_color=ctx.bash_parser_required_memb.now_bg_color;
           ctx.term_cell[i].fg_color=ctx.bash_parser_required_memb.now_fg_color;
@@ -804,17 +844,20 @@ int main(void) {
 
         free(read_buf);
         read_buf = read_buff_temp;
-    
       }
-      
-      //リサイズ処理////////
-      if(term_size.w != old_term_size.w || term_size.h != old_term_size.h){
-        reflow_terminal_text(&ctx, old_term_size, &temp_term_cell,term_cell_alloc_size);
-      }
-      
-    }
-  
 
+      reflow_terminal_text(&ctx, old_term_cell_size, &temp_term_cell, term_cell_alloc_size);
+
+      struct line_info *new_lines = calloc(term_size.h, sizeof(struct line_info));
+      if (new_lines != NULL) {
+        free(ctx.lines);
+        ctx.lines = new_lines;
+      }
+
+      last_resize_time = 0;
+    }
+    
+      
 
     BeginDrawing();
     ClearBackground(BLACK);
@@ -1396,6 +1439,16 @@ void ls_chr_parse(struct term_context *ctx, char buff, Color *now_fg_color, Colo
       bool is_on = (buff == 'h'); 
       if (is_private && palms_counter > 0) {
         switch (palms[0]) {
+          case 1:
+          {
+            if(ctx->bash_parser_required_memb.is_private == false)
+              break;
+
+            if(is_on)
+              ctx->cur->allow_mode = AP_MODE;
+            else 
+              ctx->cur->allow_mode = NORMAL_MODE;
+          }
           case 6:
           {
             if(!ctx->bash_parser_required_memb.is_private)
@@ -1405,7 +1458,7 @@ void ls_chr_parse(struct term_context *ctx, char buff, Color *now_fg_color, Colo
             break;
           }
           case 25:
-            ctx->cur->lighting.blinking = is_on; 
+            ctx->cur->lighting.blinking = is_on;
             break;
           case 1049:
             if (is_on) {
@@ -1964,8 +2017,53 @@ void unicode_utf8_encoder(char *utf8,int unicode, int *len){
     }
 }
 
-void reflow_terminal_text(struct term_context *ctx, struct pos old_term_size, struct term_cell **temp_term_cell_ptr,int term_cell_alloc_size) {
-  
+void reflow_terminal_text(struct term_context *ctx, struct pos old_term_size, struct term_cell **temp_term_cell_ptr, int term_cell_alloc_size) {
+  struct term_cell *temp = *temp_term_cell_ptr;
+  int new_w = ctx->term_size.w;
+  int new_h = ctx->term_size.h;
+
+  for (int i = 0; i < new_h * new_w; i++) {
+    temp[i].character   = ' ';
+    temp[i].fg_color    = ctx->bash_parser_required_memb.now_fg_color;
+    temp[i].bg_color    = ctx->bash_parser_required_memb.now_bg_color;
+    temp[i].is_bold     = false;
+    temp[i].is_real_chr = false;
+  }
+
+  int now_w = 0;
+  int now_h = 0;
+
+  for (int h = 0; h < old_term_size.h && now_h < new_h; h++) {
+    // 旧行の最後の実文字を探す（末尾の空白は無視）
+    int last_real = -1;
+    for (int w = old_term_size.w - 1; w >= 0; w--) {
+      if (ctx->term_cell[h * old_term_size.w + w].is_real_chr) {
+        last_real = w;
+        break;
+      }
+    }
+
+    for (int w = 0; w <= last_real; w++) {
+      if (now_w >= new_w) {
+        now_h++;
+        now_w = 0;
+        if (now_h >= new_h) goto reflow_done;
+      }
+      temp[now_h * new_w + now_w] = ctx->term_cell[h * old_term_size.w + w];
+      now_w++;
+    }
+
+    // 論理行の末尾（折り返しでない行）なら新バッファでも改行
+    if (!ctx->lines[h].is_wrapped && now_w > 0) {
+      now_h++;
+      now_w = 0;
+    }
+  }
+
+reflow_done:;
+  struct term_cell *swap = ctx->term_cell;
+  ctx->term_cell = temp;
+  *temp_term_cell_ptr = swap;
 }
 
 
@@ -2072,7 +2170,7 @@ void key_repeat(struct key_repeat *key,int master_fd,struct setting_data setting
       if(key->key_repeat_interbal_ed - key->key_repeat_interbal_st < 0.05)
         break;
 
-      write(master_fd,"\x1b[C",strlen("\x1b[C"));
+      cur_allow_write(ctx->cur->allow_mode, master_fd, KEY_RIGHT);
 
       key->key_repeat_interbal_st = key->key_repeat_interbal_ed;
 
@@ -2097,7 +2195,57 @@ void key_repeat(struct key_repeat *key,int master_fd,struct setting_data setting
       if(key->key_repeat_interbal_ed - key->key_repeat_interbal_st < 0.05)
         break;
 
-      write(master_fd,"\x1b[D",strlen("\x1b[D"));
+      cur_allow_write(ctx->cur->allow_mode, master_fd, KEY_LEFT);
+
+      key->key_repeat_interbal_st = key->key_repeat_interbal_ed;
+
+      //書き込み中はカーソルの点滅をなくす
+      ctx->cur->now_writing = true;
+      break;
+    }
+    case UP_ALLOW:
+    {
+      double time = GetTime();
+      if(time - key->key_repeat_st < setting_data.key_repeat_interval)
+        break;
+
+      if(IsKeyUp(KEY_UP))
+      {
+        key->key_data.key_type = NONE;
+        break;
+      }
+
+      key->key_repeat_interbal_ed = time;
+
+      if(key->key_repeat_interbal_ed - key->key_repeat_interbal_st < 0.05)
+        break;
+
+      cur_allow_write(ctx->cur->allow_mode, master_fd, KEY_UP);
+
+      key->key_repeat_interbal_st = key->key_repeat_interbal_ed;
+
+      //書き込み中はカーソルの点滅をなくす
+      ctx->cur->now_writing = true;
+      break;
+    }
+    case DOWN_ALLOW:
+    {
+      double time = GetTime();
+      if(time - key->key_repeat_st < setting_data.key_repeat_interval)
+        break;
+
+      if(IsKeyUp(KEY_DOWN))
+      {
+        key->key_data.key_type = NONE;
+        break;
+      }
+
+      key->key_repeat_interbal_ed = time;
+
+      if(key->key_repeat_interbal_ed - key->key_repeat_interbal_st < 0.05)
+        break;
+
+      cur_allow_write(ctx->cur->allow_mode, master_fd, KEY_DOWN);
 
       key->key_repeat_interbal_st = key->key_repeat_interbal_ed;
 
@@ -2134,4 +2282,25 @@ bool ctl_c_sig_check(int *counter,int master_fd){
     return 1;
   }
   return 0;
+}
+void cur_allow_write(enum cur_allow_mode mode, int master_fd, int key_code) {
+  const char *seq = NULL;
+  if (mode == AP_MODE) {
+    switch (key_code) {
+      case KEY_UP:    seq = "\x1bOA"; break;
+      case KEY_DOWN:  seq = "\x1bOB"; break;
+      case KEY_RIGHT: seq = "\x1bOC"; break;
+      case KEY_LEFT:  seq = "\x1bOD"; break;
+      default: return;
+    }
+  } else {
+    switch (key_code) {
+      case KEY_UP:    seq = "\x1b[A"; break;
+      case KEY_DOWN:  seq = "\x1b[B"; break;
+      case KEY_RIGHT: seq = "\x1b[C"; break;
+      case KEY_LEFT:  seq = "\x1b[D"; break;
+      default: return;
+    }
+  }
+  write(master_fd, seq, strlen(seq));
 }
