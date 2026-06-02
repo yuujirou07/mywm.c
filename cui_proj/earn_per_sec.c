@@ -8,6 +8,7 @@
 
 typedef enum { SCREEN_INPUT = 0, SCREEN_RESUME, SCREEN_DISPLAY, SCREEN_CONFIRM } GameScreen;
 
+
 static Color BG     = { 15,  17,  26, 255 };
 static Color ACCENT = { 80, 200, 120, 255 };
 static Color BRIGHT = { 220, 220, 220, 255 };

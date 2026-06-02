@@ -6,6 +6,7 @@
 #include <pty.h>
 #include <signal.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -24,10 +25,12 @@
 #define DEFAULT_SCREEN_SIZE_H 500
 #define DEFAULT_KEY_REPEAT_INTERVAL 0.5
 #define DEFAULT_CUR_BLINK_RESTART_TIMEOUT_SEC 0.6
+#define RENDER_SCALE 8
 enum cur_allow_mode{
   AP_MODE,
   NORMAL_MODE
 };
+
 
 enum key_type{
   ALPBT_NUM,
@@ -202,9 +205,14 @@ struct term_context {
   int *term_cell_alloc_size;
   int total_cells;
   int master_fd;
+  int cell_w;
+  int cell_h;
+  int render_scale;
   bool paste_mode;
   bool insert_mode;
+  bool kbd_insert_mode;
   char *abs_path_name;
+
 
   struct {//bash_str_parse関数で使用する変数
     enum parse_state state;
@@ -234,6 +242,7 @@ struct setting_data{
 
 Color conbert_num_to_color(char *color_str,int mode);
 Color xterm_256color(int n);
+Font LoadPSF2Font(const char *filename);
 
 struct return_binary *char_conbert_binary_arry(char *osc_pal_chr);
 struct csi_data csi_mode_pal_parse(char *buff, int *i, int size);
@@ -312,20 +321,34 @@ int main(void) {
     return 0;
   }
 
+  SetExitKey(KEY_NULL);
   ToggleFullscreen();
 
   screen_pixel.h = GetScreenHeight();
   screen_pixel.w = GetScreenWidth();
 
 
-  term_size.w = (int)(screen_pixel.w - str_start_pos_x) / 8;
-  term_size.h = screen_pixel.h / 16;
-  total =  term_size.w*term_size.h;
-
-
-  //Font myfont = LoadFontEx("/usr/share/fonts/TTF/TerminusTTF.ttf", 256, NULL, 0);
-  Font myfont = LoadFontEx("/usr/share/fonts/TTF/TerminusTTF.ttf", 256, NULL, 0);
+  // [AI生成] TTYと同じdefault8x16を優先ロード。失敗時は順にフォールバックする
+  Font myfont = LoadPSF2Font("/usr/share/kbd/consolefonts/default8x16.psfu.gz");
+  if (myfont.glyphs == NULL) {
+    myfont = LoadPSF2Font("/usr/share/kbd/consolefonts/LatGrkCyr-12x22");
+  }
+  if (myfont.glyphs == NULL) {
+    myfont = LoadFontEx("/usr/share/fonts/TTF/TerminusTTF.ttf", 16, NULL, 0);
+  }
   SetTextureFilter(myfont.texture, TEXTURE_FILTER_POINT);
+
+  // フォントの実グリフサイズをセル寸法として使う
+  int cell_h = (int)((myfont.baseSize > 0 ? myfont.baseSize : 16) * 0.7f);
+  int cell_w = (int)(((myfont.glyphCount > 0 && myfont.glyphs[0].advanceX > 0)
+               ? myfont.glyphs[0].advanceX : 8) * 0.7f);
+  if (cell_h < 1) cell_h = 1;
+  if (cell_w < 1) cell_w = 1;
+
+
+  term_size.w = (int)(screen_pixel.w - str_start_pos_x) / cell_w;
+  term_size.h = screen_pixel.h / cell_h;
+  total =  term_size.w*term_size.h;
   
   // 元のターミナルの設定をコピーし、安全なウィンドウサイズを指定すru
   ws.ws_col = term_size.w; // 横幅 (壁の位置)
@@ -405,9 +428,9 @@ int main(void) {
   }
   memset(master_fd_ev_poll.data.ptr,0,sizeof(struct clientinfo));
 
-  ((struct clientinfo *)master_fd_ev_poll.data.ptr)->fd=master_fd;
+  ((struct clientinfo *)master_fd_ev_poll.data.ptr)->fd = master_fd;
 
-  if(epoll_ctl(epoll_fd_list,EPOLL_CTL_ADD,master_fd,&master_fd_ev_poll)!=0){
+  if(epoll_ctl(epoll_fd_list,EPOLL_CTL_ADD,master_fd,&master_fd_ev_poll) != 0){
     error_log_write("epoll_ctl faild code");
     return 1;
   }
@@ -427,6 +450,7 @@ int main(void) {
 
   double current_time = 0;
   double last_resize_time = 0;
+  RenderTexture2D render_tex = {0};
   char *read_buf = NULL;
   const char* clip_bord_chr=NULL;
   bool write_buff_overflow=false;
@@ -454,6 +478,13 @@ int main(void) {
   ctx.lines = lines;
   ctx.master_fd = master_fd;
   ctx.term_cell_alloc_size = &term_cell_alloc_size;
+  ctx.kbd_insert_mode = false;
+  ctx.cell_w = cell_w;
+  ctx.cell_h = cell_h;
+  // [AI生成] RENDER_SCALE倍のオフスクリーンテクスチャを作成してスーパーサンプリングを行う
+  ctx.render_scale = RENDER_SCALE;
+  render_tex = LoadRenderTexture(screen_pixel.w * RENDER_SCALE, screen_pixel.h * RENDER_SCALE);
+  SetTextureFilter(render_tex.texture, TEXTURE_FILTER_BILINEAR);
 
   // カーソル初期化
   ctx.cur->shape = malloc(2);
@@ -601,7 +632,15 @@ int main(void) {
           }
         }
       }
-      while (GetCharPressed() > 0) {} //ショートカットキーのバッファがたまっているので捨てる   
+      while (GetCharPressed() > 0) {} //ショートカットキーのバッファがたまっているので捨てる
+    }
+    else if(IsKeyDown(KEY_LEFT_SUPER) && IsKeyDown(KEY_Q)){
+      break;
+    }
+    else if ((IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) && IsKeyPressed(KEY_D))
+    {
+      write(master_fd, "\x04", 1);
+      while (GetCharPressed() > 0) {}
     }
     else if(ctl_c_sig_check(&is_released_ctl_c,master_fd)==false)
     {
@@ -682,12 +721,37 @@ int main(void) {
         }
       }
     }
+    //ESC入力処理
+    if(IsKeyPressed(KEY_ESCAPE)) write(master_fd, "\x1b", 1);
     //fnキー入力処理
-    if (IsKeyPressed(KEY_F1))  write(master_fd, "\x1bOP", 3);
-    if (IsKeyPressed(KEY_F2))  write(master_fd, "\x1bOQ", 3);
+    if (IsKeyPressed(KEY_F1))  write(master_fd, "\x1bOP",   3);
+    if (IsKeyPressed(KEY_F2))  write(master_fd, "\x1bOQ",   3);
+    if (IsKeyPressed(KEY_F3))  write(master_fd, "\x1bOR",   3);
+    if (IsKeyPressed(KEY_F4))  write(master_fd, "\x1bOS",   3);
+    if (IsKeyPressed(KEY_F5))  write(master_fd, "\x1b[15~", 5);
+    if (IsKeyPressed(KEY_F6))  write(master_fd, "\x1b[17~", 5);
+    if (IsKeyPressed(KEY_F7))  write(master_fd, "\x1b[18~", 5);
+    if (IsKeyPressed(KEY_F8))  write(master_fd, "\x1b[19~", 5);
+    if (IsKeyPressed(KEY_F9))  write(master_fd, "\x1b[20~", 5);
     if (IsKeyPressed(KEY_F10)) write(master_fd, "\x1b[21~", 5);
+    if (IsKeyPressed(KEY_F11)) write(master_fd, "\x1b[23~", 5);
+    if (IsKeyPressed(KEY_F12)) write(master_fd, "\x1b[24~", 5);
+
+    //ナビゲーションキー入力処理
+    if (IsKeyPressed(KEY_HOME))      write(master_fd, "\x1b[1~", 4);
+    if (IsKeyPressed(KEY_INSERT))    write(master_fd, "\x1b[2~", 4);
+    if (IsKeyPressed(KEY_DELETE))    write(master_fd, "\x1b[3~", 4);
+    if (IsKeyPressed(KEY_END))       write(master_fd, "\x1b[4~", 4);
+    if (IsKeyPressed(KEY_PAGE_UP))   write(master_fd, "\x1b[5~", 4);
+    if (IsKeyPressed(KEY_PAGE_DOWN)) write(master_fd, "\x1b[6~", 4);
+
+    if (IsKeyPressed(KEY_TAB))
+      write(master_fd, "\t", 1);
+
     if (IsKeyPressed(KEY_LEFT)){
+
       cur_allow_write(ctx.cur->allow_mode, master_fd, KEY_LEFT);
+
       if(key.key_data.key_type == NONE)
       {
         key.key_data.key_repeat_state = true;
@@ -790,6 +854,11 @@ int main(void) {
       //画面サイズ・セル数を更新
       window_resized_update_memb(&screen_pixel,&term_size,&ctx);
 
+      // [AI生成] リサイズ後は新しいウィンドウサイズに合わせてRenderTextureを再作成する
+      UnloadRenderTexture(render_tex);
+      render_tex = LoadRenderTexture(screen_pixel.w * RENDER_SCALE, screen_pixel.h * RENDER_SCALE);
+      SetTextureFilter(render_tex.texture, TEXTURE_FILTER_BILINEAR);
+
       total=term_size.h*term_size.w;
       ctx.term_size=term_size;
       ctx.total_cells=total;
@@ -859,7 +928,10 @@ int main(void) {
     
       
 
-    BeginDrawing();
+    // [AI生成] オフスクリーンテクスチャにRENDER_SCALE倍の座標で描画し、
+    // その後ウィンドウサイズに縮小して表示するスーパーサンプリング描画
+    int rs = ctx.render_scale;
+    BeginTextureMode(render_tex);
     ClearBackground(BLACK);
     for (int i = 0; i < term_size.h; i++){
       Color fg;
@@ -873,12 +945,21 @@ int main(void) {
         fg = ctx.term_cell[idx].fg_color.a == 0 ? WHITE : ctx.term_cell[idx].fg_color;
         bg = ctx.term_cell[idx].bg_color.a == 0 ? BLACK : ctx.term_cell[idx].bg_color;
         if (bg.r != 0 || bg.g != 0 || bg.b != 0) {
-          DrawRectangle(j * 8, i * 16, 8, 16, bg);
+          DrawRectangle(j * ctx.cell_w * rs, i * ctx.cell_h * rs, ctx.cell_w * rs, ctx.cell_h * rs, bg);
         }
-        DrawTextCodepoint(myfont,c, (Vector2){j * 8, i * 16}, 16, fg);
+        DrawTextCodepoint(myfont, c, (Vector2){j * ctx.cell_w * rs, i * ctx.cell_h * rs}, ctx.cell_h * rs, fg);
       }
     }
     draw_cursor(ctx.cur, &current_time, &ctx);
+    EndTextureMode();
+
+    BeginDrawing();
+    ClearBackground(BLACK);
+    // [AI生成] RenderTextureはY軸が反転しているためsrc heightをマイナスで指定する
+    DrawTexturePro(render_tex.texture,
+      (Rectangle){0, 0, (float)render_tex.texture.width, -(float)render_tex.texture.height},
+      (Rectangle){0, 0, (float)screen_pixel.w, (float)screen_pixel.h},
+      (Vector2){0, 0}, 0.0f, WHITE);
     EndDrawing();
   
   }
@@ -896,6 +977,7 @@ int main(void) {
   
   free(master_fd_ev_poll.data.ptr);
   close(master_fd);
+  UnloadRenderTexture(render_tex);
   CloseWindow();
   close(epoll_fd_list);
 }
@@ -1136,6 +1218,11 @@ void bash_str_parse(char *buff, ssize_t size, struct term_context *ctx) {
               ctx->cur->cur_pos.h++;
           }
       } else if (buff[i] == '\a') {
+          continue;
+      } else if (buff[i] == '\t') {
+          int next_tab = (ctx->cur->cur_pos.w / 8 + 1) * 8;
+          if (next_tab >= ctx->term_size.w) next_tab = ctx->term_size.w - 1;
+          ctx->cur->cur_pos.w = next_tab;
           continue;
       } else {
         if (ctx->insert_mode) {
@@ -1547,6 +1634,53 @@ void ls_chr_parse(struct term_context *ctx, char buff, Color *now_fg_color, Colo
       char_arry_insert_chr(ctx,n);      
       break;
     }
+    case '~':
+    {
+      switch(palms[0])
+      {
+        // Home: カーソルを行の先頭へ移動
+        case 1:
+          ctx->cur->cur_pos.w = 0;
+          break;
+        // Insert: インサートモードのトグル
+        case 2:
+          ctx->insert_mode = !ctx->insert_mode;
+          break;
+        // Delete: カーソル位置の文字を削除（DCH相当）
+        case 3:
+          char_array_alignment(ctx, 1);
+          break;
+        // End: カーソルを行末の実文字の次へ移動
+        case 4:
+        {
+          int line_start = ctx->cur->cur_pos.h * ctx->term_size.w;
+          int last_real = ctx->cur->cur_pos.w;
+          for (int c = ctx->term_size.w - 1; c >= 0; c--) {
+            if (ctx->term_cell[line_start + c].is_real_chr) {
+              last_real = c + 1;
+              break;
+            }
+          }
+          if (last_real >= ctx->term_size.w) last_real = ctx->term_size.w - 1;
+          ctx->cur->cur_pos.w = last_real;
+          break;
+        }
+        // Page Up: 1ページ分上にスクロール（画面を下にずらす）
+        case 5:
+          for (int j = 0; j < ctx->term_size.h; j++)
+            scroll_region_down(ctx);
+          break;
+        // Page Down: 1ページ分下にスクロール（画面を上にずらす）
+        case 6:
+          for (int j = 0; j < ctx->term_size.h; j++)
+            scroll_region_up(ctx);
+          break;
+        case 21: // F10: 無視
+        default:
+          break;
+      }
+      break;
+    }
     // Device Status Report (Bash等のカーソル位置問い合わせに対する応答)
     case 'n':
     {
@@ -1701,13 +1835,15 @@ void draw_cursor(struct cursor *cur, double *current_time, struct term_context *
   }
   
   if (cur->lighting.now_right) {
+    // [AI生成] render_scaleを掛けてオフスクリーンテクスチャ内の座標に変換する
+    int rs = ctx->render_scale;
     int draw_w = cur->cur_pos.w >= ctx->term_size.w ? ctx->term_size.w - 1 : cur->cur_pos.w;
     DrawTextEx(
       cur->font,
       cur->shape,
-      (Vector2){draw_w * 8, cur->cur_pos.h * 16},
-      16, 
-      0, 
+      (Vector2){draw_w * ctx->cell_w * rs, cur->cur_pos.h * ctx->cell_h * rs},
+      ctx->cell_h * rs,
+      0,
       WHITE
     );
   }
@@ -1980,9 +2116,9 @@ void error_log_write(char *error_statement){
 void window_resized_update_memb(struct pos *screen_pixel,struct pos *term_size,struct term_context *ctx){
   screen_pixel->w=GetScreenWidth();
   screen_pixel->h=GetScreenHeight();
-  
-  term_size->w = (int)(screen_pixel->w) / 8;
-  term_size->h = (int)screen_pixel->h / 16;
+
+  term_size->w = (int)(screen_pixel->w) / ctx->cell_w;
+  term_size->h = (int)screen_pixel->h / ctx->cell_h;
   if (term_size->w <= 0) term_size->w = 1;
   if (term_size->h <= 0) term_size->h = 1;
 }
@@ -2283,6 +2419,7 @@ bool ctl_c_sig_check(int *counter,int master_fd){
   }
   return 0;
 }
+
 void cur_allow_write(enum cur_allow_mode mode, int master_fd, int key_code) {
   const char *seq = NULL;
   if (mode == AP_MODE) {
@@ -2303,4 +2440,137 @@ void cur_allow_write(enum cur_allow_mode mode, int master_fd, int key_code) {
     }
   }
   write(master_fd, seq, strlen(seq));
+}
+
+// PSF2フォント(.psfu / .psfu.gz 両対応)をビットマップテクスチャとして読み込む。
+// TTFパイプラインを経由しないので、アンチエイリアス・ヒンティングによる線の太りが起きない。
+// .gz ファイルは zcat でパイプ展開し、全データをメモリに読んでからパースする。
+Font LoadPSF2Font(const char *filename) {
+  static const uint8_t PSF2_MAGIC[4] = {0x72, 0xb5, 0x4a, 0x86};
+  typedef struct {
+    uint8_t  magic[4];
+    uint32_t version;
+    uint32_t headersize;
+    uint32_t flags;
+    uint32_t numglyph;
+    uint32_t bytesperglyph;
+    uint32_t height;
+    uint32_t width;
+  } PSF2Header;
+
+  Font font = {0};
+
+  size_t name_len = strlen(filename);
+  bool is_gz = name_len > 3 && strcmp(filename + name_len - 3, ".gz") == 0;
+  FILE *f;
+  if (is_gz) {
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd), "zcat '%s'", filename);
+    f = popen(cmd, "r");
+  } else {
+    f = fopen(filename, "rb");
+  }
+  if (!f) {
+    TraceLog(LOG_ERROR, "LoadPSF2Font: cannot open %s", filename);
+    return font;
+  }
+
+  // パイプはシーク不可なのでファイル全体をバッファに読み込む
+  size_t buf_size = 0;
+  size_t buf_cap  = 131072;
+  uint8_t *buf = malloc(buf_cap);
+  if (!buf) { is_gz ? pclose(f) : fclose(f); return font; }
+  while (1) {
+    size_t n = fread(buf + buf_size, 1, buf_cap - buf_size, f);
+    buf_size += n;
+    if (n == 0) break;
+    if (buf_size == buf_cap) {
+      buf_cap *= 2;
+      uint8_t *tmp = realloc(buf, buf_cap);
+      if (!tmp) { free(buf); is_gz ? pclose(f) : fclose(f); return font; }
+      buf = tmp;
+    }
+  }
+  is_gz ? pclose(f) : fclose(f);
+
+  if (buf_size < sizeof(PSF2Header)) {
+    TraceLog(LOG_ERROR, "LoadPSF2Font: file too small: %s", filename);
+    free(buf); return font;
+  }
+
+  PSF2Header hdr;
+  memcpy(&hdr, buf, sizeof(hdr));
+  if (memcmp(hdr.magic, PSF2_MAGIC, 4) != 0) {
+    TraceLog(LOG_ERROR, "LoadPSF2Font: invalid PSF2 header in %s", filename);
+    free(buf); return font;
+  }
+
+  int numGlyphs     = (int)hdr.numglyph;
+  int bytesPerGlyph = (int)hdr.bytesperglyph;
+  int glyphH        = (int)hdr.height;
+  int glyphW        = (int)hdr.width;
+  int bytesPerRow   = (glyphW + 7) / 8;
+  size_t data_offset = (size_t)hdr.headersize;
+
+  if (buf_size < data_offset + (size_t)numGlyphs * (size_t)bytesPerGlyph) {
+    TraceLog(LOG_ERROR, "LoadPSF2Font: file truncated: %s", filename);
+    free(buf); return font;
+  }
+
+  uint8_t *glyphData = buf + data_offset;
+
+  // テクスチャアトラス: 16列×N行
+  int atlasW    = 16 * glyphW;
+  int atlasRows = (numGlyphs + 15) / 16;
+  int atlasH    = atlasRows * glyphH;
+
+  Color *pixels = calloc((size_t)(atlasW * atlasH), sizeof(Color));
+  if (!pixels) { free(buf); return font; }
+
+  for (int g = 0; g < numGlyphs; g++) {
+    int baseX = (g % 16) * glyphW;
+    int baseY = (g / 16) * glyphH;
+    uint8_t *glyph = glyphData + g * bytesPerGlyph;
+    for (int y = 0; y < glyphH; y++) {
+      for (int x = 0; x < glyphW; x++) {
+        int bit = (glyph[y * bytesPerRow + x / 8] >> (7 - (x % 8))) & 1;
+        if (bit) pixels[(baseY + y) * atlasW + (baseX + x)] = WHITE;
+      }
+    }
+  }
+
+  Image atlas = {
+    .data    = pixels,
+    .width   = atlasW,
+    .height  = atlasH,
+    .mipmaps = 1,
+    .format  = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8,
+  };
+  font.texture = LoadTextureFromImage(atlas);
+  UnloadImage(atlas); // atlas.data(=pixels) をここで解放
+  free(buf);
+
+  font.baseSize     = glyphH;
+  font.glyphCount   = numGlyphs;
+  font.glyphPadding = 0;
+  font.recs   = malloc((size_t)numGlyphs * sizeof(Rectangle));
+  font.glyphs = malloc((size_t)numGlyphs * sizeof(GlyphInfo));
+
+  for (int g = 0; g < numGlyphs; g++) {
+    int col = g % 16;
+    int row = g / 16;
+    font.recs[g] = (Rectangle){(float)(col * glyphW), (float)(row * glyphH),
+                                (float)glyphW, (float)glyphH};
+    font.glyphs[g] = (GlyphInfo){
+      .value    = g,
+      .offsetX  = 0,
+      .offsetY  = 0,
+      .advanceX = glyphW,
+      .image    = {0},
+    };
+  }
+
+  TraceLog(LOG_INFO, "LoadPSF2Font: loaded %d glyphs (%dx%d) from %s",
+           numGlyphs, glyphW, glyphH, filename);
+  return font;
 }
