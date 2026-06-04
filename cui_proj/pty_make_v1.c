@@ -25,7 +25,8 @@
 #define DEFAULT_SCREEN_SIZE_H 500
 #define DEFAULT_KEY_REPEAT_INTERVAL 0.5
 #define DEFAULT_CUR_BLINK_RESTART_TIMEOUT_SEC 0.6
-#define RENDER_SCALE 8
+#define RENDER_SCALE 1
+
 enum cur_allow_mode{
   AP_MODE,
   NORMAL_MODE
@@ -339,9 +340,9 @@ int main(void) {
   SetTextureFilter(myfont.texture, TEXTURE_FILTER_POINT);
 
   // フォントの実グリフサイズをセル寸法として使う
-  int cell_h = (int)((myfont.baseSize > 0 ? myfont.baseSize : 16) * 0.7f);
-  int cell_w = (int)(((myfont.glyphCount > 0 && myfont.glyphs[0].advanceX > 0)
-               ? myfont.glyphs[0].advanceX : 8) * 0.7f);
+  int cell_h = myfont.baseSize > 0 ? myfont.baseSize : 16;
+  int cell_w = (myfont.glyphCount > 0 && myfont.glyphs[0].advanceX > 0)
+               ? myfont.glyphs[0].advanceX : 8;
   if (cell_h < 1) cell_h = 1;
   if (cell_w < 1) cell_w = 1;
 
@@ -484,7 +485,7 @@ int main(void) {
   // [AI生成] RENDER_SCALE倍のオフスクリーンテクスチャを作成してスーパーサンプリングを行う
   ctx.render_scale = RENDER_SCALE;
   render_tex = LoadRenderTexture(screen_pixel.w * RENDER_SCALE, screen_pixel.h * RENDER_SCALE);
-  SetTextureFilter(render_tex.texture, TEXTURE_FILTER_BILINEAR);
+  SetTextureFilter(render_tex.texture, TEXTURE_FILTER_POINT);
 
   // カーソル初期化
   ctx.cur->shape = malloc(2);
@@ -857,7 +858,7 @@ int main(void) {
       // [AI生成] リサイズ後は新しいウィンドウサイズに合わせてRenderTextureを再作成する
       UnloadRenderTexture(render_tex);
       render_tex = LoadRenderTexture(screen_pixel.w * RENDER_SCALE, screen_pixel.h * RENDER_SCALE);
-      SetTextureFilter(render_tex.texture, TEXTURE_FILTER_BILINEAR);
+      SetTextureFilter(render_tex.texture, TEXTURE_FILTER_POINT);
 
       total=term_size.h*term_size.w;
       ctx.term_size=term_size;

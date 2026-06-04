@@ -1,4 +1,4 @@
-gcc pty_make.c -o pty_make \
+gcc pty_make_v1.c -o pty_make \
     /home/yuujirou07/raylib/src/libraylib.a \
     -I /home/yuujirou07/raylib/src \
     -lwayland-client -lwayland-egl -lwayland-cursor -lxkbcommon \
