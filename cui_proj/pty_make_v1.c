@@ -1,6 +1,4 @@
-#include "raylib.h"
-#include <asm-generic/errno-base.h>
-#include <bits/types/siginfo_t.h>
+#include <GLFW/glfw3.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <pty.h>
@@ -17,6 +15,12 @@
 #include <sys/epoll.h>
 #include <errno.h>
 #include <sys/wait.h>
+#include <vulkan/vulkan.h>
+#include "vulkan_mywrap.h"
+#include "vulkan_otf_draw.h"
+#include "keybord.h"
+#include "error_log_output.h"
+#include "pty_make.h"
 
 #define ESC_PAL_MAX 32
 #define cur_font_load_max 32
@@ -25,277 +29,11 @@
 #define DEFAULT_SCREEN_SIZE_H 500
 #define DEFAULT_KEY_REPEAT_INTERVAL 0.5
 #define DEFAULT_CUR_BLINK_RESTART_TIMEOUT_SEC 0.6
-#define RENDER_SCALE 1
 
-enum cur_allow_mode{
-  AP_MODE,
-  NORMAL_MODE
-};
-
-
-enum key_type{
-  ALPBT_NUM,
-  BS,
-  LEFT_ALLOW,
-  RIGHT_ALLOW,
-  UP_ALLOW,
-  DOWN_ALLOW,
-  NONE
-};
-
-struct pos {
-  int w;
-  int h;
-};
-
-struct cur_mgr {
-  char *cur_font;
-  int load_cur_font_n;
-};
-
-struct cursor {
-  enum cur_allow_mode allow_mode;
-
-    char *shape;
-    int color;
-    struct {
-      bool blinking;
-      double speed_ms;
-      bool now_right;
-    } lighting;
-    struct {
-      int w;
-      int h;
-    } cur_pos;
-    Font font;
-
-    
-    bool now_writing;
-    double writing_st_time;
-    double writing_end_time;
-
-
-};
-
-struct csi_data {
-  int pal_count;
-  char last_chr; 
-};
-
-enum last_chr_mode {
-  line_down,
-  str_end,
-  none
-};
-
-enum parse_state {
-  GROUND, //通常モード（届いた文字をそのまま画面に描画する)
-  SQE_START,
-};
-
-enum mode_state {
-  CSI_MODE, //引数を収集中	数字やセミコロンをメモリに溜める。
-  OSC_MODE, //終端文字を受信	溜めた引数を使って、実際の命令（色変更など）を実行する。
-  IDK
-};
-
-enum pal_p {
-  st,
-  ed
-};
-
-enum osc_state {
-  OSC_EXPECT_ST,
-  NORMAL
-};
-
-enum visiavle_chr {
-  YES,
-  NO,
-  BS_ST1,
-};
-
-enum now_str_ovf{
-  Y,
-  N
-};
-
-enum repeat_key{
-  ALPHABET,
-  OTHER
-};
-
-struct line_info {
-    bool is_wrapped; // true なら「上の行から自動で溢れてきた行」
-};
-
-// 1文字（セル）のデータ構造
-struct term_cell {
-    int character;  // 表示する文字（例: 'A'）
-    Color fg_color;  // 前景色（文字色）
-    Color bg_color;  // 背景色
-    bool is_bold;    // 太字かどうか
-    bool is_real_chr;
-};
-
-// ターミナルの「現在の状態」を保持する構造体
-struct term_state {
-    Color current_fg; // 今から打ち込まれる文字の色
-    Color current_bg; // 今から打ち込まれる文字の背景色
-    bool current_bold;
-};
-
-struct return_binary {
-  int *char_binary;
-  int char_binary_counter;
-};
-
-struct clientinfo {
-    int fd;
-    int n;
-    int state;
-    char buf[1024];
-};
-
-struct check_key{
-  enum key_type key_type;
-  //リピート判定用
-  int check_key_repeat;
-  // 有効配列
-  int len;
-  //キーコード
-  char utf8[4];
-  //キーのリピートタイミング
-  double key_repeat_timing;
-
-  bool  key_repeat_state;
-};
-
-struct key_repeat {
-
-  double key_repeat_st;
-  double key_repeat_ed;
-  double key_repeat_interbal_st;
-  double key_repeat_interbal_ed;
-  double key_repeat_interval;
-
-  struct check_key key_data;
-  
-};
-
-struct term_context {
-  struct term_cell *term_cell;
-  struct term_cell *alt_term_cell;
-  struct cursor *cur;
-  struct cursor *save_cur;
-  struct line_info *lines;
-  struct pos term_size;
-  struct pos temp_cur_pos;
-  struct pos home_pos;
-
-  //DECSTBM - DEC Set Top and Bottom Margins
-  // コマンドで使う構造体
-  struct margin{
-    int top_margin;
-    int bottom_margin;
-    bool decstbm_state;
-  } fixrd_cur_scr_range;
-
-  int *palms;
-  int *palms_counter;
-  int *term_cell_alloc_size;
-  int total_cells;
-  int master_fd;
-  int cell_w;
-  int cell_h;
-  int render_scale;
-  bool paste_mode;
-  bool insert_mode;
-  bool kbd_insert_mode;
-  char *abs_path_name;
-
-
-  struct {//bash_str_parse関数で使用する変数
-    enum parse_state state;
-    enum mode_state mode;
-    enum osc_state osc_state;
-
-    Color now_fg_color;
-    Color now_bg_color;
-    bool now_is_bold;
-    bool now_is_reverse;
-
-    int osc_pal_chr_counter;
-    int val;
-
-    bool is_private;
-    bool has_val;
-
-    char osc_pal_chr[513];
-  }bash_parser_required_memb;
-};
-
-struct setting_data{
-  double key_repeat_interval;//キーリーピートのタイミング
-  double cursor_blink_restart_timeout_seconds;
-};
-
-
-Color conbert_num_to_color(char *color_str,int mode);
-Color xterm_256color(int n);
-Font LoadPSF2Font(const char *filename);
-
-struct return_binary *char_conbert_binary_arry(char *osc_pal_chr);
-struct csi_data csi_mode_pal_parse(char *buff, int *i, int size);
-struct term_cell *allocate_cell(struct term_cell* term_cell,int size);
-
-enum mode_state get_mode(char *buff, int *i, int size);
-enum visiavle_chr check_visible_chr(char buff);
-enum parse_state buff_state_check(char buff, enum parse_state now_state);
-
-void cur_allow_write(enum cur_allow_mode mode, int master_fd, int key_code);
-void key_repeat(struct key_repeat *rp_key,int master_fd,struct setting_data setting_data,struct term_context *ctx);
-void reflow_terminal_text(struct term_context *ctx, struct pos old_term_size, struct term_cell **temp_term_cell,int term_cell_alloc_size);
-void unicode_utf8_encoder(char *utf8,int unicode, int *len);
-void window_resized_update_memb(struct pos *screen_size,struct pos *term_size,struct term_context *ctx);
-void error_log_write(char *error_statement);
-void erase_chr(struct term_context *ctx,int n);
-void char_arry_insert_chr(struct term_context *ctx,int n);
-void char_array_alignment(struct term_context *ctx,int n);
-void change_bg_color(struct term_context *ctx,Color c_col);
-void change_fg_color(struct term_context *ctx,Color c_col);
-void conbert_chr_to_binary_table(struct return_binary *char_conbert_binary, char buff);
-void osc_mode(char *buff, struct term_context *ctx, char *osc_pal_chr);
-void ls_chr_parse(struct term_context *ctx, char buff, Color *now_fg_color, Color *now_bg_color, bool is_private);
-void bs_st1(struct pos *pos, char *buff, int cols, int *buff_counter, unsigned int *bash_line_total_ciunt);
-void cur_font_set(struct cursor *cur, struct cur_mgr *cur_mgr, int n);
-void cur_set_default(struct cur_mgr *cur_mgr);
-void cur_mgr_free(struct cur_mgr *cur_mgr);
-void draw_cursor(struct cursor *cur, double *current_time, struct term_context *ctx);
-void bash_str_parse(char *buff, ssize_t size, struct term_context *ctx);
-void csi_mode_parse(char *buff, int *i, int size);
-void load_cur_font(struct cur_mgr *cur_mgr);
-void load_settings(struct setting_data *data);
-void set_default_settings(struct setting_data *data);
-void scroll_region_up(struct term_context *ctx);
-void scroll_region_down(struct term_context *ctx);
-void esc_single_dispatch(struct term_context *ctx, char c);
-
-char *base64_decoder(char *osc_pal_chr);
-char ** split_line(int cols, char *buff_str);
-char *mymemcpy(char *start, char*end, enum last_chr_mode mode);
-char input_bash(char *n);
-
-int init_cur_mgr(struct cur_mgr *cur_mgr);
-int check_key();
-
-bool IsAnyKeyReleased(void);
-bool ctl_c_sig_check(int *counter,int master_fd);
 
 
 int main(void) {
   int master_fd, slave_fd;
-  int str_start_pos_x = 0; //文字の表示開始座標X
   int total;
 
   struct pos screen_pixel;
@@ -303,55 +41,37 @@ int main(void) {
   struct termios term;
   struct termios *term_ptr = NULL;
   struct winsize ws;
+  struct windata wd = {0};
 
   char slavename[256];
 
-  screen_pixel.h=DEFAULT_SCREEN_SIZE_H;
-  screen_pixel.w=DEFAULT_SCREEN_SIZE_W;
+  // [AI生成] フォント読み込みは未実装のため、セルの実寸は暫定値を使う
+  int cell_w = 8;
+  int cell_h = 16;
+  float content_scale_x = 1.0f;
+  float content_scale_y = 1.0f;
 
-  SetConfigFlags(FLAG_WINDOW_RESIZABLE);  
-
-  int current_monitor = GetCurrentMonitor();
-  int current_moniter_refreshrate = GetMonitorRefreshRate(current_monitor);
-
-  InitWindow(screen_pixel.w, screen_pixel.h, "bash");
-
-  SetTargetFPS(current_moniter_refreshrate);
-  if (!IsWindowReady()) {
-    printf("window error");
-    return 0;
+  // ウィンドウ・Vulkanの初期化（screen_pixelの取得に必要なため、ptyのセットアップより先に行う）
+  if(window_init(&wd))
+  {
+    error_log_write("window init error");
+    exit(1);
   }
-
-  SetExitKey(KEY_NULL);
-  ToggleFullscreen();
-
-  screen_pixel.h = GetScreenHeight();
-  screen_pixel.w = GetScreenWidth();
+  glfwSetWindowUserPointer(wd.window,&wd);
+  set_kbd_callback(&wd);
 
 
-  // [AI生成] TTYと同じdefault8x16を優先ロード。失敗時は順にフォールバックする
-  Font myfont = LoadPSF2Font("/usr/share/kbd/consolefonts/default8x16.psfu.gz");
-  if (myfont.glyphs == NULL) {
-    myfont = LoadPSF2Font("/usr/share/kbd/consolefonts/LatGrkCyr-12x22");
-  }
-  if (myfont.glyphs == NULL) {
-    myfont = LoadFontEx("/usr/share/fonts/TTF/TerminusTTF.ttf", 16, NULL, 0);
-  }
-  SetTextureFilter(myfont.texture, TEXTURE_FILTER_POINT);
+  // HIGHDPI環境でぼやけるのを防ぐため、論理サイズではなく実際の物理ピクセルサイズを取得する
+  glfwGetFramebufferSize(wd.window, &screen_pixel.w, &screen_pixel.h);
+  glfwGetWindowContentScale(wd.window, &content_scale_x, &content_scale_y);
 
-  // フォントの実グリフサイズをセル寸法として使う
-  int cell_h = myfont.baseSize > 0 ? myfont.baseSize : 16;
-  int cell_w = (myfont.glyphCount > 0 && myfont.glyphs[0].advanceX > 0)
-               ? myfont.glyphs[0].advanceX : 8;
-  if (cell_h < 1) cell_h = 1;
-  if (cell_w < 1) cell_w = 1;
+  term_size.w = (int)((float)screen_pixel.w / content_scale_x) / cell_w;
+  term_size.h = (int)((float)screen_pixel.h / content_scale_y) / cell_h;
+  if (term_size.w < 1) term_size.w = 1;
+  if (term_size.h < 1) term_size.h = 1;
+  total = term_size.w * term_size.h;
 
-
-  term_size.w = (int)(screen_pixel.w - str_start_pos_x) / cell_w;
-  term_size.h = screen_pixel.h / cell_h;
-  total =  term_size.w*term_size.h;
-  
-  // 元のターミナルの設定をコピーし、安全なウィンドウサイズを指定すru
+  // 元のターミナルの設定をコピーし、安全なウィンドウサイズを指定する
   ws.ws_col = term_size.w; // 横幅 (壁の位置)
   ws.ws_row = term_size.h; // 縦幅
   ws.ws_xpixel=(unsigned short)screen_pixel.w;//横ピクセル
@@ -436,32 +156,26 @@ int main(void) {
     return 1;
   }
   // 変数の初期化
-  int key_slash = 0;
   int term_cell_alloc_size=total*4;
   int result=0;
-  int is_released_ctl_c = 0;
+  int nfds = 0;
+  ssize_t buf_size = 0;
 
-  struct cur_mgr *cur_mg = NULL; 
+  struct cur_mgr *cur_mg = NULL;
   struct term_context ctx;
-  struct term_cell *temp_term_cell = NULL; 
+  struct term_cell *temp_term_cell = NULL;
   struct line_info *lines = NULL;
   struct setting_data setting_data;
-  struct key_repeat key;
   struct pos old_term_cell_size = term_size;
 
-  double current_time = 0;
   double last_resize_time = 0;
-  RenderTexture2D render_tex = {0};
   char *read_buf = NULL;
-  const char* clip_bord_chr=NULL;
-  bool write_buff_overflow=false;
+  bool dirty = true;
   
   read_buf      = malloc(term_cell_alloc_size);
   temp_term_cell= calloc(term_cell_alloc_size,sizeof(struct term_cell));
   lines         = calloc(term_size.h,sizeof(struct line_info));
   cur_mg        = calloc(1,sizeof(struct cur_mgr));
-
-  key.key_data.key_type = NONE;
 
   // ctx構造体直接初期化
   ctx.term_cell = calloc(term_cell_alloc_size, sizeof(struct term_cell));
@@ -478,20 +192,19 @@ int main(void) {
   ctx.insert_mode = false;
   ctx.lines = lines;
   ctx.master_fd = master_fd;
+  ctx.window = wd.window;
   ctx.term_cell_alloc_size = &term_cell_alloc_size;
   ctx.kbd_insert_mode = false;
   ctx.cell_w = cell_w;
   ctx.cell_h = cell_h;
-  // [AI生成] RENDER_SCALE倍のオフスクリーンテクスチャを作成してスーパーサンプリングを行う
-  ctx.render_scale = RENDER_SCALE;
-  render_tex = LoadRenderTexture(screen_pixel.w * RENDER_SCALE, screen_pixel.h * RENDER_SCALE);
-  SetTextureFilter(render_tex.texture, TEXTURE_FILTER_POINT);
+  ctx.display_scale = content_scale_x;
+  ctx.render_scale = (int)(content_scale_x + 0.5f);
+  if (ctx.render_scale < 1) ctx.render_scale = 1;
 
   // カーソル初期化
   ctx.cur->shape = malloc(2);
   ctx.cur->lighting.blinking = true;
   ctx.cur->lighting.speed_ms = 500;
-  ctx.cur->font = myfont;
   ctx.cur->lighting.now_right = 0;
   ctx.cur->cur_pos.w = 0;
   ctx.cur->cur_pos.h = 0;
@@ -516,10 +229,20 @@ int main(void) {
   ctx.bash_parser_required_memb.osc_state = NORMAL;
   ctx.cur->allow_mode = NORMAL_MODE;
 
-  memset(&ctx.fixrd_cur_scr_range,0,sizeof(struct margin));
-  memset (&key,0,sizeof(struct key_repeat));
+  wd.master_fd = master_fd;
+  wd.nfds = &nfds;
+  wd.ctx = &ctx;
+  wd.kbd_data.clip_bord_chr =NULL;;
+  wd.kbd_data.epoll = epoll_list;
+  wd.kbd_data.write_buff_overflow = false;
+  wd.kbd_data.master_fd_ev_poll = &master_fd_ev_poll;
+  wd.kbd_data.epoll_fd_list = &epoll_fd_list;
+  wd.kbd_data.cftl_c_sig_counter = 0;
 
-  key.key_data.key_type = NONE;
+
+
+  memset(&ctx.fixrd_cur_scr_range,0,sizeof(struct margin));
+
   result = init_cur_mgr(cur_mg);
   load_settings(&setting_data);
 
@@ -531,256 +254,27 @@ int main(void) {
   load_cur_font(cur_mg);
   cur_font_set(ctx.cur, cur_mg, 1);
 
-  while (!WindowShouldClose())
+  // OTFフォントから全ASCII印刷可能文字のグリフをキャッシュする
   {
-    int nfds = epoll_wait(epoll_fd_list,epoll_list,EVENT_WAIT_MAX, 1);
-
-    //ペースト処理
-    if ((IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) && IsKeyPressed(KEY_V))
-    {
-      // [AI生成] 前フレームで write() が EAGAIN を返した（カーネルの送信バッファが満杯）場合、
-      // epoll を EPOLLOUT に切り替えて「空きができたら通知」を待っている。
-      // 今フレームの epoll_wait で EPOLLOUT イベントが来た = 書き込み再開可能。
-      if(write_buff_overflow==true && nfds>0)
-      {
-        for(int i=0;i<nfds;i++)
-        {
-          //もしepoll_list[i]番目のfdがmaster_fdだったら
-          if(((struct clientinfo*)epoll_list[i].data.ptr)->fd!=master_fd)
-            continue;
-          //もし書き込み可能かwriteの書き込みバッファが溢れていなかったら
-          if(epoll_list[i].events & EPOLLOUT)
-          {
-            if(clip_bord_chr == NULL && (clip_bord_chr = GetClipboardText()) == NULL)
-            {
-              break;
-            }
-          }
-        }
-      }
-      else if(write_buff_overflow==true)
-      {
-        if(clip_bord_chr == NULL && (clip_bord_chr = GetClipboardText()) == NULL)
-        {
-          break;
-        }
-      }
-      else 
-      {
-        clip_bord_chr = GetClipboardText();
-      }
-      
-      if(clip_bord_chr!=NULL)
-      {
-        size_t len = strlen(clip_bord_chr);   
-        if(len> 0) 
-        {
-          char temp_clip_bord_chr[len+1];
-          int temp_clip_bord_chr_counter=0;
-          for (size_t i = 0; i < len; i++) 
-          {
-            char c = (char)clip_bord_chr[i];
-            if ((c >= 32 && c <= 126) || c == '\n' || c == '\r' || c == '\t')
-            {
-              temp_clip_bord_chr[temp_clip_bord_chr_counter++]=c;
-            }
-          }
-          temp_clip_bord_chr[temp_clip_bord_chr_counter]='\0';
-          //何バイト読み込んだか
-          ssize_t now_fd_input_size=write(master_fd,temp_clip_bord_chr,strlen(temp_clip_bord_chr));
-          //次のループで再度書き込む位置を保存しておきたいのでclipbord_chr変数から書き込んだバイト数のポインタを加算する
-          if(now_fd_input_size>0)
-          {
-            clip_bord_chr+=now_fd_input_size;
-            //もし送られたバイト数がクリップボードbuffのデータより大きかったら初期化する
-            if(len<=now_fd_input_size)
-            {
-              clip_bord_chr=NULL;
-            }
-          }
-          else if(now_fd_input_size==0)
-          {
-            clip_bord_chr=NULL;
-            write_buff_overflow=false;
-            master_fd_ev_poll.events=EPOLLIN;
-            if(epoll_ctl(epoll_fd_list,EPOLL_CTL_MOD ,master_fd,&master_fd_ev_poll)!=0)
-            {
-              char err_buff[128];
-              snprintf(err_buff,128,"epoll_ctl func error errno = %d",errno);
-              error_log_write(err_buff);
-            }
-          }
-          // [AI生成] write() が EAGAIN を返した = カーネルの送信バッファが満杯でこれ以上送れない。
-          // epoll を EPOLLOUT に切り替え、次にバッファが空いた時点で再度通知を受け取る。
-          else if(now_fd_input_size==-1 && errno==EAGAIN)
-          {
-
-            master_fd_ev_poll.events=EPOLLOUT;
-            write_buff_overflow=true;
-
-            if(epoll_ctl(epoll_fd_list,EPOLL_CTL_MOD ,master_fd,&master_fd_ev_poll)!=0)
-            {
-              char err_buff[128];
-              snprintf(err_buff,128,"epoll_ctl func error errno = %d",errno);
-              error_log_write(err_buff);
-            }
-            break;
-          }
-          else
-          {//エラーの場合
-            error_log_write("write error");
-            return 0;
-          }
-        }
-      }
-      while (GetCharPressed() > 0) {} //ショートカットキーのバッファがたまっているので捨てる
+    struct pos font_size = {cell_w, cell_h};
+    if (load_otf_glyphs("/home/yuujirou07/myfont.otf", font_size,
+                        wd.glyphs, &wd.font_ascender) != 0) {
+      error_log_write("フォントグリフの読み込みに失敗しました");
     }
-    else if(IsKeyDown(KEY_LEFT_SUPER) && IsKeyDown(KEY_Q)){
-      break;
-    }
-    else if ((IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) && IsKeyPressed(KEY_D))
-    {
-      write(master_fd, "\x04", 1);
-      while (GetCharPressed() > 0) {}
-    }
-    else if(ctl_c_sig_check(&is_released_ctl_c,master_fd)==false)
-    {
+  }
 
-      ////英数字入力処理////////////
-      int key_code = 0;  
-      while ((key_code = GetCharPressed()) > 0 )
-      {
+  int old_width = 0;
+  int old_height = 0;
 
-        if (key_code  < 32 || key_code  >127)
-          continue; 
-        else if (IsAnyKeyReleased())
-          break;
-
-        char utf8[4]={0};
-        int len=0;
-        unicode_utf8_encoder(utf8,key_code ,&len);
-
-        if(key_code =='\\' || key_code == '_')
-          key_slash++;
-        else 
-          key_slash = 0;
-
-        if(key_slash <= 1){
-          if(key.key_data.key_type == NONE && key_slash < 1)
-          {
-            memcpy(&key.key_data.utf8,utf8,sizeof(char) * 4);
-            key.key_data.len = len;
-            key.key_repeat_st = GetTime();
-            key.key_data.key_type = ALPBT_NUM;
-          }
+  glfwGetFramebufferSize(wd.window, &old_width, &old_height);
 
 
-          ctx.cur->now_writing = true;
-          write(master_fd,utf8, len);
-        }
-      }
-      if(key_slash > 1)
-        key_slash  = 0;
-    }
+  while (!glfwWindowShouldClose(wd.window))
+  {
+    glfwPollEvents();
 
-    if (IsKeyPressed(KEY_ENTER)) 
-    {
-      char enter_key = 13;
-      write(master_fd, &enter_key, 1);
-    }
+    nfds = epoll_wait(epoll_fd_list,epoll_list,EVENT_WAIT_MAX, 1);
 
-    if (IsKeyPressed(KEY_BACKSPACE))
-    {
-      char c = 0x7f;
-
-      write(master_fd, &c, 1);
-      if(key.key_data.key_type == NONE)
-      {
-        key.key_data.key_repeat_state = true;
-        key.key_repeat_st = GetTime();
-        key.key_data.key_type = BS;
-      }
-      
-    }
-    if (IsKeyPressed(KEY_RIGHT))
-    {
-      //右のセルが空白ならカーソルをブロックする
-      if(ctx.cur->cur_pos.w < ctx.term_size.w)
-      {
-        if(ctx.cur->cur_pos.w < ctx.temp_cur_pos.w+1 || 
-          ctx.term_cell[ctx.cur->cur_pos.h * ctx.term_size.w + ctx.cur->cur_pos.w + 1].character!=' ')
-        {
-
-          cur_allow_write(ctx.cur->allow_mode, master_fd, KEY_RIGHT);
-
-          if(key.key_data.key_type == NONE)
-          {
-            key.key_data.key_repeat_state = true;
-            key.key_repeat_st = GetTime();
-            key.key_data.key_type = RIGHT_ALLOW;
-          }
-        }
-      }
-    }
-    //ESC入力処理
-    if(IsKeyPressed(KEY_ESCAPE)) write(master_fd, "\x1b", 1);
-    //fnキー入力処理
-    if (IsKeyPressed(KEY_F1))  write(master_fd, "\x1bOP",   3);
-    if (IsKeyPressed(KEY_F2))  write(master_fd, "\x1bOQ",   3);
-    if (IsKeyPressed(KEY_F3))  write(master_fd, "\x1bOR",   3);
-    if (IsKeyPressed(KEY_F4))  write(master_fd, "\x1bOS",   3);
-    if (IsKeyPressed(KEY_F5))  write(master_fd, "\x1b[15~", 5);
-    if (IsKeyPressed(KEY_F6))  write(master_fd, "\x1b[17~", 5);
-    if (IsKeyPressed(KEY_F7))  write(master_fd, "\x1b[18~", 5);
-    if (IsKeyPressed(KEY_F8))  write(master_fd, "\x1b[19~", 5);
-    if (IsKeyPressed(KEY_F9))  write(master_fd, "\x1b[20~", 5);
-    if (IsKeyPressed(KEY_F10)) write(master_fd, "\x1b[21~", 5);
-    if (IsKeyPressed(KEY_F11)) write(master_fd, "\x1b[23~", 5);
-    if (IsKeyPressed(KEY_F12)) write(master_fd, "\x1b[24~", 5);
-
-    //ナビゲーションキー入力処理
-    if (IsKeyPressed(KEY_HOME))      write(master_fd, "\x1b[1~", 4);
-    if (IsKeyPressed(KEY_INSERT))    write(master_fd, "\x1b[2~", 4);
-    if (IsKeyPressed(KEY_DELETE))    write(master_fd, "\x1b[3~", 4);
-    if (IsKeyPressed(KEY_END))       write(master_fd, "\x1b[4~", 4);
-    if (IsKeyPressed(KEY_PAGE_UP))   write(master_fd, "\x1b[5~", 4);
-    if (IsKeyPressed(KEY_PAGE_DOWN)) write(master_fd, "\x1b[6~", 4);
-
-    if (IsKeyPressed(KEY_TAB))
-      write(master_fd, "\t", 1);
-
-    if (IsKeyPressed(KEY_LEFT)){
-
-      cur_allow_write(ctx.cur->allow_mode, master_fd, KEY_LEFT);
-
-      if(key.key_data.key_type == NONE)
-      {
-        key.key_data.key_repeat_state = true;
-        key.key_repeat_st = GetTime();
-        key.key_data.key_type = LEFT_ALLOW;
-      }
-    }
-    if(IsKeyPressed(KEY_UP))
-    {
-      cur_allow_write(ctx.cur->allow_mode, master_fd, KEY_UP);
-      if(key.key_data.key_type == NONE)
-      {
-        key.key_data.key_repeat_state = true;
-        key.key_repeat_st = GetTime();
-        key.key_data.key_type = UP_ALLOW;
-      }
-    }
-    if(IsKeyPressed(KEY_DOWN))
-    {
-      cur_allow_write(ctx.cur->allow_mode, master_fd, KEY_DOWN);
-      if(key.key_data.key_type == NONE)
-      {
-        key.key_data.key_repeat_state = true;
-        key.key_repeat_st = GetTime();
-        key.key_data.key_type = DOWN_ALLOW;
-      }
-
-    }
     if(nfds>0)
     {
       for(int i=0;i<nfds;i++)
@@ -794,10 +288,12 @@ int main(void) {
         
         while (1) 
         {
-          ssize_t buf_size = read(master_fd, read_buf, term_cell_alloc_size - 1);
+          buf_size = read(master_fd, read_buf, term_cell_alloc_size - 1);
           if (buf_size > 0)
+          {
             bash_str_parse(read_buf, buf_size, &ctx);
-          
+            dirty = true;
+          }
           else if(buf_size==0)
             break;
           
@@ -820,16 +316,12 @@ int main(void) {
       }
     }
 
-    // キーリピート関数
-    key_repeat(&key,master_fd,setting_data,&ctx);
-
-
     ////マウスカーソル点滅再開処理//////
     if( ctx.cur->now_writing == true){
       if(ctx.cur->writing_st_time <= 0)
-        ctx.cur->writing_st_time = GetTime();
+        ctx.cur->writing_st_time = glfwGetTime();
  
-      ctx.cur->writing_end_time = GetTime();
+      ctx.cur->writing_end_time = glfwGetTime();
       
       if(ctx.cur->writing_end_time - ctx.cur->writing_st_time < setting_data.cursor_blink_restart_timeout_seconds)
         goto CUR_RIGTHING_END_POINT;
@@ -843,22 +335,22 @@ int main(void) {
     CUR_RIGTHING_END_POINT:
     
 
+    int current_width;
+    int current_height;
+    glfwGetFramebufferSize(wd.window, &current_width, &current_height);
 
-    if(IsWindowResized()){
-      last_resize_time = GetTime();
+    if (current_width != old_width || current_height != old_height) {
+      last_resize_time = glfwGetTime();
+      old_width = current_width;
+      old_height = current_height;
     }
 
     //リサイズ処理（デバウンス: 0.1秒間リサイズが止まってから実行）
-    if(last_resize_time > 0 && GetTime() - last_resize_time > 0.1){
+    if(last_resize_time > 0 && glfwGetTime() - last_resize_time > 0.1){
       old_term_cell_size = term_size;
 
       //画面サイズ・セル数を更新
-      window_resized_update_memb(&screen_pixel,&term_size,&ctx);
-
-      // [AI生成] リサイズ後は新しいウィンドウサイズに合わせてRenderTextureを再作成する
-      UnloadRenderTexture(render_tex);
-      render_tex = LoadRenderTexture(screen_pixel.w * RENDER_SCALE, screen_pixel.h * RENDER_SCALE);
-      SetTextureFilter(render_tex.texture, TEXTURE_FILTER_POINT);
+      window_resized_update_memb(wd.window,&screen_pixel,&term_size,&ctx);
 
       total=term_size.h*term_size.w;
       ctx.term_size=term_size;
@@ -924,46 +416,134 @@ int main(void) {
         ctx.lines = new_lines;
       }
 
+
       last_resize_time = 0;
     }
-    
-      
 
-    // [AI生成] オフスクリーンテクスチャにRENDER_SCALE倍の座標で描画し、
-    // その後ウィンドウサイズに縮小して表示するスーパーサンプリング描画
-    int rs = ctx.render_scale;
-    BeginTextureMode(render_tex);
-    ClearBackground(BLACK);
-    for (int i = 0; i < term_size.h; i++){
-      Color fg;
-      Color bg;
 
-      for (int j = 0; j < term_size.w; j++){
-        int idx = i * term_size.w + j;
-        int  c = ctx.term_cell[idx].character;
-        if (c == 0) c = ' ';
 
-        fg = ctx.term_cell[idx].fg_color.a == 0 ? WHITE : ctx.term_cell[idx].fg_color;
-        bg = ctx.term_cell[idx].bg_color.a == 0 ? BLACK : ctx.term_cell[idx].bg_color;
-        if (bg.r != 0 || bg.g != 0 || bg.b != 0) {
-          DrawRectangle(j * ctx.cell_w * rs, i * ctx.cell_h * rs, ctx.cell_w * rs, ctx.cell_h * rs, bg);
+
+    if(dirty){
+      // 前のフレームが完全に終わるのをCPU側で待つ
+        // 第2引数の TRUE は「フェンスがシグナル状態になるまで待つ」という意味
+        // 最後の引数はタイムアウト時間（UINT64_MAX = 無限に待つ）
+        vkWaitForFences(wd.device, 1, &wd.inFlightFence, VK_TRUE, UINT64_MAX);
+        // 次のフレームのために、フェンスを非シグナル状態（未完了）にリセットしておく
+        vkResetFences(wd.device, 1, &wd.inFlightFence);
+
+        uint32_t imageIndex;
+        // 画像が利用可能になったら imageAvailableSemaphore をシグナル状態にしてもらうよう依頼
+        vkAcquireNextImageKHR(wd.device, wd.swapchain, UINT64_MAX, wd.imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
+
+        VkCommandBuffer commandBuffer = wd.commandBuffers[imageIndex];
+
+        // CPUでterm_cellをBGRAピクセルとしてステージングバッファに描画
+        render_cells_to_buffer(&wd);
+
+        // コマンドバッファの録音開始
+        vkResetCommandBuffer(commandBuffer, 0);
+        VkCommandBufferBeginInfo beginInfo = {0};
+        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        vkBeginCommandBuffer(commandBuffer, &beginInfo);
+
+        //UNDEFINED → TRANSFER_DST_OPTIMAL
+        VkImageMemoryBarrier toTransferDst = {0};
+        toTransferDst.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        toTransferDst.oldLayout           = VK_IMAGE_LAYOUT_UNDEFINED;
+        toTransferDst.newLayout           = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        toTransferDst.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toTransferDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toTransferDst.image               = wd.swapchainImages[imageIndex];
+        toTransferDst.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        toTransferDst.subresourceRange.levelCount = 1;
+        toTransferDst.subresourceRange.layerCount = 1;
+        toTransferDst.srcAccessMask       = 0;
+        toTransferDst.dstAccessMask       = VK_ACCESS_TRANSFER_WRITE_BIT;
+        vkCmdPipelineBarrier(commandBuffer,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0, 0, NULL, 0, NULL, 1, &toTransferDst);
+
+        // ステージングバッファ → スワップチェーン画像へコピー
+        VkBufferImageCopy region = {0};
+        region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        region.imageSubresource.layerCount = 1;
+        region.imageExtent.width           = wd.chosenExtent.width;
+        region.imageExtent.height          = wd.chosenExtent.height;
+        region.imageExtent.depth           = 1;
+        vkCmdCopyBufferToImage(commandBuffer, wd.stagingBuffer,
+            wd.swapchainImages[imageIndex],
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+        // バリア②: TRANSFER_DST_OPTIMAL → PRESENT_SRC_KHR
+        VkImageMemoryBarrier toPresent = {0};
+        toPresent.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        toPresent.oldLayout           = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        toPresent.newLayout           = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        toPresent.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toPresent.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toPresent.image               = wd.swapchainImages[imageIndex];
+        toPresent.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        toPresent.subresourceRange.levelCount = 1;
+        toPresent.subresourceRange.layerCount = 1;
+        toPresent.srcAccessMask       = VK_ACCESS_TRANSFER_WRITE_BIT;
+        toPresent.dstAccessMask       = 0;
+        vkCmdPipelineBarrier(commandBuffer,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+            0, 0, NULL, 0, NULL, 1, &toPresent);
+
+        // 録音終了
+        if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
+            fprintf(stderr, "コマンドバッファの録音に失敗しました。\n");
+            break;
         }
-        DrawTextCodepoint(myfont, c, (Vector2){j * ctx.cell_w * rs, i * ctx.cell_h * rs}, ctx.cell_h * rs, fg);
-      }
-    }
-    draw_cursor(ctx.cur, &current_time, &ctx);
-    EndTextureMode();
 
-    BeginDrawing();
-    ClearBackground(BLACK);
-    // [AI生成] RenderTextureはY軸が反転しているためsrc heightをマイナスで指定する
-    DrawTexturePro(render_tex.texture,
-      (Rectangle){0, 0, (float)render_tex.texture.width, -(float)render_tex.texture.height},
-      (Rectangle){0, 0, (float)screen_pixel.w, (float)screen_pixel.h},
-      (Vector2){0, 0}, 0.0f, WHITE);
-    EndDrawing();
-  
+        VkSubmitInfo submitInfo = {0};
+        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        VkSemaphore waitSemaphores[] = {wd.imageAvailableSemaphore};
+        // 転送ステージでセマフォを待つ
+        VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_TRANSFER_BIT};
+        submitInfo.waitSemaphoreCount = 1;
+        submitInfo.pWaitSemaphores = waitSemaphores;
+        submitInfo.pWaitDstStageMask = waitStages;
+
+        // 送信するコマンドバッファを指定
+        submitInfo.commandBufferCount = 1;
+        submitInfo.pCommandBuffers = &commandBuffer;
+
+        // 処理がすべて終わったらシグナル状態にするセマフォ
+        VkSemaphore signalSemaphores[] = {wd.renderFinishedSemaphore};
+        submitInfo.signalSemaphoreCount = 1;
+        submitInfo.pSignalSemaphores = signalSemaphores;
+
+        // 第3引数に inFlightFence を渡すことで、GPUの全処理が終わった瞬間にフェンスが自動でシグナル状態になります
+        if (vkQueueSubmit(wd.graphicsQueue, 1, &submitInfo, wd.inFlightFence) != VK_SUCCESS) {
+            fprintf(stderr, "コマンドバッファの送信に失敗しました。\n");
+            break;
+        }
+
+        //描き終わったキャンバスを OS（Wayland）に提出（Present）して画面に映す
+        VkPresentInfoKHR presentInfo = {0};
+        presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+
+        // 提出する前に、GPUの描画が完全に終わる（renderFinishedSemaphoreがシグナルされる）のを待つ
+        presentInfo.waitSemaphoreCount = 1;
+        presentInfo.pWaitSemaphores = signalSemaphores;
+
+        VkSwapchainKHR swapchains[] = {wd.swapchain};
+        presentInfo.swapchainCount = 1;
+        presentInfo.pSwapchains = swapchains;
+        presentInfo.pImageIndices = &imageIndex;
+
+        // 画面への提示を実行
+        vkQueuePresentKHR(wd.graphicsQueue, &presentInfo);
+        dirty = false;
+    }
   }
+
+
+
+  free_otf_glyphs(wd.glyphs);
+
   // ctxのクリーンアップ
   if (ctx.term_cell) free(ctx.term_cell);
   if (ctx.alt_term_cell) free(ctx.alt_term_cell);
@@ -978,8 +558,8 @@ int main(void) {
   
   free(master_fd_ev_poll.data.ptr);
   close(master_fd);
-  UnloadRenderTexture(render_tex);
-  CloseWindow();
+  glfwDestroyWindow(wd.window);
+  glfwTerminate();
   close(epoll_fd_list);
 }
 
@@ -1730,7 +1310,7 @@ void osc_mode(char *buff, struct term_context *ctx, char *osc_pal_chr){
       if (new_win_title != NULL) {
         new_win_title = strchr(new_win_title, '~');
         if (new_win_title != NULL) {
-          SetWindowTitle(new_win_title);
+          glfwSetWindowTitle(ctx->window, new_win_title);
         }
       }
       break;
@@ -1787,7 +1367,7 @@ void osc_mode(char *buff, struct term_context *ctx, char *osc_pal_chr){
     case 52:{
       char *decode_result = base64_decoder(osc_pal_chr);
       if (decode_result == NULL) break;
-      SetClipboardText(decode_result);
+      glfwSetClipboardString(ctx->window, decode_result);
       free(decode_result);
       break;
     }
@@ -1820,40 +1400,6 @@ char *mymemcpy(char *start, char *end, enum last_chr_mode mode){
       break;
   }
   return cpy;
-}
-
-void draw_cursor(struct cursor *cur, double *current_time, struct term_context *ctx){
-  if (!cur->lighting.blinking) return;
-
-  double now_time = GetTime();
-
-  if(cur->now_writing)
-    cur->lighting.now_right = true;
-
-  else if (now_time - *current_time >= cur->lighting.speed_ms / 1000){
-    *current_time = now_time;
-    cur->lighting.now_right = !cur->lighting.now_right;
-  }
-  
-  if (cur->lighting.now_right) {
-    // [AI生成] render_scaleを掛けてオフスクリーンテクスチャ内の座標に変換する
-    int rs = ctx->render_scale;
-    int draw_w = cur->cur_pos.w >= ctx->term_size.w ? ctx->term_size.w - 1 : cur->cur_pos.w;
-    DrawTextEx(
-      cur->font,
-      cur->shape,
-      (Vector2){draw_w * ctx->cell_w * rs, cur->cur_pos.h * ctx->cell_h * rs},
-      ctx->cell_h * rs,
-      0,
-      WHITE
-    );
-  }
-}
-
-bool IsAnyKeyReleased(void) {
-    for (int i = 32; i <= 126; i++) if (IsKeyReleased(i)) return true;
-    if (IsKeyReleased(KEY_ENTER) || IsKeyReleased(KEY_BACKSPACE)) return true;
-    return false;
 }
 
 void load_cur_font(struct cur_mgr *cur_mgr){
@@ -2096,30 +1642,24 @@ void erase_chr(struct term_context *ctx,int n){
     ctx->term_cell[idx+i].is_real_chr = false;
   }
 }
-void error_log_write(char *error_statement){
-  FILE *error_f;
-  error_f=fopen("error_log.txt","a");
+void window_resized_update_memb(GLFWwindow *window, struct pos *screen_pixel,struct pos *term_size,struct term_context *ctx){
+  glfwGetFramebufferSize(window, &screen_pixel->w, &screen_pixel->h);
 
-  if(error_f==NULL){
-    perror("cant open error_log.txt");
-    exit(1);
-  }
-  char buff[strlen(error_statement  )+1];
+  // [改善] 別解像度モニタへ移動した場合に備え、拡大率を取り直す
+  float xscale = 1.0f, yscale = 1.0f;
+  glfwGetWindowContentScale(window, &xscale, &yscale);
+  ctx->display_scale = xscale;
 
-  snprintf(buff,strlen(error_statement  )+1,"%s\n",error_statement);
+  int rs = (int)(xscale + 0.5f);
+  if (rs < 1) rs = 1;
+  ctx->render_scale = rs;
 
-  ssize_t size=fputs(buff,error_f);
-  if(size<0)
-    perror("can not write on error_log.txt");
+  int virtual_w = screen_pixel->w / ctx->display_scale;
+  int virtual_h = screen_pixel->h / ctx->display_scale;
 
-  fclose(error_f);
-}
-void window_resized_update_memb(struct pos *screen_pixel,struct pos *term_size,struct term_context *ctx){
-  screen_pixel->w=GetScreenWidth();
-  screen_pixel->h=GetScreenHeight();
-
-  term_size->w = (int)(screen_pixel->w) / ctx->cell_w;
-  term_size->h = (int)screen_pixel->h / ctx->cell_h;
+  // [改善] 1セルの実寸 cell*render_scale で割って桁数・行数を求める
+  term_size->w = virtual_w / (ctx->cell_w * ctx->render_scale);
+  term_size->h = virtual_h / (ctx->cell_h * ctx->render_scale);
   if (term_size->w <= 0) term_size->w = 1;
   if (term_size->h <= 0) term_size->h = 1;
 }
@@ -2226,352 +1766,24 @@ struct term_cell *allocate_cell(struct term_cell* term_cell,int size)
   return temp;
 }
 
-void key_repeat(struct key_repeat *key,int master_fd,struct setting_data setting_data,struct term_context *ctx){
-  ////英数字キーリピート処理//////
-    // [AI生成] gotoはキーリピート判定の複数条件（キー離し / 初回ディレイ / 連射間隔）を
-    // ネストせずにまとめてスキップするために使っている。
-    // KEY_REPEAT_END_POINT に飛べば write() せずに次の処理へ進む。
-  switch(key->key_data.key_type){
-    case ALPBT_NUM:
-    {
-
-      if(IsAnyKeyReleased())
-      {
-        key->key_data.key_type = NONE;
-        break;
-      }
-
-      double now_time = GetTime();
-
-      // [AI生成] キーを押してから key_repeat_interval 秒以内は連射しない（初回ディレイ）
-      if(now_time - key->key_repeat_st < setting_data.key_repeat_interval)
-        break;
-
-      // [AI生成] 前回の連射から 50ms 未満ならまだ送らない（連射レート制限）
-      if(now_time - key->key_repeat_interval < 0.05)
-        break;
-
-
-      write(master_fd,key->key_data.utf8,key->key_data.len);
-
-      //書き込み中はカーソルの点滅をなくす
-      ctx->cur->now_writing = true;
-      key->key_repeat_interval = now_time;
-
-      break;
-    }
-    case BS:
-    {
-      //バックスペースリピート処理
-    if(key->key_data.key_type == BS)
-    {
-      key->key_repeat_interbal_ed  = GetTime();
-
-      if((GetTime() - key->key_repeat_st) < 0.6)
-        break;
-
-     
-      if(IsKeyUp(KEY_BACKSPACE))
-      {
-        key->key_data.key_type = NONE;
-        break;
-      }
-
-      if(key->key_repeat_interbal_ed - key->key_repeat_interbal_st < 0.05)
-        break;;
-     
-      char c = 0x7f;
-      write(master_fd, &c, 1);
-
-      key->key_repeat_interbal_st = key->key_repeat_interbal_ed;
-      
-      //書き込み中はカーソルの点滅をなくす
-      ctx->cur->now_writing = true;
-    }
-      break;
-    }
-    case RIGHT_ALLOW:
-    {
-      double time = GetTime();
-      if(time - key->key_repeat_st < setting_data.key_repeat_interval)
-        break;
-
-      if(IsKeyUp(KEY_RIGHT))
-      {
-        key->key_data.key_type = NONE;
-        break;
-      }
-
-      key->key_repeat_interbal_ed = time;
-
-      if(key->key_repeat_interbal_ed - key->key_repeat_interbal_st < 0.05)
-        break;
-
-      cur_allow_write(ctx->cur->allow_mode, master_fd, KEY_RIGHT);
-
-      key->key_repeat_interbal_st = key->key_repeat_interbal_ed;
-
-      //書き込み中はカーソルの点滅をなくす
-      ctx->cur->now_writing = true;
-      break;
-    }
-    case LEFT_ALLOW:
-    {
-      double time = GetTime();
-      if(time - key->key_repeat_st < setting_data.key_repeat_interval)
-        break;
-
-      if(IsKeyUp(KEY_LEFT))
-      {
-        key->key_data.key_type = NONE;
-        break;
-      }
-
-      key->key_repeat_interbal_ed = time;
-
-      if(key->key_repeat_interbal_ed - key->key_repeat_interbal_st < 0.05)
-        break;
-
-      cur_allow_write(ctx->cur->allow_mode, master_fd, KEY_LEFT);
-
-      key->key_repeat_interbal_st = key->key_repeat_interbal_ed;
-
-      //書き込み中はカーソルの点滅をなくす
-      ctx->cur->now_writing = true;
-      break;
-    }
-    case UP_ALLOW:
-    {
-      double time = GetTime();
-      if(time - key->key_repeat_st < setting_data.key_repeat_interval)
-        break;
-
-      if(IsKeyUp(KEY_UP))
-      {
-        key->key_data.key_type = NONE;
-        break;
-      }
-
-      key->key_repeat_interbal_ed = time;
-
-      if(key->key_repeat_interbal_ed - key->key_repeat_interbal_st < 0.05)
-        break;
-
-      cur_allow_write(ctx->cur->allow_mode, master_fd, KEY_UP);
-
-      key->key_repeat_interbal_st = key->key_repeat_interbal_ed;
-
-      //書き込み中はカーソルの点滅をなくす
-      ctx->cur->now_writing = true;
-      break;
-    }
-    case DOWN_ALLOW:
-    {
-      double time = GetTime();
-      if(time - key->key_repeat_st < setting_data.key_repeat_interval)
-        break;
-
-      if(IsKeyUp(KEY_DOWN))
-      {
-        key->key_data.key_type = NONE;
-        break;
-      }
-
-      key->key_repeat_interbal_ed = time;
-
-      if(key->key_repeat_interbal_ed - key->key_repeat_interbal_st < 0.05)
-        break;
-
-      cur_allow_write(ctx->cur->allow_mode, master_fd, KEY_DOWN);
-
-      key->key_repeat_interbal_st = key->key_repeat_interbal_ed;
-
-      //書き込み中はカーソルの点滅をなくす
-      ctx->cur->now_writing = true;
-      break;
-    }
-    case NONE:
-    {
-      break;
-      
-    }
-  }
-  return;
-}
-
-bool ctl_c_sig_check(int *counter,int master_fd){
-   
-  if(*counter == 1 && IsKeyUp(KEY_LEFT_CONTROL)){
-    *counter = 0;
-    return 0;
-  }
-  if(*counter > 1 && IsKeyUp(KEY_C)){
-    *counter = 0;
-  }
-
-  if(*counter == 0 && IsKeyDown(KEY_LEFT_CONTROL))
-    (*counter)++;
-
-  else if(*counter == 1 && IsKeyDown(KEY_C))
-  {
-    write(master_fd,"\x03",1);
-    (*counter) ++;
-    return 1;
-  }
-  return 0;
-}
-
 void cur_allow_write(enum cur_allow_mode mode, int master_fd, int key_code) {
   const char *seq = NULL;
   if (mode == AP_MODE) {
     switch (key_code) {
-      case KEY_UP:    seq = "\x1bOA"; break;
-      case KEY_DOWN:  seq = "\x1bOB"; break;
-      case KEY_RIGHT: seq = "\x1bOC"; break;
-      case KEY_LEFT:  seq = "\x1bOD"; break;
+      case GLFW_KEY_UP:    seq = "\x1bOA"; break;
+      case GLFW_KEY_DOWN:  seq = "\x1bOB"; break;
+      case GLFW_KEY_RIGHT: seq = "\x1bOC"; break;
+      case GLFW_KEY_LEFT:  seq = "\x1bOD"; break;
       default: return;
     }
   } else {
     switch (key_code) {
-      case KEY_UP:    seq = "\x1b[A"; break;
-      case KEY_DOWN:  seq = "\x1b[B"; break;
-      case KEY_RIGHT: seq = "\x1b[C"; break;
-      case KEY_LEFT:  seq = "\x1b[D"; break;
+      case GLFW_KEY_UP:    seq = "\x1b[A"; break;
+      case GLFW_KEY_DOWN:  seq = "\x1b[B"; break;
+      case GLFW_KEY_RIGHT: seq = "\x1b[C"; break;
+      case GLFW_KEY_LEFT:  seq = "\x1b[D"; break;
       default: return;
     }
   }
   write(master_fd, seq, strlen(seq));
-}
-
-// PSF2フォント(.psfu / .psfu.gz 両対応)をビットマップテクスチャとして読み込む。
-// TTFパイプラインを経由しないので、アンチエイリアス・ヒンティングによる線の太りが起きない。
-// .gz ファイルは zcat でパイプ展開し、全データをメモリに読んでからパースする。
-Font LoadPSF2Font(const char *filename) {
-  static const uint8_t PSF2_MAGIC[4] = {0x72, 0xb5, 0x4a, 0x86};
-  typedef struct {
-    uint8_t  magic[4];
-    uint32_t version;
-    uint32_t headersize;
-    uint32_t flags;
-    uint32_t numglyph;
-    uint32_t bytesperglyph;
-    uint32_t height;
-    uint32_t width;
-  } PSF2Header;
-
-  Font font = {0};
-
-  size_t name_len = strlen(filename);
-  bool is_gz = name_len > 3 && strcmp(filename + name_len - 3, ".gz") == 0;
-  FILE *f;
-  if (is_gz) {
-    char cmd[1024];
-    snprintf(cmd, sizeof(cmd), "zcat '%s'", filename);
-    f = popen(cmd, "r");
-  } else {
-    f = fopen(filename, "rb");
-  }
-  if (!f) {
-    TraceLog(LOG_ERROR, "LoadPSF2Font: cannot open %s", filename);
-    return font;
-  }
-
-  // パイプはシーク不可なのでファイル全体をバッファに読み込む
-  size_t buf_size = 0;
-  size_t buf_cap  = 131072;
-  uint8_t *buf = malloc(buf_cap);
-  if (!buf) { is_gz ? pclose(f) : fclose(f); return font; }
-  while (1) {
-    size_t n = fread(buf + buf_size, 1, buf_cap - buf_size, f);
-    buf_size += n;
-    if (n == 0) break;
-    if (buf_size == buf_cap) {
-      buf_cap *= 2;
-      uint8_t *tmp = realloc(buf, buf_cap);
-      if (!tmp) { free(buf); is_gz ? pclose(f) : fclose(f); return font; }
-      buf = tmp;
-    }
-  }
-  is_gz ? pclose(f) : fclose(f);
-
-  if (buf_size < sizeof(PSF2Header)) {
-    TraceLog(LOG_ERROR, "LoadPSF2Font: file too small: %s", filename);
-    free(buf); return font;
-  }
-
-  PSF2Header hdr;
-  memcpy(&hdr, buf, sizeof(hdr));
-  if (memcmp(hdr.magic, PSF2_MAGIC, 4) != 0) {
-    TraceLog(LOG_ERROR, "LoadPSF2Font: invalid PSF2 header in %s", filename);
-    free(buf); return font;
-  }
-
-  int numGlyphs     = (int)hdr.numglyph;
-  int bytesPerGlyph = (int)hdr.bytesperglyph;
-  int glyphH        = (int)hdr.height;
-  int glyphW        = (int)hdr.width;
-  int bytesPerRow   = (glyphW + 7) / 8;
-  size_t data_offset = (size_t)hdr.headersize;
-
-  if (buf_size < data_offset + (size_t)numGlyphs * (size_t)bytesPerGlyph) {
-    TraceLog(LOG_ERROR, "LoadPSF2Font: file truncated: %s", filename);
-    free(buf); return font;
-  }
-
-  uint8_t *glyphData = buf + data_offset;
-
-  // テクスチャアトラス: 16列×N行
-  int atlasW    = 16 * glyphW;
-  int atlasRows = (numGlyphs + 15) / 16;
-  int atlasH    = atlasRows * glyphH;
-
-  Color *pixels = calloc((size_t)(atlasW * atlasH), sizeof(Color));
-  if (!pixels) { free(buf); return font; }
-
-  for (int g = 0; g < numGlyphs; g++) {
-    int baseX = (g % 16) * glyphW;
-    int baseY = (g / 16) * glyphH;
-    uint8_t *glyph = glyphData + g * bytesPerGlyph;
-    for (int y = 0; y < glyphH; y++) {
-      for (int x = 0; x < glyphW; x++) {
-        int bit = (glyph[y * bytesPerRow + x / 8] >> (7 - (x % 8))) & 1;
-        if (bit) pixels[(baseY + y) * atlasW + (baseX + x)] = WHITE;
-      }
-    }
-  }
-
-  Image atlas = {
-    .data    = pixels,
-    .width   = atlasW,
-    .height  = atlasH,
-    .mipmaps = 1,
-    .format  = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8,
-  };
-  font.texture = LoadTextureFromImage(atlas);
-  UnloadImage(atlas); // atlas.data(=pixels) をここで解放
-  free(buf);
-
-  font.baseSize     = glyphH;
-  font.glyphCount   = numGlyphs;
-  font.glyphPadding = 0;
-  font.recs   = malloc((size_t)numGlyphs * sizeof(Rectangle));
-  font.glyphs = malloc((size_t)numGlyphs * sizeof(GlyphInfo));
-
-  for (int g = 0; g < numGlyphs; g++) {
-    int col = g % 16;
-    int row = g / 16;
-    font.recs[g] = (Rectangle){(float)(col * glyphW), (float)(row * glyphH),
-                                (float)glyphW, (float)glyphH};
-    font.glyphs[g] = (GlyphInfo){
-      .value    = g,
-      .offsetX  = 0,
-      .offsetY  = 0,
-      .advanceX = glyphW,
-      .image    = {0},
-    };
-  }
-
-  TraceLog(LOG_INFO, "LoadPSF2Font: loaded %d glyphs (%dx%d) from %s",
-           numGlyphs, glyphW, glyphH, filename);
-  return font;
 }

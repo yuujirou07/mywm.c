@@ -67,6 +67,13 @@ executable(
         wayland_server,
         xkbcommon,
         gdk_pixbuf,
-        libinput_dep, 
+        libinput_dep,
     ],
+)
+
+ncurses = dependency('ncurses')
+executable(
+    'txt_editor',
+    ['my_txt_editor/main.c', 'my_txt_editor/txt_editor_func.c'],
+    dependencies: [ncurses],
 )
