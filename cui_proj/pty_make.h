@@ -215,16 +215,13 @@ Color xterm_256color(int n);
 
 struct return_binary *char_conbert_binary_arry(char *osc_pal_chr);
 struct csi_data csi_mode_pal_parse(char *buff, int *i, int size);
-struct term_cell *allocate_cell(struct term_cell* term_cell,int size);
 
-enum mode_state get_mode(char *buff, int *i, int size);
-enum visiavle_chr check_visible_chr(char buff);
 enum parse_state buff_state_check(char buff, enum parse_state now_state);
 
 void cur_allow_write(enum cur_allow_mode mode, int master_fd, int key_code);
-void reflow_terminal_text(struct term_context *ctx, struct pos old_term_size, struct term_cell **temp_term_cell,int term_cell_alloc_size);
+void window_resized_update_memb(GLFWwindow *window, struct pos *screen_pixel, struct pos *term_size, struct term_context *ctx);
+void reflow_terminal_text(struct term_context *ctx, struct pos old_term_size, struct term_cell **temp_term_cell, int term_cell_alloc_size);
 void unicode_utf8_encoder(char *utf8,int unicode, int *len);
-void window_resized_update_memb(GLFWwindow *window,struct pos *screen_size,struct pos *term_size,struct term_context *ctx);
 void erase_chr(struct term_context *ctx,int n);
 void char_arry_insert_chr(struct term_context *ctx,int n);
 void char_array_alignment(struct term_context *ctx,int n);
@@ -236,7 +233,6 @@ void ls_chr_parse(struct term_context *ctx, char buff, Color *now_fg_color, Colo
 void bs_st1(struct pos *pos, char *buff, int cols, int *buff_counter, unsigned int *bash_line_total_ciunt);
 void cur_font_set(struct cursor *cur, struct cur_mgr *cur_mgr, int n);
 void cur_set_default(struct cur_mgr *cur_mgr);
-void cur_mgr_free(struct cur_mgr *cur_mgr);
 void bash_str_parse(char *buff, ssize_t size, struct term_context *ctx);
 void csi_mode_parse(char *buff, int *i, int size);
 void load_cur_font(struct cur_mgr *cur_mgr);
@@ -248,7 +244,6 @@ void esc_single_dispatch(struct term_context *ctx, char c);
 
 char *base64_decoder(char *osc_pal_chr);
 char ** split_line(int cols, char *buff_str);
-char *mymemcpy(char *start, char*end, enum last_chr_mode mode);
 
 int init_cur_mgr(struct cur_mgr *cur_mgr);
 int check_key();

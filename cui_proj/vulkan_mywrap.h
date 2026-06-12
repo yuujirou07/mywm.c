@@ -9,6 +9,11 @@
 
 struct term_context;
 
+// フォントサイズ変更用の定数（cell_hを基準にcell_wは半分の比率で追従させる）
+#define FONT_CELL_H_MIN  8
+#define FONT_CELL_H_MAX  48
+#define FONT_CELL_H_STEP 2
+
 struct windata
 {
     int master_fd;
@@ -31,6 +36,7 @@ struct windata
     VkQueue graphicsQueue;
     VkSurfaceKHR surface;
     VkExtent2D chosenExtent;
+    VkExtent2D renderExtent;
 
     VkSwapchainKHR swapchain;
     uint32_t swapchainImageCount;
@@ -50,16 +56,32 @@ struct windata
     void *stagingMapped;
     uint32_t stagingSize;
     VkPhysicalDeviceMemoryProperties memProps;
+    VkFormat swapchainImageFormat;
 
     // フォント情報（レンダリングに使用）
     struct glyph_data glyphs[128];
     int font_ascender;
+
+    // フォントサイズが変更され、term_sizeの再計算が必要なことを示すフラグ
+    bool font_size_changed;
+
+    // 差分描画用：直前フレームのセル内容・カーソル位置・画面構成
+    struct term_cell *prev_term_cell;
+    struct pos prev_term_size;
+    int prev_cur_col;
+    int prev_cur_row;
+    int prev_cell_w;
+    int prev_cell_h;
+    int prev_sw;
+    int prev_sh;
 };
 
 
 int window_init(struct windata* wd);
+int recreate_swapchain(struct windata *wd);
 void destroy_data(struct windata* wd);
 void set_window(struct windata* wd);
 void render_cells_to_buffer(struct windata *wd);
+void change_font_size(struct windata *wd, int delta);
 
 #endif

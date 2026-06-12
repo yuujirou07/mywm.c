@@ -266,8 +266,7 @@ int main(void) {
   int old_width = 0;
   int old_height = 0;
 
-  glfwGetFramebufferSize(wd.window, &old_width, &old_height);
-
+  glfwGetFramebufferSize(wd.window, &old_width, &old_height);  
 
   while (!glfwWindowShouldClose(wd.window))
   {
@@ -339,18 +338,35 @@ int main(void) {
     int current_height;
     glfwGetFramebufferSize(wd.window, &current_width, &current_height);
 
-    if (current_width != old_width || current_height != old_height) {
+    if (current_width != old_width || current_height != old_height || wd.font_size_changed) {
       last_resize_time = glfwGetTime();
       old_width = current_width;
       old_height = current_height;
+      wd.font_size_changed = false;
     }
 
     //リサイズ処理（デバウンス: 0.1秒間リサイズが止まってから実行）
     if(last_resize_time > 0 && glfwGetTime() - last_resize_time > 0.1){
       old_term_cell_size = term_size;
 
-      //画面サイズ・セル数を更新
-      window_resized_update_memb(wd.window,&screen_pixel,&term_size,&ctx);
+      // スワップチェーンを先に再作成してrenderExtentを確定させる
+      // (Waylandではスワップチェーン再作成後にフレームバッファサイズが確定する)
+      recreate_swapchain(&wd);
+
+      // display_scale / render_scale を更新（別モニター対応）
+      float xscale = 1.0f;
+      glfwGetWindowContentScale(wd.window, &xscale, NULL);
+      ctx.display_scale = xscale;
+      ctx.render_scale = (int)(xscale + 0.5f);
+      if (ctx.render_scale < 1) ctx.render_scale = 1;
+
+      // 確定したrenderExtentからterm_sizeを計算
+      screen_pixel.w = (int)wd.renderExtent.width;
+      screen_pixel.h = (int)wd.renderExtent.height;
+      term_size.w = screen_pixel.w / ctx.cell_w;
+      term_size.h = screen_pixel.h / ctx.cell_h;
+      if (term_size.w < 1) term_size.w = 1;
+      if (term_size.h < 1) term_size.h = 1;
 
       total=term_size.h*term_size.w;
       ctx.term_size=term_size;
@@ -416,13 +432,11 @@ int main(void) {
         ctx.lines = new_lines;
       }
 
-
+      dirty = true;
       last_resize_time = 0;
     }
 
-
-
-
+    
     if(dirty){
       // 前のフレームが完全に終わるのをCPU側で待つ
         // 第2引数の TRUE は「フェンスがシグナル状態になるまで待つ」という意味
@@ -432,8 +446,16 @@ int main(void) {
         vkResetFences(wd.device, 1, &wd.inFlightFence);
 
         uint32_t imageIndex;
-        // 画像が利用可能になったら imageAvailableSemaphore をシグナル状態にしてもらうよう依頼
-        vkAcquireNextImageKHR(wd.device, wd.swapchain, UINT64_MAX, wd.imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
+        VkResult acquireResult = vkAcquireNextImageKHR(wd.device, wd.swapchain, UINT64_MAX,
+            wd.imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
+        if (acquireResult == VK_ERROR_OUT_OF_DATE_KHR) {
+            recreate_swapchain(&wd);
+            dirty = true;
+            goto FRAME_END;
+        } else if (acquireResult != VK_SUCCESS && acquireResult != VK_SUBOPTIMAL_KHR) {
+            fprintf(stderr, "vkAcquireNextImageKHR に失敗しました: %d\n", acquireResult);
+            break;
+        }
 
         VkCommandBuffer commandBuffer = wd.commandBuffers[imageIndex];
 
@@ -538,6 +560,7 @@ int main(void) {
         vkQueuePresentKHR(wd.graphicsQueue, &presentInfo);
         dirty = false;
     }
+    FRAME_END:;
   }
 
 
@@ -1639,6 +1662,8 @@ void erase_chr(struct term_context *ctx,int n){
   int idx = ctx->cur->cur_pos.h * ctx->term_size.w + ctx->cur->cur_pos.w;
   for(int i=0;i<n;i++){
     ctx->term_cell[idx+i].character=' ';
+    ctx->term_cell[idx+i].fg_color = ctx->bash_parser_required_memb.now_fg_color;
+    ctx->term_cell[idx+i].bg_color = ctx->bash_parser_required_memb.now_bg_color;
     ctx->term_cell[idx+i].is_real_chr = false;
   }
 }

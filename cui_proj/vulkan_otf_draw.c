@@ -13,7 +13,7 @@ int load_otf(char *file_path, struct pos font_size, struct bmf_data *bmf)
 
     FT_Init_FreeType(&lib);
     FT_New_Face(lib, "/home/yuujirou07/myfont.otf", 0, &face);
-    FT_Set_Pixel_Sizes(face, font_size.w, font_size.h);
+    FT_Set_Pixel_Sizes(face, 0, font_size.h * 2);
 
     FT_Load_Char(face, 'A', FT_LOAD_RENDER);
     bmf->bitmap_buffer = face->glyph->bitmap.buffer;
@@ -36,7 +36,7 @@ int load_otf_glyphs(const char *file_path, struct pos font_size,
         FT_Done_FreeType(lib);
         return -1;
     }
-    FT_Set_Pixel_Sizes(face, font_size.w, font_size.h);
+    FT_Set_Pixel_Sizes(face, 0, font_size.h * 2);
 
     if (ascender_out)
         *ascender_out = (int)(face->size->metrics.ascender >> 6);

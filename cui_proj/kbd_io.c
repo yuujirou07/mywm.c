@@ -119,6 +119,15 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
         }
       }
     }
+    //文字サイズ変更（Ctrl + +/-）
+    else if((key == GLFW_KEY_EQUAL || key == GLFW_KEY_KP_ADD) && action == GLFW_PRESS && (mods & GLFW_MOD_CONTROL))
+    {
+        change_font_size(wd, FONT_CELL_H_STEP);
+    }
+    else if((key == GLFW_KEY_MINUS || key == GLFW_KEY_KP_SUBTRACT) && action == GLFW_PRESS && (mods & GLFW_MOD_CONTROL))
+    {
+        change_font_size(wd, -FONT_CELL_H_STEP);
+    }
     else if(key == GLFW_KEY_ENTER && action == GLFW_PRESS)
     {
         char enter_key = 13;

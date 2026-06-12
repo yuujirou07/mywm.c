@@ -10,7 +10,7 @@ struct bmf_data {
 };
 
 struct glyph_data {
-    unsigned char *bitmap;  // グレースケール (0-255)、malloc済みコピー
+    unsigned char *bitmap;  // グレースケール (0-255)、malloc済みコピーs
     int width, height;
     int bearing_x;   // FreeType の bitmap_left
     int bearing_y;   // FreeType の bitmap_top (ベースラインからグリフ上端まで)
