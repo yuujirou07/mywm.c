@@ -16,6 +16,7 @@
 #include <errno.h>
 #include <sys/wait.h>
 #include <vulkan/vulkan.h>
+#include "mouse_io.h"
 #include "vulkan_mywrap.h"
 #include "vulkan_otf_draw.h"
 #include "keybord.h"
@@ -32,6 +33,24 @@
 
 
 
+// =====================================================================
+// main(): プログラム全体の流れ
+//   1. GLFW + Vulkan でウィンドウを初期化し、フレームバッファの物理ピクセル
+//      サイズと文字セルのサイズ(cell_w/cell_h)からターミナルの行数・列数
+//      (term_size)を計算する
+//   2. openpty() で疑似端末(pty)を確保し、fork() した子プロセスの
+//      標準入出力をpty(スレーブ側)に繋ぎ替えて bash -i を起動する
+//   3. 親プロセスはpty(マスター側)の読み込みを epoll + ノンブロッキング
+//      I/O で監視し、GLFWのイベントループ内でbashからの出力を
+//      bash_str_parse() に渡してターミナル画面の状態(term_cell配列、
+//      カーソル位置など)を更新する
+//   4. ウィンドウサイズの変化を検出したら(0.1秒のデバウンス後)、
+//      スワップチェーンとterm_sizeを再計算し、必要ならバッファを
+//      再確保してreflow_terminal_text()で表示内容を組み直す
+//   5. 画面内容が更新された(dirty)場合のみ、term_cellの内容をCPU側で
+//      ピクセルに変換してステージングバッファへ書き込み、Vulkanで
+//      スワップチェーン画像へコピー・提示(present)する
+// =====================================================================
 int main(void) {
   int master_fd, slave_fd;
   int total;
@@ -59,6 +78,8 @@ int main(void) {
   }
   glfwSetWindowUserPointer(wd.window,&wd);
   set_kbd_callback(&wd);
+
+  init_mouse(&wd);
 
 
   // HIGHDPI環境でぼやけるのを防ぐため、論理サイズではなく実際の物理ピクセルサイズを取得する
@@ -129,6 +150,9 @@ int main(void) {
   }
 
   //epoll設定////////////
+  // master_fd(bashからの出力)が読み込み可能になったことを検知するための設定。
+  // master_fdは上でO_NONBLOCKにしているため、epoll_waitで読み込み可能と分かった
+  // 場合のみreadを行うことで、メインループをブロックさせずに済む。
   int epoll_fd_list=epoll_create(EVENT_WAIT_MAX);
   if(epoll_fd_list<0){
     error_log_write("epoll create error code");
@@ -156,6 +180,8 @@ int main(void) {
     return 1;
   }
   // 変数の初期化
+  // term_cell_alloc_size: term_cell/alt_term_cell/read_bufなどの確保サイズ(セル数)。
+  // 最初から total の4倍を確保しておき、リサイズ時に必要ならさらに2倍ずつ拡張する。
   int term_cell_alloc_size=total*4;
   int result=0;
   int nfds = 0;
@@ -178,6 +204,9 @@ int main(void) {
   cur_mg        = calloc(1,sizeof(struct cur_mgr));
 
   // ctx構造体直接初期化
+  // ctx(term_context)はターミナルの全状態を保持する中心的な構造体。
+  // 画面の各文字セル(term_cell配列)、カーソル位置、エスケープシーケンス
+  // パーサの状態(bash_parser_required_memb)などをここに集約する。
   ctx.term_cell = calloc(term_cell_alloc_size, sizeof(struct term_cell));
   ctx.alt_term_cell = NULL;
   ctx.cur = malloc(sizeof(struct cursor));
@@ -216,6 +245,9 @@ int main(void) {
 
 
   // bash_parser_required_memb初期化
+  // state=GROUND: 通常モード（受信した文字をそのまま画面に描画する）
+  // mode=IDK: エスケープシーケンスの種類が未確定の状態
+  // この2つの値の組み合わせがbash_str_parse()の状態機械の初期状態になる
   ctx.bash_parser_required_memb.state = GROUND;
   ctx.bash_parser_required_memb.mode = IDK;
   ctx.bash_parser_required_memb.osc_pal_chr_counter = 0;
@@ -238,8 +270,16 @@ int main(void) {
   wd.kbd_data.master_fd_ev_poll = &master_fd_ev_poll;
   wd.kbd_data.epoll_fd_list = &epoll_fd_list;
   wd.kbd_data.cftl_c_sig_counter = 0;
+  wd.mouce_data.mouce_button_left_down = false;
+  wd.dirty = &dirty;
 
-
+  wd.copy_data.copy_cell_counter = 0;
+  wd.copy_data.start_idx = 0;
+  wd.copy_data.end_idx = 0;
+  wd.copy_data.start_copy = false;
+  wd.copy_data.copy_cell = calloc(total,sizeof(struct term_cell *));
+  wd.copy_data.copy_cell_orig_bg = calloc(total,sizeof(Color));
+  wd.copy_data.copy_cell_orig_fg = calloc(total,sizeof(Color));
 
   memset(&ctx.fixrd_cur_scr_range,0,sizeof(struct margin));
 
@@ -268,10 +308,14 @@ int main(void) {
 
   glfwGetFramebufferSize(wd.window, &old_width, &old_height);  
 
+  // ===== メインループ =====
+  // 1フレームごとに「入力イベント処理」→「PTY出力の読み取り・パース」→
+  // 「カーソル点滅/リサイズ処理」→「必要なら再描画」を行う。
   while (!glfwWindowShouldClose(wd.window))
   {
     glfwPollEvents();
 
+    // master_fd(bashの出力)が読めるかどうかを最大1msだけ待って確認する
     nfds = epoll_wait(epoll_fd_list,epoll_list,EVENT_WAIT_MAX, 1);
 
     if(nfds>0)
@@ -284,12 +328,15 @@ int main(void) {
 
         if((epoll_list[i].events & EPOLLIN)==false)
           break;
-        
-        while (1) 
+
+        // 読めるデータがなくなる(EAGAIN)まで読み続け、その都度パースする
+        while (1)
         {
           buf_size = read(master_fd, read_buf, term_cell_alloc_size - 1);
           if (buf_size > 0)
           {
+            // bashからの出力(プレーンテキスト+ANSIエスケープシーケンス)を
+            // 解析し、term_cell配列(画面の文字セル)とカーソル状態を更新する
             bash_str_parse(read_buf, buf_size, &ctx);
             dirty = true;
           }
@@ -307,7 +354,7 @@ int main(void) {
             {
               // それ以外の本当のエラー
               error_log_write("read error");
-              break;
+              return 1;
             }
           }
         }
@@ -316,6 +363,9 @@ int main(void) {
     }
 
     ////マウスカーソル点滅再開処理//////
+    // 文字を書き込んだ直後はカーソルの点滅を一時停止し、一定時間
+    // (cursor_blink_restart_timeout_seconds)経過したら点滅を再開する。
+    // これによりタイプ中はカーソルが常に表示され続け、見失いにくくなる。
     if( ctx.cur->now_writing == true){
       if(ctx.cur->writing_st_time <= 0)
         ctx.cur->writing_st_time = glfwGetTime();
@@ -331,7 +381,7 @@ int main(void) {
       ctx.cur->writing_end_time = 0;
     }
     //マウスカーソル分岐抜け
-    CUR_RIGTHING_END_POINT:
+    CUR_RIGTHING_END_POINT:{};
     
 
     int current_width;
@@ -346,6 +396,11 @@ int main(void) {
     }
 
     //リサイズ処理（デバウンス: 0.1秒間リサイズが止まってから実行）
+    // ウィンドウサイズ変更中は何度もイベントが発生するため、最後の変更から
+    // 0.1秒操作が無いことを確認してから一度だけ実際のリサイズ処理を行う。
+    // 処理内容: ① スワップチェーン再作成 → ② 新しいterm_size計算 →
+    // ③ pty(TIOCSWINSZ)とbashプロセス(SIGWINCH)へサイズ変更を通知 →
+    // ④ 必要ならセルバッファを拡張 → ⑤ reflow_terminal_textで表示内容を再配置
     if(last_resize_time > 0 && glfwGetTime() - last_resize_time > 0.1){
       old_term_cell_size = term_size;
 
@@ -372,6 +427,14 @@ int main(void) {
       ctx.term_size=term_size;
       ctx.total_cells=total;
 
+      // term_cellの再確保でポインタが移動する/セル数が変わるため、
+      // マウス選択状態とそれに対応するバッファも作り直す
+      wd.copy_data.copy_cell_counter = 0;
+      wd.copy_data.copy_cell = realloc(wd.copy_data.copy_cell, sizeof(struct term_cell *) * total);
+      wd.copy_data.copy_cell_orig_bg = realloc(wd.copy_data.copy_cell_orig_bg, sizeof(Color) * total);
+      wd.copy_data.copy_cell_orig_fg = realloc(wd.copy_data.copy_cell_orig_fg, sizeof(Color) * total);
+      memset(wd.copy_data.copy_cell, 0, sizeof(struct term_cell *) * total);
+
       ws.ws_col = term_size.w;
       ws.ws_row = term_size.h;
       ws.ws_xpixel = (unsigned short)screen_pixel.w;
@@ -380,6 +443,8 @@ int main(void) {
       ioctl(master_fd, TIOCSWINSZ, &ws);
       kill(pid_id, SIGWINCH);
 
+      // セル数が現在の確保サイズを超えた場合、必要なサイズになるまで2倍ずつ
+      // 拡張し、term_cell/alt_term_cell/temp_term_cell/read_bufを再確保する
       if(total>term_cell_alloc_size){
         int old_alloc_size = term_cell_alloc_size;
 
@@ -424,6 +489,8 @@ int main(void) {
         read_buf = read_buff_temp;
       }
 
+      // 古いterm_size(old_term_cell_size)の内容を新しいterm_sizeに合わせて
+      // 詰め直す（行の折り返し位置を再計算しつつ文字を移し替える）
       reflow_terminal_text(&ctx, old_term_cell_size, &temp_term_cell, term_cell_alloc_size);
 
       struct line_info *new_lines = calloc(term_size.h, sizeof(struct line_info));
@@ -437,6 +504,9 @@ int main(void) {
     }
 
     
+    // dirty(画面内容が更新された)時だけ描画する。Vulkanでは
+    // term_cell配列の内容をCPU側でピクセル(BGRA)に変換してステージング
+    // バッファへ書き込み、それをスワップチェーン画像にコピーして提示する。
     if(dirty){
       // 前のフレームが完全に終わるのをCPU側で待つ
         // 第2引数の TRUE は「フェンスがシグナル状態になるまで待つ」という意味
@@ -586,6 +656,8 @@ int main(void) {
   close(epoll_fd_list);
 }
 
+// scroll_region_up(): スクロール領域(DECSTBMで設定、未設定なら画面全体)を
+// 1行上にスクロールする。先頭行が画面外に消え、最終行に空行が追加される。
 void scroll_region_up(struct term_context *ctx) {
   int W      = ctx->term_size.w;
   int top    = ctx->fixrd_cur_scr_range.decstbm_state ? ctx->fixrd_cur_scr_range.top_margin    : 0;
@@ -606,6 +678,8 @@ void scroll_region_up(struct term_context *ctx) {
   ctx->lines[bottom].is_wrapped = false;
 }
 
+// scroll_region_down(): スクロール領域(DECSTBMで設定、未設定なら画面全体)を
+// 1行下にスクロールする。最終行が画面外に消え、先頭行に空行が追加される。
 void scroll_region_down(struct term_context *ctx) {
   int W      = ctx->term_size.w;
   int top    = ctx->fixrd_cur_scr_range.decstbm_state ? ctx->fixrd_cur_scr_range.top_margin    : 0;
@@ -653,6 +727,8 @@ Color xterm_256color(int n) {
   return (Color){v, v, v, 255};
 }
 
+// esc_single_dispatch(): "ESC <1文字>" 形式の、CSIでもOSCでもない
+// 単純なエスケープシーケンスを処理する(7/8/M/E/cなど)
 void esc_single_dispatch(struct term_context *ctx, char c) {
   switch (c) {
     case '7':  // DECSC: カーソル位置を保存
@@ -693,6 +769,25 @@ void esc_single_dispatch(struct term_context *ctx, char c) {
   }
 }
 
+// bash_str_parse(): bashから読み取った生バイト列を1バイトずつ処理し、
+// ANSI/VT100エスケープシーケンスを解釈しながらterm_cell配列とカーソル
+// 位置を更新する、ターミナルエミュレータの中核となる状態機械。
+//
+// state(parse_state)とmode(mode_state)の2段階の状態で管理する:
+//   - state == GROUND   : 通常状態。バイトはそのまま画面に出力するか、
+//                          \n \r \t \b 等の制御文字として処理する。
+//                          0x1b(ESC)を受け取るとSQE_STARTへ遷移する。
+//   - state == SQE_START: ESCを受け取った直後。次の1バイトでシーケンスの
+//                          種類(mode)を確定させる。
+//       mode == IDK      : 種類未確定。'['ならCSI_MODE、']'ならOSC_MODE、
+//                          それ以外は2文字限定のシーケンスとして
+//                          esc_single_dispatch()で処理しGROUNDへ戻る。
+//       mode == CSI_MODE : "ESC [ ... 終端文字" 形式。数字と';'で区切られた
+//                          パラメータをctx->palms[]に集め、0x40-0x7Eの
+//                          終端文字でls_chr_parse()を呼んでGROUNDへ戻る。
+//       mode == OSC_MODE : "ESC ] ... BEL または ESC \" 形式。パラメータは
+//                          osc_pal_chr[]に文字列として集め、終端で
+//                          osc_mode()を呼んでGROUNDへ戻る。
 void bash_str_parse(char *buff, ssize_t size, struct term_context *ctx) {
 
   for (int i = 0; i < size; i++) {
@@ -803,6 +898,8 @@ void bash_str_parse(char *buff, ssize_t size, struct term_context *ctx) {
       }
     }
     else if (ctx->bash_parser_required_memb.state == GROUND) {
+      // ESC(0x1b)ならSQE_STARTへ遷移してこの文字自体は消費するだけ。
+      // それ以外は制御文字(\b \r \n \t \a)か、画面に書き込む通常の文字。
       ctx->bash_parser_required_memb.state = buff_state_check(buff[i],ctx->bash_parser_required_memb.state);
       if (ctx->bash_parser_required_memb.state == SQE_START) continue;
       if (buff[i] == '\b') {
@@ -905,6 +1002,10 @@ void bash_str_parse(char *buff, ssize_t size, struct term_context *ctx) {
   }
 }
 
+// ls_chr_parse(): CSIシーケンス("ESC [ パラメータ群 終端文字")の終端文字
+// (buff)に応じて処理を振り分ける。パラメータはctx->palms[]に
+// palms_counter個格納されている(数値は';'区切りで複数指定可能)。
+// is_privateは"ESC[?"のように'?'付きで送られたDEC private シーケンスかどうか。
 void ls_chr_parse(struct term_context *ctx, char buff, Color *now_fg_color, Color *now_bg_color, bool is_private) {
   int palms_counter = *(ctx->palms_counter);
   int *palms = ctx->palms;
@@ -1322,6 +1423,10 @@ void ls_chr_parse(struct term_context *ctx, char buff, Color *now_fg_color, Colo
     }
 }
 
+// osc_mode(): OSCシーケンス("ESC ] Ps ; Pt BEL/ST")を処理する。
+// Ps(OSC番号)はctx->palms[0]に入っており、Pt(文字列引数)はosc_pal_chrに
+// "Ps;Pt"の形でそのまま格納されている。OSC番号によってウィンドウタイトル
+// 変更・カレントディレクトリ通知・色設定・クリップボード操作などを行う。
 void osc_mode(char *buff, struct term_context *ctx, char *osc_pal_chr){
   switch(ctx->palms[0]){
     // OSC 0/1/2: ウィンドウタイトルなどの設定（プロセス/ウィンドウ名を反映）
@@ -1400,6 +1505,9 @@ void osc_mode(char *buff, struct term_context *ctx, char *osc_pal_chr){
   }
 }
 
+// mymemcpy(): [start, end) の範囲をヒープ上に新しい文字列としてコピーする。
+// mode==line_down の場合は末尾に'\n'を追加してから'\0'を付ける
+// （現在この関数を呼び出している箇所は無い、未使用のユーティリティ）。
 char *mymemcpy(char *start, char *end, enum last_chr_mode mode){
   char *cpy;
   size_t len = end - start;
@@ -1425,6 +1533,9 @@ char *mymemcpy(char *start, char *end, enum last_chr_mode mode){
   return cpy;
 }
 
+// load_cur_font(): "cur_font.txt" からカーソルの見た目として使う文字を
+// 1文字ずつ読み込み、cur_mgr->cur_font[] に格納する(最大cur_font_load_max個)。
+// ファイルが無ければcur_set_default()でデフォルト文字('|'と'/')を設定する。
 void load_cur_font(struct cur_mgr *cur_mgr){
   if (cur_mgr == NULL) {
     printf("cur_mgr is not init");
@@ -1445,6 +1556,7 @@ void load_cur_font(struct cur_mgr *cur_mgr){
   fclose(cur_load);
 }
 
+// init_cur_mgr(): cur_mgr->cur_font配列(カーソル候補文字を格納する)を確保する
 int init_cur_mgr(struct cur_mgr *cur_mgr){
   cur_mgr->cur_font = malloc(sizeof(char) * cur_font_load_max);
   if (cur_mgr->cur_font == NULL) {
@@ -1458,12 +1570,16 @@ void cur_mgr_free(struct cur_mgr *cur_mgr){
   free(cur_mgr);
 }
 
+// cur_set_default(): cur_font.txtが無い場合のデフォルトのカーソル候補文字
+// ('|'と'/')を設定する
 void cur_set_default(struct cur_mgr *cur_mgr){
   cur_mgr->load_cur_font_n = 2;
   cur_mgr->cur_font[0] = '|';
   cur_mgr->cur_font[1] = '/';
 }
 
+// cur_font_set(): cur_mgr->cur_font[n-1]の文字をカーソルの形状(cur->shape)
+// として設定する(1始まりのインデックス)
 void cur_font_set(struct cursor *cur, struct cur_mgr *cur_mgr, int n){
   if (n > cur_mgr->load_cur_font_n) {
     printf("your chose cur font nonber is big then cur_font_load_max");
@@ -1473,12 +1589,16 @@ void cur_font_set(struct cursor *cur, struct cur_mgr *cur_mgr, int n){
   cur->shape[1] = '\0';
 }
 
+// buff_state_check(): GROUND状態でESC(0x1b)を受け取ったらSQE_START
+// (エスケープシーケンス開始)に遷移させる。それ以外は状態を変えない。
 enum parse_state buff_state_check(char buff, enum parse_state now_state){
   enum parse_state return_state = now_state;
   if (buff == '\x1b' && return_state == GROUND) return_state = SQE_START;
   return return_state;
 }
 
+// check_visible_chr(): 文字が画面に描画すべき文字かどうかを判定する
+// （現在この関数を呼び出している箇所は無い、未使用のユーティリティ）
 enum visiavle_chr check_visible_chr(char buff){
   enum visiavle_chr vis_state;
   if (buff == '\b') vis_state = BS_ST1;
@@ -1487,6 +1607,9 @@ enum visiavle_chr check_visible_chr(char buff){
   return vis_state;
 }
 
+// get_mode(): buff[*i]が'['ならCSI_MODE、']'ならOSC_MODE、それ以外はIDKを返す
+// （現在この関数を呼び出している箇所は無く、同等の判定はbash_str_parse()内に
+// 直接書かれている。未使用のユーティリティ）
 enum mode_state get_mode(char *buff, int *i, int size){
   enum mode_state return_state;
   if (buff[*i] == ']') return_state = OSC_MODE;
@@ -1495,6 +1618,11 @@ enum mode_state get_mode(char *buff, int *i, int size){
   return return_state;
 }
 
+// base64_decoder(): OSC 52 (クリップボード設定) のペイロード
+// "52;c;<base64文字列>" を受け取り、";c;"以降をBase64デコードして
+// 復号後のバイト列(NUL終端)を新規ヒープ領域に返す。
+// 内部でchar_conbert_binary_arry()/conbert_chr_to_binary_table()を使い、
+// Base64文字列を1文字=6bitのビット列に展開してから8bit単位に詰め直す。
 char *base64_decoder(char *osc_pal_chr){
   char *converted_chr = NULL;
   char *result = strchr(osc_pal_chr, ';');
@@ -1549,6 +1677,9 @@ char *base64_decoder(char *osc_pal_chr){
     return converted_chr;
 }
 
+// char_conbert_binary_arry(): osc_pal_chr内のBase64文字を1文字ずつ
+// conbert_chr_to_binary_table()に渡し、6bitのビット配列に展開した結果を
+// return_binary構造体(ビット配列+ビット数)として返す
 struct return_binary *char_conbert_binary_arry(char *osc_pal_chr)
 {
   size_t len = strlen(osc_pal_chr);
@@ -1588,6 +1719,8 @@ void conbert_chr_to_binary_table(struct return_binary *char_conbert_binary, char
   return ;
 }
 
+// change_fg_color/change_bg_color(): 以後に描画する文字の前景色/背景色
+// (OSC 10/11で指定された色)を更新する
 void change_fg_color(struct term_context *ctx,Color c_col){
   ctx->bash_parser_required_memb.now_fg_color=c_col;
 }
@@ -1656,6 +1789,8 @@ void char_arry_insert_chr(struct term_context *ctx,int n){
     ctx->term_cell[idx + i].is_real_chr = false;
   }
 }
+// erase_chr(): ECH (Erase Character) - カーソル位置からn文字を
+// 「現在の前景色/背景色の空白」で上書きする(文字の削除/シフトは行わない)
 void erase_chr(struct term_context *ctx,int n){
   int loop = ctx->term_size.w - ctx->cur->cur_pos.w;
   if (n > loop) n = loop;
@@ -1667,6 +1802,10 @@ void erase_chr(struct term_context *ctx,int n){
     ctx->term_cell[idx+i].is_real_chr = false;
   }
 }
+// window_resized_update_memb(): ウィンドウのフレームバッファサイズと
+// コンテンツスケールを取得し直し、それに基づいてterm_size(行数・列数)を
+// 再計算する。main()内のリサイズ処理は同様の計算を直接行っているため、
+// 現在この関数を呼び出している箇所は無い(未使用のユーティリティ)。
 void window_resized_update_memb(GLFWwindow *window, struct pos *screen_pixel,struct pos *term_size,struct term_context *ctx){
   glfwGetFramebufferSize(window, &screen_pixel->w, &screen_pixel->h);
 
@@ -1719,6 +1858,13 @@ void unicode_utf8_encoder(char *utf8,int unicode, int *len){
     }
 }
 
+// reflow_terminal_text(): ウィンドウサイズ変更時に呼ばれる。
+// old_term_size(変更前の行数・列数)で格納されていたterm_cellの内容を、
+// ctx->term_size(変更後の行数・列数)に合わせて詰め直す(リフロー)。
+// 各論理行(is_wrappedで繋がった行の集まり)の末尾の空白を除いた実文字だけを
+// 取り出し、新しい列数で改行しながらtemp(一時バッファ)に詰めていく。
+// 最後にctx->term_cellとtempを入れ替える(ポインタswap)ことで、
+// 呼び出し元が持つtemp_term_cellは「次にリフローで使う旧バッファ」になる。
 void reflow_terminal_text(struct term_context *ctx, struct pos old_term_size, struct term_cell **temp_term_cell_ptr, int term_cell_alloc_size) {
   struct term_cell *temp = *temp_term_cell_ptr;
   int new_w = ctx->term_size.w;
@@ -1769,6 +1915,11 @@ reflow_done:;
 }
 
 
+// load_settings(): "pty_make_settings.json" から設定を読み込む。
+// ファイルが開けない場合はエラーログを出してset_default_settings()で
+// デフォルト値を設定する。
+// 注意: ファイルが開けた場合でもJSONの解析自体は行われておらず、
+// settings_fileもfcloseされていない(未実装/TODOの状態)。
 void load_settings(struct setting_data *data){
 
   FILE *settings_file = fopen("pty_make_settings.json","r");
@@ -1780,17 +1931,25 @@ void load_settings(struct setting_data *data){
   }
 }
 
+// set_default_settings(): キーリピート間隔・カーソル点滅再開までの
+// タイムアウトをデフォルト値に設定する
 void set_default_settings(struct setting_data *data){
   data->key_repeat_interval = DEFAULT_KEY_REPEAT_INTERVAL;
   data->cursor_blink_restart_timeout_seconds = DEFAULT_CUR_BLINK_RESTART_TIMEOUT_SEC;
 }
 
+// allocate_cell(): term_cell配列をsize個分にrealloc()するだけのラッパー
+// （現在この関数を呼び出している箇所は無い、未使用のユーティリティ）
 struct term_cell *allocate_cell(struct term_cell* term_cell,int size)
 {
   struct term_cell * temp = realloc(term_cell,sizeof(struct term_cell)* size);
   return temp;
 }
 
+// cur_allow_write(): キーボードの矢印キー入力をbash側へ送るエスケープ
+// シーケンスに変換する。カーソルがAP_MODE(アプリケーションキーパッド
+// モード、CSI ?1h で有効化)の場合は"ESC O 方向"、NORMAL_MODEの場合は
+// "ESC [ 方向"を送信する(vim等のアプリで矢印キーが正しく動くようにするため)。
 void cur_allow_write(enum cur_allow_mode mode, int master_fd, int key_code) {
   const char *seq = NULL;
   if (mode == AP_MODE) {

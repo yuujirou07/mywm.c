@@ -1,6 +1,7 @@
 #ifndef VULKAN_MYWRAP_H
 #define VULKAN_MYWRAP_H
 
+#include "pty_make.h"
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 #include <stdbool.h>
@@ -16,11 +17,29 @@ struct term_context;
 
 struct windata
 {
+    bool *dirty;
     int master_fd;
     int *nfds;
     struct term_context *ctx;
 
-    struct {
+    struct
+    {
+        int start_idx;
+        int end_idx;
+        int copy_cell_counter;
+
+        struct term_cell **copy_cell; 
+
+        Color *copy_cell_orig_bg;   
+        Color *copy_cell_orig_fg;  
+
+        bool start_copy;
+        
+
+    }copy_data;
+
+    struct 
+    {
         bool write_buff_overflow;
         struct epoll_event *epoll;
         struct epoll_event *master_fd_ev_poll;
@@ -28,6 +47,12 @@ struct windata
         int *epoll_fd_list;
         int cftl_c_sig_counter;
     } kbd_data;
+
+    struct
+    {
+        bool mouce_button_left_down;
+
+    }mouce_data;
 
     GLFWwindow* window;
     VkInstance instance;

@@ -1,0 +1,3 @@
+-I/home/yuujirou07/vscode_proj/mywm_proj/cui_proj/include
+-I/usr/include/freetype2
+-I/usr/include/libpng16
