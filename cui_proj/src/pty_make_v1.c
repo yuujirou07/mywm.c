@@ -22,6 +22,7 @@
 #include "keybord.h"
 #include "error_log_output.h"
 #include "pty_make.h"
+#include "codepoint_comb.h"
 
 #define ESC_PAL_MAX 32
 #define cur_font_load_max 32
@@ -274,8 +275,9 @@ int main(void) {
   wd.dirty = &dirty;
 
   wd.copy_data.copy_cell_counter = 0;
-  wd.copy_data.start_idx = 0;
-  wd.copy_data.end_idx = 0;
+  wd.copy_data.copy_cell_idx_data.start_idx = 0;
+  wd.copy_data.copy_cell_idx_data.end_idx = 0;
+  wd.copy_data.copy_cell_idx_data.start_idx_block = false;
   wd.copy_data.start_copy = false;
   wd.copy_data.copy_cell = calloc(total,sizeof(struct term_cell *));
   wd.copy_data.copy_cell_orig_bg = calloc(total,sizeof(Color));
@@ -307,7 +309,6 @@ int main(void) {
   int old_height = 0;
 
   glfwGetFramebufferSize(wd.window, &old_width, &old_height);  
-
   // ===== メインループ =====
   // 1フレームごとに「入力イベント処理」→「PTY出力の読み取り・パース」→
   // 「カーソル点滅/リサイズ処理」→「必要なら再描画」を行う。
@@ -316,7 +317,7 @@ int main(void) {
     glfwPollEvents();
 
     // master_fd(bashの出力)が読めるかどうかを最大1msだけ待って確認する
-    nfds = epoll_wait(epoll_fd_list,epoll_list,EVENT_WAIT_MAX, 1);
+    nfds = epoll_wait(epoll_fd_list,epoll_list,EVENT_WAIT_MAX,4);
 
     if(nfds>0)
     {
@@ -434,6 +435,7 @@ int main(void) {
       wd.copy_data.copy_cell_orig_bg = realloc(wd.copy_data.copy_cell_orig_bg, sizeof(Color) * total);
       wd.copy_data.copy_cell_orig_fg = realloc(wd.copy_data.copy_cell_orig_fg, sizeof(Color) * total);
       memset(wd.copy_data.copy_cell, 0, sizeof(struct term_cell *) * total);
+      wd.copy_data.copy_cell_idx_data.start_idx_block = false;
 
       ws.ws_col = term_size.w;
       ws.ws_row = term_size.h;
@@ -926,6 +928,13 @@ void bash_str_parse(char *buff, ssize_t size, struct term_context *ctx) {
           ctx->cur->cur_pos.w = next_tab;
           continue;
       } else {
+        // UTF-8 マルチバイト文字を 1 つのコードポイントへデコードする。
+        // 罫線素片(U+2500〜)など非ASCII文字を 1 セルに収めるために必要。
+        int cp = (unsigned char)buff[i];
+        if (cp >= 0x80) {
+            int adv = utf8_decode((const unsigned char *)&buff[i], (int)(size - i), &cp);
+            i += adv - 1;   // 残り 1 バイトはループの i++ で進む
+        }
         if (ctx->insert_mode) {
             char_arry_insert_chr(ctx, 1);
         }
@@ -962,7 +971,7 @@ void bash_str_parse(char *buff, ssize_t size, struct term_context *ctx) {
 
             bool rev = ctx->bash_parser_required_memb.now_is_reverse;
 
-            ctx->term_cell[idx].character = buff[i];
+            ctx->term_cell[idx].character = cp;
 
             ctx->term_cell[idx].fg_color  = rev
                 ? ctx->bash_parser_required_memb.now_bg_color
@@ -980,10 +989,13 @@ void bash_str_parse(char *buff, ssize_t size, struct term_context *ctx) {
         }
       }
       // 画面外スクロール処理（スクロール領域未使用時のみ全体スクロール）
-      if (ctx->cur->cur_pos.h >= ctx->term_size.h) {
-        if (ctx->fixrd_cur_scr_range.decstbm_state) {
+      if (ctx->cur->cur_pos.h >= ctx->term_size.h) 
+      {
+        if (ctx->fixrd_cur_scr_range.decstbm_state) 
+        {
           ctx->cur->cur_pos.h = ctx->term_size.h - 1;
-        } else {
+        } else 
+        {
           int total_cells = ctx->total_cells;
           memmove(ctx->term_cell, ctx->term_cell + ctx->term_size.w, (total_cells - ctx->term_size.w) * sizeof(struct term_cell));
           memmove(ctx->lines, ctx->lines + 1, (ctx->term_size.h - 1) * sizeof(struct line_info));
@@ -1010,7 +1022,8 @@ void ls_chr_parse(struct term_context *ctx, char buff, Color *now_fg_color, Colo
   int palms_counter = *(ctx->palms_counter);
   int *palms = ctx->palms;
 
-  switch(buff){
+  switch(buff)
+  {
     // SGR: 色や表示属性（リセットや文字色/背景色）を設定する
     case 'm':
       for (int i = 0; i < palms_counter; i++) {

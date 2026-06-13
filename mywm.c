@@ -400,7 +400,7 @@ static void h_key(struct wl_listener *listener,void *data){
             pid_t pid = fork();
             if (pid == 0) {
                 // 子プロセスの処理
-                if(execlp("foot","foot",NULL)==-1){
+                if(execlp("/home/yuujirou07/vscode_proj/mywm_proj/cui_proj/pty_make_v1","pty_make_v1",NULL)== -1 ){
                     perror("execlp");
                     exit(1);
                 }

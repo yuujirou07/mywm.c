@@ -10,6 +10,7 @@
 #include "vulkan_mywrap.h"
 #include "keybord.h"
 #include "pty_make.h"
+#include "codepoint_comb.h"
 #include "error_log_output.h"
 
 
@@ -567,6 +568,13 @@ static void draw_cell_pixels(uint8_t *buf, int sw, int sh,
 
     // グリフを描画（スペース・範囲外はスキップ）
     int c = cell->character;
+    // 罫線・ブロック素片(U+2500〜U+259F)はフォントを持たないため、
+    // コードポイントから直接ピクセル描画する（nvim等の枠線表示用）
+    if (is_box_codepoint(c)) {
+        draw_box_codepoint(buf, sw, sh, base_x, base_y, cell_w, cell_h,
+                           c, cell->fg_color);
+        return;
+    }
     if (c < 32 || c > 126) return;
     struct glyph_data *g = &glyphs[c];
     if (!g->bitmap || g->width == 0 || g->height == 0) return;

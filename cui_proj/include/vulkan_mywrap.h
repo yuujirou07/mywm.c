@@ -24,8 +24,13 @@ struct windata
 
     struct
     {
-        int start_idx;
-        int end_idx;
+        struct
+        {
+            int start_idx;
+            int end_idx;
+            bool start_idx_block;
+        }copy_cell_idx_data;
+        
         int copy_cell_counter;
 
         struct term_cell **copy_cell; 
