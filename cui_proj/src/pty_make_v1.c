@@ -394,6 +394,15 @@ int main(void) {
       old_width = current_width;
       old_height = current_height;
       wd.font_size_changed = false;
+
+      // ドラッグ中も滑らかに追従させるため、軽い処理だけ毎フレーム行う:
+      // スワップチェーンを即再作成してrenderExtentを新サイズへ合わせ、再描画フラグを立てる。
+      // 重いterm_size再計算/reflow/reallocは下のデバウンス処理に残し、ドラッグ確定時に一度だけ実行する。
+      // (最小化等でサイズが0の間は再作成しない)
+      if (current_width > 0 && current_height > 0) {
+        recreate_swapchain(&wd);
+        dirty = true;
+      }
     }
 
     //リサイズ処理（デバウンス: 0.1秒間リサイズが止まってから実行）
@@ -405,9 +414,8 @@ int main(void) {
     if(last_resize_time > 0 && glfwGetTime() - last_resize_time > 0.1){
       old_term_cell_size = term_size;
 
-      // スワップチェーンを先に再作成してrenderExtentを確定させる
-      // (Waylandではスワップチェーン再作成後にフレームバッファサイズが確定する)
-      recreate_swapchain(&wd);
+      // スワップチェーンは上のサイズ変更検知時に毎フレーム即再作成済みのため、
+      // ここではrenderExtentが既に確定している。再作成は行わない。
 
       // display_scale / render_scale を更新（別モニター対応）
       float xscale = 1.0f;
@@ -629,8 +637,15 @@ int main(void) {
         presentInfo.pImageIndices = &imageIndex;
 
         // 画面への提示を実行
-        vkQueuePresentKHR(wd.graphicsQueue, &presentInfo);
-        dirty = false;
+        VkResult presentResult = vkQueuePresentKHR(wd.graphicsQueue, &presentInfo);
+        if (presentResult == VK_ERROR_OUT_OF_DATE_KHR || presentResult == VK_SUBOPTIMAL_KHR) {
+            // サーフェスとスワップチェーンのサイズが食い違っている(リサイズ中など)。
+            // 再作成して次フレームで描き直す。
+            recreate_swapchain(&wd);
+            dirty = true;
+        } else {
+            dirty = false;
+        }
     }
     FRAME_END:;
   }

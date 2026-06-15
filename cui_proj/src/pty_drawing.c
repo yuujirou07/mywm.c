@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <pthread.h>
+#include <unistd.h>
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan_core.h>
 #include "vulkan_mywrap.h"
@@ -636,8 +638,63 @@ static bool cell_visually_equal(const struct term_cell *a, const struct term_cel
            memcmp(&a->bg_color, &b->bg_color, sizeof(Color)) == 0;
 }
 
+// 描画ワーカーに渡すパラメータ。行範囲[row_start, row_end)だけを担当する。
+// 各スレッドは互いに重ならないピクセル行とprev_term_cellエントリにしか
+// 書き込まないため、ロック無しで並列描画できる。
+struct render_task {
+    struct windata *wd;
+    uint8_t *buf;
+    int sw, sh, cell_w, cell_h, ascender, term_w;
+    int cur_col, cur_row, prev_cur_col, prev_cur_row;
+    bool full_redraw;
+    int row_start, row_end;
+};
+
+// 指定された行範囲のセルを描画する（1スレッド分の仕事）
+static void render_rows(struct render_task *t)
+{
+    struct term_context *ctx = t->wd->ctx;
+    for (int row = t->row_start; row < t->row_end; row++) {
+        for (int col = 0; col < t->term_w; col++) {
+            int idx = row * t->term_w + col;
+            struct term_cell *cell = &ctx->term_cell[idx];
+            struct term_cell *prev = &t->wd->prev_term_cell[idx];
+
+            bool is_new_cursor = (col == t->cur_col && row == t->cur_row);
+            // カーソルが移動した場合、移動元のセルを反転無しで再描画して元に戻す
+            bool is_old_cursor = !t->full_redraw &&
+                col == t->prev_cur_col && row == t->prev_cur_row && !is_new_cursor;
+
+            if (!t->full_redraw && !is_new_cursor && !is_old_cursor &&
+                cell_visually_equal(cell, prev)) {
+                continue;
+            }
+
+            int base_x = col * t->cell_w;
+            int base_y = row * t->cell_h;
+
+            draw_cell_pixels(t->buf, t->sw, t->sh, base_x, base_y, t->cell_w, t->cell_h,
+                             t->ascender, cell, t->wd->glyphs);
+
+            if (is_new_cursor) {
+                invert_cell_pixels(t->buf, t->sw, t->sh, base_x, base_y, t->cell_w, t->cell_h);
+            }
+
+            *prev = *cell;
+        }
+    }
+}
+
+static void *render_rows_thread(void *arg)
+{
+    render_rows((struct render_task *)arg);
+    return NULL;
+}
+
 // term_cell のうち、前フレームから変化したセル（とカーソルの移動元/移動先）
-// だけを再描画してステージングバッファを更新する
+// だけを再描画してステージングバッファを更新する。
+// 全画面再描画(full_redraw)はリサイズ中に毎フレーム発生し文字数に比例して重いため、
+// その場合だけ行範囲を複数スレッドへ分割して並列描画する。
 void render_cells_to_buffer(struct windata *wd)
 {
     struct term_context *ctx = wd->ctx;
@@ -668,33 +725,51 @@ void render_cells_to_buffer(struct windata *wd)
     int cur_col = ctx->cur->cur_pos.w;
     int cur_row = ctx->cur->cur_pos.h;
 
-    for (int row = 0; row < term_h; row++) {
-        for (int col = 0; col < term_w; col++) {
-            int idx = row * term_w + col;
-            struct term_cell *cell = &ctx->term_cell[idx];
-            struct term_cell *prev = &wd->prev_term_cell[idx];
+    struct render_task base = {
+        .wd = wd, .buf = buf, .sw = sw, .sh = sh,
+        .cell_w = cell_w, .cell_h = cell_h, .ascender = ascender, .term_w = term_w,
+        .cur_col = cur_col, .cur_row = cur_row,
+        .prev_cur_col = wd->prev_cur_col, .prev_cur_row = wd->prev_cur_row,
+        .full_redraw = full_redraw,
+    };
 
-            bool is_new_cursor = (col == cur_col && row == cur_row);
-            // カーソルが移動した場合、移動元のセルを反転無しで再描画して元に戻す
-            bool is_old_cursor = !full_redraw &&
-                col == wd->prev_cur_col && row == wd->prev_cur_row && !is_new_cursor;
+    // スレッド数を決定。全画面再描画かつ行数が十分ある時だけ並列化する。
+    // 差分描画(通常のタイプ時など)は変化セルが少なくスレッド生成の方が高くつくため1本で処理。
+    int nthreads = 1;
+    if (full_redraw && term_h >= 8) {
+        long ncpu = sysconf(_SC_NPROCESSORS_ONLN);
+        if (ncpu < 1) ncpu = 1;
+        if (ncpu > 8) ncpu = 8;        // スレッド生成オーバーヘッドが見合う上限
+        nthreads = (int)ncpu;
+        if (nthreads > term_h) nthreads = term_h;
+    }
 
-            if (!full_redraw && !is_new_cursor && !is_old_cursor &&
-                cell_visually_equal(cell, prev)) {
-                continue;
+    if (nthreads <= 1) {
+        base.row_start = 0;
+        base.row_end   = term_h;
+        render_rows(&base);
+    } else {
+        pthread_t threads[8];
+        struct render_task tasks[8];
+        bool created[8] = {0};
+        int rows_per = (term_h + nthreads - 1) / nthreads;
+        for (int i = 0; i < nthreads; i++) {
+            int rs = i * rows_per;
+            int re = rs + rows_per;
+            if (rs >= term_h) break;
+            if (re > term_h) re = term_h;
+            tasks[i] = base;
+            tasks[i].row_start = rs;
+            tasks[i].row_end   = re;
+            if (pthread_create(&threads[i], NULL, render_rows_thread, &tasks[i]) != 0) {
+                // 生成失敗時はこの範囲を呼び出しスレッドで処理する
+                render_rows(&tasks[i]);
+            } else {
+                created[i] = true;
             }
-
-            int base_x = col * cell_w;
-            int base_y = row * cell_h;
-
-            draw_cell_pixels(buf, sw, sh, base_x, base_y, cell_w, cell_h,
-                             ascender, cell, wd->glyphs);
-
-            if (is_new_cursor) {
-                invert_cell_pixels(buf, sw, sh, base_x, base_y, cell_w, cell_h);
-            }
-
-            *prev = *cell;
+        }
+        for (int i = 0; i < nthreads; i++) {
+            if (created[i]) pthread_join(threads[i], NULL);
         }
     }
 
