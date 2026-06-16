@@ -47,6 +47,10 @@
 #include <wlr/types/wlr_drm.h>
 #include <wlr/types/wlr_layer_shell_v1.h>
 #include <wlr/types/wlr_xdg_decoration_v1.h>
+#include"mybar_proj/include/mybar.h"
+
+
+
 struct pos_double
 {
     double absolute_x;
@@ -78,6 +82,15 @@ struct wallpaper_manage
     struct wlr_scene_layer_surface_v1 *scene_layer_surface_v1;
     struct wallpaper_listner wallpaper_manage_listner;
 };
+
+struct mybar_data
+{
+    struct wlr_layer_surface_v1 *surface_v1;
+    struct wlr_layer_shell_v1 *wallpaper_shell;//レイヤ構造体
+    struct wlr_scene_layer_surface_v1 *scene_layer_surface_v1;
+    struct wallpaper_listner mybar_listner;
+};
+
 struct diff_pos
 {
     struct pos_int diff_cur_surf_pos;
@@ -146,6 +159,7 @@ struct server
     struct wallpaper_manage wallpaper;//壁紙管理構造体
     struct mouce_structure_mem_mgr mouce_structure;
     struct wlr_scene_node_ranking_mgr *wlr_scene_tree_node_rankin_mgr;
+    struct mybar_data mybar;
     struct view *moving_view;//サーフェス座標変更時のview構造体を保持する関数
     bool now_surface_request_resize;//リサイズ中か判断する(1でリサイズ中)
     bool bool_resizing_node; //マウスカーソルがサーフェス内にいるか
@@ -211,6 +225,8 @@ struct mouce_taskbar_pos
     double x;
     double y;
 };
+//ステータスバーなど、常に前に表示されるサーフェスが要求されたときに実行する関数
+static void request_mybar(struct wl_listener *listener, void *data);
 //toplevel構造体の画面推移時などに破棄するときに発火する関数
 static void toplevel_destroy(struct wl_listener *listener, void *data);
 //最初のデコレーションモード確認の関数
@@ -624,6 +640,10 @@ static void function_set()
     s1->wallpaper.wallpaper_manage_listner.wallpaper_listner.notify = layer_shell_create;
     //描画可能時に実行左折関数の登録
     s1->wallpaper.wallpaper_manage_listner.commit_listener.notify = wallpaper_commit;
+    //ステータスバーの描画要求時に実行する関数
+    s1->mybar.mybar_listner.commit_listener.notify = request_mybar;
+
+
     //クライアントのマウスカーソル変更シグナル発火時のリスナー
     s1->mouce_structure.set_cliant_cursor_image_listener.notify = get_cliant_cursor_image;
     //タイトルバーなどのデコレーションをの設定をサーフェス生成時にする関数
@@ -1196,18 +1216,42 @@ static bool new_wallpaper_criant_create()
 
 static void layer_shell_create(struct wl_listener *listener, void *data)
 {
-    struct wlr_layer_surface_v1 *wallpaler_data = data;
-    if(wallpaler_data->pending.layer == ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND){
-        s1->wallpaper.surface_v1 = wallpaler_data;
-        //s1.sceneに壁紙用のツリーを生成する
-        struct wlr_scene_tree *wallpaler = wlr_scene_tree_create(&s1->scene->tree);
-        //ツリーにs1.sceneにlayer_surface_v1を作って紐ずける
-        s1->wallpaper.scene_layer_surface_v1 = wlr_scene_layer_surface_v1_create(wallpaler, s1->wallpaper.surface_v1);
-        struct wlr_box full_area;
-        wlr_output_layout_get_box(s1->s_output_struct.output_layout, s1->s_output_struct.output, &full_area);
-        //コンポジタが指定した最終的なサイズをクライアント（壁紙やパネルなど）に通知するための関数
-        wl_signal_add(&s1->wallpaper.surface_v1->surface->events.commit,
-            &s1->wallpaper.wallpaper_manage_listner.commit_listener);
+    struct wlr_layer_surface_v1 *wlr_layer_surface_v1_data = data;
+    switch (wlr_layer_surface_v1_data->pending.layer) {
+        case ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND:
+        {
+            s1->wallpaper.surface_v1 = wlr_layer_surface_v1_data;
+            //s1.sceneに壁紙用のツリーを生成する
+            struct wlr_scene_tree *wallpaler = wlr_scene_tree_create(&s1->scene->tree);
+            //ツリーにs1.sceneにlayer_surface_v1を作って紐ずける
+            s1->wallpaper.scene_layer_surface_v1 = wlr_scene_layer_surface_v1_create(wallpaler, s1->wallpaper.surface_v1);
+            struct wlr_box full_area;
+            wlr_output_layout_get_box(s1->s_output_struct.output_layout, s1->s_output_struct.output, &full_area);
+            //コンポジタが指定した最終的なサイズをクライアント（壁紙やパネルなど）に通知するための関数
+            wl_signal_add(&s1->wallpaper.surface_v1->surface->events.commit,
+                &s1->wallpaper.wallpaper_manage_listner.commit_listener);
+            break;
+        }
+        case ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM:
+        {
+            break;
+        }
+        case ZWLR_LAYER_SHELL_V1_LAYER_TOP:
+        {
+            //case ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND:と同じ仕組み  
+            s1->mybar.surface_v1 = wlr_layer_surface_v1_data;
+            struct wlr_scene_tree *bar = wlr_scene_tree_create(&s1->scene->tree);
+            s1->wallpaper.scene_layer_surface_v1 = wlr_scene_layer_surface_v1_create(bar, s1->wallpaper.surface_v1);
+            struct wlr_box bar_area;
+            wlr_output_layout_get_box(s1->s_output_struct.output_layout, s1->s_output_struct.output, &bar_area);
+             wl_signal_add(&s1->mybar.surface_v1->surface->events.commit,
+                &s1->mybar.mybar_listner.commit_listener);
+            break;
+        }
+        case ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY:
+        {
+            break;
+        }
     }
 }
 //ウィンドウの縁をクリックした時に実行される関数
@@ -1488,4 +1532,8 @@ static void toplevel_destroy(struct wl_listener *listener, void *data)
     wl_list_remove(&v->request_move_surface.link);
     wl_list_remove(&v->commit.link);
     free(v);
+}
+
+static void request_mybar(struct wl_listener *listener, void *data){
+    mybar_start();
 }
