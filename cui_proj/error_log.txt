@@ -5,4 +5,4 @@ GetWindowScaleDPI(): x=2.00, y=2.00
 render_scale: 2  (1=logical/no-hidpi, >=2=physical hidpi framebuffer)
 XDG_SESSION_TYPE: wayland
 =======================
-can not open settings.jsoncan not open settings.json
+can not open settings.jsoncan not open settings.jsoncan not open settings.json

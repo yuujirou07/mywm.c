@@ -86,6 +86,18 @@ mybar_lib = static_library(
     ],
 )
 
+executable(
+    'mybar',
+    ['mybar_proj/src/mybar.c', xdg_shell_c, layer_shell_c, layer_shell_client_h],
+    include_directories: mybar_inc,
+    dependencies: [
+        pango,
+        pangocairo,
+        cairo,
+        wayland_client,
+    ],
+)
+
 # --- mywm ---
 executable(
     'mywm',
@@ -102,9 +114,15 @@ executable(
 )
 
 # --- txt_editor ---
-ncurses = dependency('ncurses')
+ncursesw_dep = dependency('ncursesw')
+txt_editor_inc = include_directories('my_txt_editor/include')
 executable(
     'txt_editor',
-    ['my_txt_editor/main.c', 'my_txt_editor/txt_editor_func.c'],
-    dependencies: [ncurses],
+    [
+        'my_txt_editor/src/main.c',
+        'my_txt_editor/src/txt_editor_func.c',
+        'my_txt_editor/src/my_cui_lib_linux.c',
+    ],
+    include_directories: txt_editor_inc,
+    dependencies: [ncursesw_dep],
 )

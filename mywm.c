@@ -225,6 +225,7 @@ struct mouce_taskbar_pos
     double x;
     double y;
 };
+static bool new_mybar_start(void);
 //ステータスバーなど、常に前に表示されるサーフェスが要求されたときに実行する関数
 static void request_mybar(struct wl_listener *listener, void *data);
 //toplevel構造体の画面推移時などに破棄するときに発火する関数
@@ -245,6 +246,7 @@ static double check_axis_delta_value(int8_t scroll_device);
 static void mouse_scroll_func(struct wl_listener *, void *data);
 //wiinキーとenterキーの同時押し判定
 static bool super_pressed = 0;
+static bool mybar_started = 0;
 //ウィンドウ要求時にview構造体にデータを配置する関数
 static struct view *view_create(struct wlr_xdg_toplevel *xdg_toplevel, struct wlr_scene_tree *new_scene_tree);
 //クライアントがカーソルイメージを変更したいときに実行される関数
@@ -610,6 +612,10 @@ static void new_output(struct wl_listener *listener, void *data)
     }
     //swaybgへの壁紙要求
     wallpaper_create_sucsess = new_wallpaper_criant_create();
+    if(!mybar_started)
+    {
+        mybar_started = new_mybar_start();
+    }
     //出力レイアウトにoutputを追加する関数。これにより、出力レイアウトはこのoutputを管理できるようになる
     wlr_output_layout_add_auto(s1->s_output_struct.output_layout, output);
 
@@ -1214,6 +1220,60 @@ static bool new_wallpaper_criant_create()
     return 0;
 }
 
+
+static bool new_mybar_start(void)
+{
+    pid_t pid = fork();
+    if(pid == 0)
+    {
+        char self_path[PATH_MAX];
+        ssize_t self_len = readlink("/proc/self/exe", self_path, sizeof(self_path) - 1);
+        if(self_len > 0)
+        {
+            self_path[self_len] = '\0';
+            char *last_slash = strrchr(self_path, '/');
+            if(last_slash != NULL)
+            {
+                *last_slash = '\0';
+                char bar_path[PATH_MAX];
+                size_t dir_len = strlen(self_path);
+                if(dir_len + sizeof("/mybar") <= sizeof(bar_path))
+                {
+                    memcpy(bar_path, self_path, dir_len);
+                    memcpy(bar_path + dir_len, "/mybar", sizeof("/mybar"));
+                    char *const build_args[] = {
+                        bar_path,
+                        NULL
+                    };
+                    execv(build_args[0], build_args);
+                }
+            }
+        }
+        char *const args[] = {
+            "/home/yuujirou07/vscode_proj/mywm_proj/mybar_proj/mybar",// 第1引数: 実行するバイナリ名
+            NULL
+        };
+        execvp(
+            args[0], // 第1引数: 検索して実行するファイル名 ("swaybg")
+            args     // 第2引数: プログラムに渡す引数の配列
+        );
+        exit(EXIT_FAILURE);
+        return 0;
+    }
+    if(pid > 0)
+    {//親の処理
+        return 1;
+    }
+    else
+    {
+        s1->debug = fopen("debug_error_code.txt", "r");
+        fputs("fork error", s1->debug);
+        fclose(s1->debug);
+        return 0;
+    }
+    return 0;
+}
+
 static void layer_shell_create(struct wl_listener *listener, void *data)
 {
     struct wlr_layer_surface_v1 *wlr_layer_surface_v1_data = data;
@@ -1241,7 +1301,7 @@ static void layer_shell_create(struct wl_listener *listener, void *data)
             //case ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND:と同じ仕組み  
             s1->mybar.surface_v1 = wlr_layer_surface_v1_data;
             struct wlr_scene_tree *bar = wlr_scene_tree_create(&s1->scene->tree);
-            s1->wallpaper.scene_layer_surface_v1 = wlr_scene_layer_surface_v1_create(bar, s1->wallpaper.surface_v1);
+            s1->mybar.scene_layer_surface_v1 = wlr_scene_layer_surface_v1_create(bar, s1->mybar.surface_v1);
             struct wlr_box bar_area;
             wlr_output_layout_get_box(s1->s_output_struct.output_layout, s1->s_output_struct.output, &bar_area);
              wl_signal_add(&s1->mybar.surface_v1->surface->events.commit,
@@ -1535,5 +1595,11 @@ static void toplevel_destroy(struct wl_listener *listener, void *data)
 }
 
 static void request_mybar(struct wl_listener *listener, void *data){
-    mybar_start();
+    (void)listener;
+    (void)data;
+    struct wlr_box full_area;
+    wlr_output_layout_get_box(s1->s_output_struct.output_layout, s1->s_output_struct.output, &full_area);
+    struct wlr_box usable_area = full_area;
+    wlr_scene_layer_surface_v1_configure(s1->mybar.scene_layer_surface_v1,
+        &full_area, &usable_area);
 }
