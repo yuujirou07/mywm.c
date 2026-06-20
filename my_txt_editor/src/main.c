@@ -6,6 +6,7 @@
 #include "txt_editor.h"
 
 
+
 int main(int argc, char *argv[])
 {
     struct editor_state state = {0};
@@ -38,6 +39,7 @@ int main(int argc, char *argv[])
     file_browse_box.pos.y = state.scr.scr_size.y / 4;
 
     state.is_cur_show = curs_set(1);
+    state.is_show_box = 0;
     raw();
     start_color();
     scrollok(win, TRUE);
@@ -49,13 +51,17 @@ int main(int argc, char *argv[])
         attrset(COLOR_PAIR(1));
     }
 
-    state.write_area.x_start = 5;
+    state.write_area.x_start = 6;
     state.write_area.y_start = 0;
-    state.write_area.x_end   = state.scr.scr_size.x;
+    state.write_area.x_end   = state.scr.scr_size.x-1;
     state.write_area.y_end   = state.scr.scr_size.y;
     state.write_area.w = state.write_area.x_end - state.write_area.x_start;
     state.write_area.h = state.write_area.y_end - state.write_area.y_start;
 
+    struct pos line_start_pos = (struct pos){state.write_area.x_start-2,state.write_area.y_start};
+    struct pos line_end_pos = (struct pos){state.write_area.x_start-2,state.scr.scr_size.y};
+
+    draw_line(line_start_pos,line_end_pos,win,all_draw_mode);
     draw_line_numbers(&state.scr, &state.write_area);
     move(state.write_area.y_start, state.write_area.x_start);
     refresh();
@@ -72,27 +78,46 @@ int main(int argc, char *argv[])
             if (ch == KEY_RESIZE){
                 handle_resize(win, &state);
             }
-            else if (ch == KEY_BACKSPACE)
+            else if (ch == KEY_BACKSPACE && state.is_cur_show)
                 handle_backspace(win, &state);
         }
 
-        if (ch == KEY_ENTER || ch == '\n'){
-            handle_newline(win, &state);
-        }
-
-        if (ch == '\t'){
-            handle_tab();
-        }
-
-        if (input_result == OK && iswprint((wint_t)ch)) {
-            if (ch == 'q'){
-                break;
+        if (state.is_cur_show) {
+            if (ch == KEY_ENTER || ch == '\n'){
+                handle_newline(win, &state);
             }
-            handle_char_input(win, (wchar_t)ch, &state);
+
+            if (ch == '\t'){
+                handle_tab(&state);
+            }
+
+            if (input_result == OK && iswprint((wint_t)ch)) {
+                if (ch == 'q'){
+                    break;
+                }
+                handle_char_input(win, (wchar_t)ch, &state);
+            }
+
+            if(ch == KEY_LEFT || ch == KEY_RIGHT || ch == KEY_UP || ch == KEY_DOWN){
+                handle_input_allow(win,ch,&state);
+            }
+        }
+        if(ch == CTRL('f')){
+            if(state.is_show_box){
+                for(int i = 0; i <= file_browse_box.h; i++)
+                    mvhline(file_browse_box.pos.y + i, file_browse_box.pos.x, ' ' , file_browse_box.w + 1);
+                state.is_show_box = false;
+            }
+            else{
+                draw_box(&state, file_browse_box, win);
+                state.is_show_box = true;
+            }
+            refresh();
         }
 
         if (ch == KEY_MOUSE){
             handle_mouse(win, &mouse_event, &state);
+            draw_line(line_start_pos,line_end_pos,win,all_draw_mode);
         }
     }
 
