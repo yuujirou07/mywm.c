@@ -9,6 +9,7 @@
 #define MAX_LINES    1000
 #define MAX_LINE_LEN 1000
 #define INDENT_RANGE 8
+#define JMP_SET_CUR_POS 10  
 #define CTRL(x) ((x) & 0x1f)// 0x1fはCtrl
 
 struct pos {
@@ -44,6 +45,7 @@ struct str_data {
 
 struct mouse_data {
     int now_mouce_line;
+    struct pos scr_abs_now_pos;
 };
 
 struct editor_state {
@@ -60,9 +62,11 @@ enum line_mode {
     fix_scr_line_damege,//スクロールで線が破損したときなど
 };
 
+
 void draw_line_numbers(struct scr_data *scr_data, struct write_possible_area *area);
 void draw_line(struct pos start_pos,struct pos end_pos,WINDOW *win,enum line_mode mode);
 void draw_box(struct editor_state *state,struct box box,WINDOW *win);
+void draw_all_line(WINDOW *win,struct editor_state *state);
 
 void handle_input_allow(WINDOW *win, wchar_t ch, struct editor_state *state);
 void handle_resize(WINDOW *win, struct editor_state *state);

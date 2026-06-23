@@ -11,7 +11,9 @@ void draw_line_numbers(struct scr_data *scr_data, struct write_possible_area *ar
 
     for (int i = 0; i < scr_data->scr_size.y; i++) {
         char num_str[6];
+    
         int size = snprintf(num_str, 6, "%d", (scr_data->scr_start_num + i) + 1);
+        mvhline(i,0,' ',4);
         mvprintw(i, 4 - size, "%s", num_str);
     }
     if (cur_pos.x < area->x_start)
@@ -20,6 +22,7 @@ void draw_line_numbers(struct scr_data *scr_data, struct write_possible_area *ar
 }
 
 void handle_resize(WINDOW *win, struct editor_state *state) {
+
     int cx, cy;
     getyx(win, cy, cx);
     getmaxyx(win, state->scr.scr_size.y, state->scr.scr_size.x);
@@ -31,9 +34,6 @@ void handle_resize(WINDOW *win, struct editor_state *state) {
 
     clear();
 
-    struct pos line_start = {state->write_area.x_start - 2, state->write_area.y_start};
-    struct pos line_end   = {state->write_area.x_start - 2, state->scr.scr_size.y};
-
     draw_line_numbers(&state->scr, &state->write_area);
     move(cy, cx);
     refresh();
@@ -42,7 +42,7 @@ void handle_resize(WINDOW *win, struct editor_state *state) {
 void handle_backspace(WINDOW *win, struct editor_state *state) {
     int x, y;
     getyx(win, y, x);
-
+   
     if (x > state->write_area.x_start) {
         mvdelch(y, x - 1);
         state->str.line[state->mouse.now_mouce_line]--;
@@ -50,9 +50,13 @@ void handle_backspace(WINDOW *win, struct editor_state *state) {
         int line_base = state->mouse.now_mouce_line * state->write_area.w;
         int del_pos   = (x - 1) - state->write_area.x_start;
         int new_len   = state->str.line[state->mouse.now_mouce_line];
-        memmove(&state->str.line_str_data[line_base + del_pos],
-                &state->str.line_str_data[line_base + del_pos + 1],
-                (new_len - del_pos) * sizeof(wint_t));
+        
+        int move_count = new_len - del_pos;
+        if (move_count > 0)
+            memmove(&state->str.line_str_data[line_base + del_pos],
+                    &state->str.line_str_data[line_base + del_pos + 1],
+                    move_count * sizeof(wint_t));
+
         state->str.line_str_data[line_base + new_len] = 0;
 
     } else if (state->write_area.y_start < y) {
@@ -66,18 +70,21 @@ void handle_backspace(WINDOW *win, struct editor_state *state) {
 
 void handle_newline(WINDOW *win, struct editor_state *state) {
     int y = getcury(win);
-    if (y + 1 < state->write_area.y_end)
+    if (y + 1 < state->write_area.y_end){
         move(y + 1, state->write_area.x_start);
-    else
+    }
+    else{
         move(y, state->write_area.x_start);
+    }
     state->mouse.now_mouce_line++;
     refresh();
 }
 
 void handle_tab(struct editor_state *state) {
-    for (int i = 0; i < INDENT_RANGE; i++)
+    for (int i = 0; i < INDENT_RANGE; i++){
         addch(' ');
-        state->str.line[state->mouse.now_mouce_line]+=INDENT_RANGE;
+    }
+    state->str.line[state->mouse.now_mouce_line]+=INDENT_RANGE;
     refresh();
 }
 
@@ -91,9 +98,11 @@ void handle_char_input(WINDOW *win, wchar_t ch, struct editor_state *state){
     if(state->str.line_str_data[idx] != 0){
        // 挿入
         int line_len = state->str.line[state->mouse.now_mouce_line];
-        memmove(&state->str.line_str_data[idx + 1],
-                &state->str.line_str_data[idx],
-                (line_len - writing_area) * sizeof(wint_t));
+        int insert_count = line_len - writing_area;
+        if (insert_count > 0)
+            memmove(&state->str.line_str_data[idx + 1],
+                    &state->str.line_str_data[idx],
+                    insert_count * sizeof(wint_t));
         insch(ch);
         move(y, x + 1);
     }
@@ -154,7 +163,7 @@ void handle_mouse(WINDOW *win, MEVENT *event, struct editor_state *state) {
         }
     }
     draw_line_numbers(&state->scr, &state->write_area);
-    curs_set(state->is_cur_show);
+    curs_set(state->is_cur_show ? 1 : 0);
     refresh();
 }
 
@@ -312,7 +321,6 @@ void draw_line(struct pos start_pos,struct pos end_pos,WINDOW *win,enum line_mod
                     }
                 }
             }
-
             break;
         }
     }
@@ -328,7 +336,7 @@ void draw_box(struct editor_state *state, struct box box, WINDOW *win){
         state->is_cur_show = false;
         state->is_show_box = true;
 
-        curs_set(state->is_cur_show);
+        curs_set(state->is_cur_show ? 1 : 0);
     }
 
     int cur_x;
@@ -338,11 +346,11 @@ void draw_box(struct editor_state *state, struct box box, WINDOW *win){
 
     int x = box.pos.x;
     int y = box.pos.y;
-    int w = box.w;
+    int w = box.w; 
     int h = box.h;
-
+ 
     struct pos top_left     = {x,     y};
-    struct pos top_right    = {x + w, y};
+    struct pos top_right    = {x + w, y}; 
     struct pos bottom_left  = {x,     y + h};
     struct pos bottom_right = {x + w, y + h};
 
@@ -358,4 +366,36 @@ void draw_box(struct editor_state *state, struct box box, WINDOW *win){
 
     move(cur_y,cur_x);
     refresh();
+}
+
+void draw_all_line(WINDOW *win,struct editor_state *state){
+    int x = getcurx(win);
+
+    //描画開始位置
+    int start_draw_line_num = (state->mouse.now_mouce_line > JMP_SET_CUR_POS) 
+        ? state->mouse.now_mouce_line - JMP_SET_CUR_POS : 0;
+
+    state->scr.scr_start_num = start_draw_line_num;
+
+    for(int i = start_draw_line_num;i < (start_draw_line_num + state->write_area.h);i++){
+
+        if(state->str.line[i] > 0){
+
+            int allocate_cell_size = state->write_area.w + 1;
+            int line_idx = i * state->write_area.w;
+            int scr_pos_y = i - start_draw_line_num;
+            
+            wint_t tmp[allocate_cell_size];
+            memset(tmp, 0, allocate_cell_size * sizeof(wint_t));
+
+            memcpy(tmp, &state->str.line_str_data[line_idx], state->write_area.w * sizeof(wint_t));
+            tmp[state->write_area.w] = 0;
+
+            mvhline(scr_pos_y,state->write_area.x_start, ' ', state->write_area.w);
+            move(scr_pos_y, state->write_area.x_start);
+            addwstr((wchar_t *)tmp);
+        }
+    }
+    int scr_pos_y = state->mouse.now_mouce_line - state->scr.scr_start_num;
+    move(scr_pos_y, x);  
 }
