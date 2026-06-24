@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include <wchar.h>
 #include <wctype.h>
+#include <dirent.h>
 
 #define MAX_LINES    1000
 #define MAX_LINE_LEN 1000
@@ -53,6 +54,9 @@ struct editor_state {
     struct str_data            str;
     struct mouse_data          mouse;
     struct write_possible_area write_area;
+    struct box                 file_browser_area;
+    int                        file_select_line; 
+    int                        dir_num;
     bool                       is_cur_show;
     bool                       is_show_box;
 };
@@ -67,6 +71,11 @@ void draw_line_numbers(struct scr_data *scr_data, struct write_possible_area *ar
 void draw_line(struct pos start_pos,struct pos end_pos,WINDOW *win,enum line_mode mode);
 void draw_box(struct editor_state *state,struct box box,WINDOW *win);
 void draw_all_line(WINDOW *win,struct editor_state *state);
+void draw_box_inside_dir(struct editor_state *state,char *table);
+void draw_select_dir_scene_color(struct editor_state *state,int num);
+void editor_screen_move_line(struct editor_state *state,WINDOW *win,int num);
+
+void load_dir_table(struct editor_state *state,char *table,char *path_name);
 
 void handle_input_allow(WINDOW *win, wchar_t ch, struct editor_state *state);
 void handle_resize(WINDOW *win, struct editor_state *state);
