@@ -199,6 +199,9 @@ struct term_context {
 
     bool is_private;
     bool has_val;
+    bool g0_special_graphics;
+    bool g1_special_graphics;
+    bool use_g1_charset;
 
     char osc_pal_chr[513];
   }bash_parser_required_memb;

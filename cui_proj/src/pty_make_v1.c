@@ -208,27 +208,27 @@ int main(void) {
   // ctx(term_context)はターミナルの全状態を保持する中心的な構造体。
   // 画面の各文字セル(term_cell配列)、カーソル位置、エスケープシーケンス
   // パーサの状態(bash_parser_required_memb)などをここに集約する。
-  ctx.term_cell = calloc(term_cell_alloc_size, sizeof(struct term_cell));
-  ctx.alt_term_cell = NULL;
-  ctx.cur = malloc(sizeof(struct cursor));
-  ctx.save_cur = malloc(sizeof(struct cursor));
-  ctx.term_size = term_size;
-  ctx.palms = malloc(sizeof(int) * 16);
-  ctx.palms_counter = malloc(sizeof(int));
-  *ctx.palms_counter = 0;
-  ctx.paste_mode = false;
-  ctx.abs_path_name = NULL;
-  ctx.total_cells = total;
-  ctx.insert_mode = false;
-  ctx.lines = lines;
-  ctx.master_fd = master_fd;
-  ctx.window = wd.window;
+  ctx.term_cell            = calloc(term_cell_alloc_size, sizeof(struct term_cell));
+  ctx.alt_term_cell        = NULL;
+  ctx.cur                  = malloc(sizeof(struct cursor));
+  ctx.save_cur             = malloc(sizeof(struct cursor));
+  ctx.term_size            = term_size;
+  ctx.palms                = malloc(sizeof(int) * 16);
+  ctx.palms_counter        = malloc(sizeof(int));
+  *ctx.palms_counter       = 0;
+  ctx.paste_mode           = false;
+  ctx.abs_path_name        = NULL;
+  ctx.total_cells          = total;
+  ctx.insert_mode          = false;
+  ctx.lines                = lines;
+  ctx.master_fd            = master_fd;
+  ctx.window               = wd.window;
   ctx.term_cell_alloc_size = &term_cell_alloc_size;
-  ctx.kbd_insert_mode = false;
-  ctx.cell_w = cell_w;
-  ctx.cell_h = cell_h;
-  ctx.display_scale = content_scale_x;
-  ctx.render_scale = (int)(content_scale_x + 0.5f);
+  ctx.kbd_insert_mode      = false;
+  ctx.cell_w               = cell_w;
+  ctx.cell_h               = cell_h;
+  ctx.display_scale        = content_scale_x;
+  ctx.render_scale         = (int)(content_scale_x + 0.5f);
   if (ctx.render_scale < 1) ctx.render_scale = 1;
 
   // カーソル初期化
@@ -255,6 +255,9 @@ int main(void) {
   ctx.bash_parser_required_memb.val = 0;
   ctx.bash_parser_required_memb.is_private = false;
   ctx.bash_parser_required_memb.has_val = 0;
+  ctx.bash_parser_required_memb.g0_special_graphics = false;
+  ctx.bash_parser_required_memb.g1_special_graphics = false;
+  ctx.bash_parser_required_memb.use_g1_charset = false;
   ctx.bash_parser_required_memb.now_fg_color = WHITE;
   ctx.bash_parser_required_memb.now_bg_color = BLACK;
   ctx.bash_parser_required_memb.now_is_bold = false;
@@ -717,6 +720,7 @@ void scroll_region_down(struct term_context *ctx) {
   ctx->lines[top].is_wrapped = false;
 }
 
+// xterm_256color(): SGR 38;5 / 48;5 で使う0〜255のxterm色番号をColorへ変換する。
 Color xterm_256color(int n) {
   if (n < 0 || n > 255) return WHITE;
   const Color base[8] = {
@@ -776,6 +780,9 @@ void esc_single_dispatch(struct term_context *ctx, char c) {
         ctx->term_cell[i].is_bold     = false;
         ctx->term_cell[i].is_real_chr = false;
       }
+      ctx->bash_parser_required_memb.g0_special_graphics = false;
+      ctx->bash_parser_required_memb.g1_special_graphics = false;
+      ctx->bash_parser_required_memb.use_g1_charset = false;
       ctx->cur->cur_pos.w = 0;
       ctx->cur->cur_pos.h = 0;
       break;
@@ -783,6 +790,40 @@ void esc_single_dispatch(struct term_context *ctx, char c) {
     case '>':  // DECKPNM: キーパッド数値モード（無視）
     default:
       break;
+  }
+}
+
+static int dec_special_graphics_cp(int c) {
+  switch (c) {
+    case '_': return ' ';
+    case '`': return 0x25c6;
+    case 'a': return 0x2592;
+    case 'b': return 0x2409;
+    case 'c': return 0x240c;
+    case 'd': return 0x240d;
+    case 'e': return 0x240a;
+    case 'f': return 0x00b0;
+    case 'g': return 0x00b1;
+    case 'h': return 0x2424;
+    case 'i': return 0x240b;
+    case 'j': return 0x2518;
+    case 'k': return 0x2510;
+    case 'l': return 0x250c;
+    case 'm': return 0x2514;
+    case 'n': return 0x253c;
+    case 'q': return 0x2500;
+    case 't': return 0x251c;
+    case 'u': return 0x2524;
+    case 'v': return 0x2534;
+    case 'w': return 0x252c;
+    case 'x': return 0x2502;
+    case 'y': return 0x2264;
+    case 'z': return 0x2265;
+    case '{': return 0x03c0;
+    case '|': return 0x2260;
+    case '}': return 0x00a3;
+    case '~': return 0x00b7;
+    default:  return c;
   }
 }
 
@@ -816,9 +857,17 @@ void bash_str_parse(char *buff, ssize_t size, struct term_context *ctx) {
         } else if (esc_char == ']') {
           ctx->bash_parser_required_memb.mode = OSC_MODE;
         } else {
-          // 2文字ESCシーケンス: ESC ( / ESC ) は次の1文字を消費して無視
           if (esc_char == '(' || esc_char == ')') {
-            if (i + 1 < size) i++;
+            if (i + 1 < size) {
+              char charset = buff[++i];
+              if (esc_char == '(') {
+                if (charset == '0') ctx->bash_parser_required_memb.g0_special_graphics = true;
+                else if (charset == 'B') ctx->bash_parser_required_memb.g0_special_graphics = false;
+              } else if (esc_char == ')') {
+                if (charset == '0') ctx->bash_parser_required_memb.g1_special_graphics = true;
+                else if (charset == 'B') ctx->bash_parser_required_memb.g1_special_graphics = false;
+              }
+            }
           } else {
             esc_single_dispatch(ctx, esc_char);
           }
@@ -922,6 +971,12 @@ void bash_str_parse(char *buff, ssize_t size, struct term_context *ctx) {
       if (buff[i] == '\b') {
           if (ctx->cur->cur_pos.w > 0) ctx->cur->cur_pos.w--;
           continue;
+      } else if (buff[i] == '\x0e') {
+          ctx->bash_parser_required_memb.use_g1_charset = true;
+          continue;
+      } else if (buff[i] == '\x0f') {
+          ctx->bash_parser_required_memb.use_g1_charset = false;
+          continue;
       } else if (buff[i] == '\r') {
           ctx->cur->cur_pos.w = 0;
           continue;
@@ -949,6 +1004,11 @@ void bash_str_parse(char *buff, ssize_t size, struct term_context *ctx) {
         if (cp >= 0x80) {
             int adv = utf8_decode((const unsigned char *)&buff[i], (int)(size - i), &cp);
             i += adv - 1;   // 残り 1 バイトはループの i++ で進む
+        } else if ((!ctx->bash_parser_required_memb.use_g1_charset &&
+                    ctx->bash_parser_required_memb.g0_special_graphics) ||
+                   (ctx->bash_parser_required_memb.use_g1_charset &&
+                    ctx->bash_parser_required_memb.g1_special_graphics)) {
+            cp = dec_special_graphics_cp(cp);
         }
         if (ctx->insert_mode) {
             char_arry_insert_chr(ctx, 1);
@@ -1132,7 +1192,7 @@ void ls_chr_parse(struct term_context *ctx, char buff, Color *now_fg_color, Colo
     case 'J':
     {
       int mode = (palms_counter > 0) ? palms[0] : 0;
-      if (mode == 2) {
+      if (mode == 2 || mode == 3) {
         for (int i = 0; i < ctx->term_size.h * ctx->term_size.w; i++){
           ctx->term_cell[i].character = ' ';
           ctx->term_cell[i].bg_color = *now_bg_color;
@@ -1197,6 +1257,13 @@ void ls_chr_parse(struct term_context *ctx, char buff, Color *now_fg_color, Colo
       }
       break;
     }
+    // カーソル位置の保存/復元
+    case 's':
+      *(ctx->save_cur) = *(ctx->cur);
+      break;
+    case 'u':
+      *(ctx->cur) = *(ctx->save_cur);
+      break;
     // カーソルを上に移動（パラメータ n 回分）
     case 'A':
     {
@@ -1594,6 +1661,7 @@ int init_cur_mgr(struct cur_mgr *cur_mgr){
   return 0;
 }
 
+// cur_mgr_free(): カーソル管理構造体を解放する。
 void cur_mgr_free(struct cur_mgr *cur_mgr){
   free(cur_mgr);
 }
@@ -1726,6 +1794,7 @@ struct return_binary *char_conbert_binary_arry(char *osc_pal_chr)
   return char_conbert_binary;
 }
 
+// conbert_chr_to_binary_table(): Base64の1文字を6bitに変換してビット配列へ追記する。
 void conbert_chr_to_binary_table(struct return_binary *char_conbert_binary, char buff){
   const char base64_table[64] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   const char *result = strchr(base64_table, buff);
@@ -1756,6 +1825,7 @@ void change_bg_color(struct term_context *ctx,Color c_col){
   ctx->bash_parser_required_memb.now_bg_color=c_col;
 }
 
+// conbert_num_to_color(): OSC 10/11で渡される rgb:rrrr/gggg/bbbb または #RRGGBB をColorへ変換する。
 Color conbert_num_to_color(char *color_str,int mode){
   Color target_color={0};
   int r = 0, g = 0, b = 0;
@@ -1856,6 +1926,7 @@ void window_resized_update_memb(GLFWwindow *window, struct pos *screen_pixel,str
   if (term_size->h <= 0) term_size->h = 1;
 }
 
+// unicode_utf8_encoder(): UnicodeコードポイントをUTF-8バイト列へ変換する。
 void unicode_utf8_encoder(char *utf8,int unicode, int *len){
   // [AI生成] UTF-8エンコード規則:
   //   1バイト: 0xxxxxxx                        (0x00〜0x7F)

@@ -4,6 +4,7 @@
 #include "mouse_io.h"
 #include"pty_make.h"
 
+// restore_copy_cells(): 選択中に白黒反転したセルを、保存しておいた元の色へ戻す。
 static void restore_copy_cells(struct windata *wd)
 {
     for(int i = 0; i < wd->copy_data.copy_cell_counter; i++)
@@ -17,6 +18,8 @@ static void restore_copy_cells(struct windata *wd)
 }
 
 
+// update_copy_selection(): マウス座標をセル位置へ変換し、ドラッグ開始セルから
+// 現在セルまでの範囲をコピー選択として白黒反転する。
 static void update_copy_selection(struct windata *wd, double xpos, double ypos)
 {
     struct pos on_cell_mouse_pos;
@@ -70,6 +73,7 @@ static void update_copy_selection(struct windata *wd, double xpos, double ypos)
     *wd->dirty = true;
 }
 
+// init_mouse(): GLFWにマウスボタンとカーソル移動のコールバックを登録する。
 void init_mouse(struct windata *wd)
 {
     glfwSetMouseButtonCallback(wd->window, mouse_button_callback);
@@ -77,6 +81,8 @@ void init_mouse(struct windata *wd)
 
 }
 
+// mouse_button_callback(): 左クリックでコピー選択の開始/解除を切り替える。
+// 押下時は現在位置のセルを選択範囲の起点として初期化する。
 void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
 {
     struct windata *wd = (struct windata *)glfwGetWindowUserPointer(window);
@@ -116,6 +122,7 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
     }
 }
 
+// cursor_position_callback(): 左ドラッグ中だけ選択範囲を現在のマウス位置まで更新する。
 static void cursor_position_callback(GLFWwindow* window, double xpos, double ypos)
 {    
 

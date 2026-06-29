@@ -6,6 +6,8 @@
 #include "pty_make.h"
 #include FT_FREETYPE_H
 
+// load_otf(): FreeTypeでフォントを開き、'A' 1文字分のビットマップ情報だけをbmfへ入れる。
+// 現在の描画経路ではload_otf_glyphs()が主に使われる。
 int load_otf(char *file_path, struct pos font_size, struct bmf_data *bmf)
 {
     FT_Library lib;
@@ -25,6 +27,8 @@ int load_otf(char *file_path, struct pos font_size, struct bmf_data *bmf)
     return 0;
 }
 
+// load_otf_glyphs(): ASCII表示用に文字コード32〜126のグリフをFreeTypeから読み込み、
+// 後でセル描画できるようにbitmap/bearing/advanceをglyphs配列へ保存する。
 int load_otf_glyphs(const char *file_path, struct pos font_size,
                     struct glyph_data glyphs[128], int *ascender_out)
 {
@@ -66,6 +70,7 @@ int load_otf_glyphs(const char *file_path, struct pos font_size,
     return 0;
 }
 
+// free_otf_glyphs(): load_otf_glyphs()で確保した各グリフのbitmapを解放する。
 void free_otf_glyphs(struct glyph_data glyphs[128])
 {
     for (int c = 0; c < 128; c++) {

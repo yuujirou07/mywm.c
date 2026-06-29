@@ -13,6 +13,8 @@
     ((type *)( (char *)(ptr) - offsetof(type, member) ))
 
     
+// key_callback(): GLFWのキーイベントをpty側へ送る制御文字/エスケープシーケンスへ変換する。
+// Ctrl+Vの貼り付け、Ctrl+E終了、矢印やファンクションキーもここで処理する。
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods)
 {   
     struct windata *wd = (struct windata *)glfwGetWindowUserPointer(window);
@@ -128,6 +130,12 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
     {
         change_font_size(wd, -FONT_CELL_H_STEP);
     }
+    else if(action == GLFW_PRESS && (mods & GLFW_MOD_CONTROL) && key >= GLFW_KEY_A && key <= GLFW_KEY_Z)
+    {
+        char ctrl_key = (char)(key - GLFW_KEY_A + 1);
+        write(wd->master_fd, &ctrl_key, 1);
+        wd->ctx->cur->now_writing = true;
+    }
     else if(key == GLFW_KEY_ENTER && action == GLFW_PRESS)
     {
         char enter_key = 13;
@@ -213,6 +221,7 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
     }
 }
 
+// character_callback(): 通常の文字入力をUTF-8へ変換してptyのmaster_fdへ書き込む。
 void character_callback(GLFWwindow* window, unsigned int codepoint)
 {
     struct windata *wd = (struct windata *)glfwGetWindowUserPointer(window);

@@ -30,6 +30,8 @@ static uint32_t find_memory_type(VkPhysicalDeviceMemoryProperties *memProps,
 }
 
 
+// window_init(): GLFWウィンドウ、Vulkanインスタンス、デバイス、スワップチェーン、
+// ステージングバッファなど描画に必要な状態をまとめて初期化する。
 int window_init(struct windata* wd) {
     if (!glfwInit()) return -1;
 
@@ -500,11 +502,13 @@ int recreate_swapchain(struct windata *wd)
 }
 
 
+// set_window(): ウィンドウタイトルを設定して画面に表示する。
 void set_window(struct windata* wd) {
     glfwSetWindowTitle(wd->window, "bash");
     glfwShowWindow(wd->window);
 }
 
+// destroy_data(): Vulkan/GLFW関連のリソースを破棄してプログラムを終了する。
 void destroy_data(struct windata* wd)
 {
     vkDeviceWaitIdle(wd->device);
@@ -540,6 +544,7 @@ void destroy_data(struct windata* wd)
 }
 
 
+// set_kbd_callback(): GLFWにキー入力と文字入力のコールバックを登録する。
 int set_kbd_callback(struct windata* wd) {
     glfwSetKeyCallback(wd->window, key_callback);
     glfwSetCharCallback(wd->window, character_callback);
@@ -685,6 +690,7 @@ static void render_rows(struct render_task *t)
     }
 }
 
+// render_rows_thread(): pthread用の入口。受け取った行範囲をrender_rows()で描画する。
 static void *render_rows_thread(void *arg)
 {
     render_rows((struct render_task *)arg);

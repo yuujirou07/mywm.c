@@ -12,6 +12,8 @@
 #include <math.h>
 
 // ---- UTF-8 デコード -------------------------------------------------
+// utf8_decode(): 先頭バイトからUTF-8の1文字分を読み、Unicodeコードポイントへ変換する。
+// 戻り値は消費したバイト数。不正な並びや途中切れは1バイト文字として扱う。
 int utf8_decode(const unsigned char *s, int max_len, int *out_cp)
 {
     if (max_len <= 0) { *out_cp = 0; return 0; }
@@ -35,6 +37,7 @@ int utf8_decode(const unsigned char *s, int max_len, int *out_cp)
 }
 
 // ---- 描画対象かどうかの判定 ----------------------------------------
+// is_box_codepoint(): この描画器が直接描ける罫線/ブロック素片かどうかを判定する。
 bool is_box_codepoint(int cp)
 {
     return cp >= 0x2500 && cp <= 0x259F;
@@ -63,6 +66,7 @@ static int stroke_span(int weight, int dim)
 }
 
 // ---- 低レベル描画 ---------------------------------------------------
+// fill_rect(): セル内の相対矩形を、指定アルファで前景色に近づけながら塗る。
 static void fill_rect(uint8_t *buf, int sw, int sh, int bx, int by,
                       int cw, int ch, int x0, int y0, int x1, int y1,
                       Color c, int a)
@@ -84,6 +88,7 @@ static void fill_rect(uint8_t *buf, int sw, int sh, int bx, int by,
     }
 }
 
+// put_px(): セル内の相対座標1ピクセルをそのまま前景色で塗る。
 static void put_px(uint8_t *buf, int sw, int sh, int bx, int by,
                    int cw, int ch, int x, int y, Color c)
 {
@@ -216,6 +221,7 @@ static const uint16_t box_tbl[0x80] = {
 #undef B
 
 // ---- ブロック素片(U+2580〜U+259F) -----------------------------------
+// draw_block(): U+2580〜U+259Fのブロック素片を矩形の組み合わせで描画する。
 static bool draw_block(uint8_t *buf, int sw, int sh, int bx, int by,
                        int cw, int ch, int cp, Color c)
 {
@@ -258,6 +264,8 @@ static bool draw_block(uint8_t *buf, int sw, int sh, int bx, int by,
 }
 
 // ---- 公開関数 -------------------------------------------------------
+// draw_box_codepoint(): 罫線/ブロック素片のコードポイントを1セル内へ直接描画する。
+// フォントグリフを使わず、線分・矩形・弧を計算してピクセルへ書き込む。
 bool draw_box_codepoint(uint8_t *buf, int sw, int sh,
                         int base_x, int base_y, int cell_w, int cell_h,
                         int cp, Color fg)
