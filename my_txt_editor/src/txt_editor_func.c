@@ -7,6 +7,8 @@
 // 行番号を描き直してカーソル位置を復元する。
 // 引数: win=操作対象のncursesウィンドウ、state=更新するエディタ状態、start_pos/end_pos=区切り線端点の更新先。
 // 返り値: なし。
+static int limit = 0;
+
 void handle_resize(WINDOW *win, struct editor_state *state,struct pos *start_pos,struct pos *end_pos){
 
     int cx, cy;
@@ -144,31 +146,38 @@ void handle_char_input(WINDOW *win, wchar_t ch, struct editor_state *state){
     }
     int idx = line * state->str.col_capacity + writing_area;
     int line_len = editor_line_len(state, line);
+    int char_width = wcwidth(ch);
+    if(char_width < 1){
+        char_width = 1;
+    }
+    if(writing_area + char_width > col_limit){
+        return;
+    }
 
-    if(state->str.line_str_data[idx] != 0){
-        if(line_len >= col_limit){
+    if(writing_area < line_len){
+        if(line_len + char_width > col_limit){
             return;
         }
         int insert_count = line_len - writing_area;
         if (insert_count > 0)
-            memmove(&state->str.line_str_data[idx + 1],
+            memmove(&state->str.line_str_data[idx + char_width],
                     &state->str.line_str_data[idx],
                     insert_count * sizeof(wint_t));
-        insch(ch);
-        move(y, x + 1);
-    }
-    else{
-        addch(ch);
     }
 
     state->str.line_str_data[idx] = ch;
+    for(int i = 1; i < char_width; i++){
+        state->str.line_str_data[idx + i] = 0;
+    }
     if(state->str.line[line] <= writing_area){
-        state->str.line[line] = writing_area + 1;
+        state->str.line[line] = writing_area + char_width;
     }
     else if(state->str.line[line] < col_limit){
-        state->str.line[line]++;
+        state->str.line[line] += char_width;
     }
 
+    draw_editor_buffer_line(state, line, y);
+    move(y, x + char_width);
     if (x >= state->write_area.x_end-1 && state->mouse.now_mouce_line + 1 < editor_line_limit(state)){
         move(y + 1, state->write_area.x_start);
         state->mouse.now_mouce_line++;
@@ -297,4 +306,11 @@ void handle_input_allow(WINDOW *win, wchar_t ch, struct editor_state *state){
         }
     }
     refresh();
+}
+
+void set_line_limit(int line_limit){
+    limit = line_limit;
+}
+int get_line_limit(){
+    return limit;
 }

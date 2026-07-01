@@ -7,20 +7,8 @@
 #include <wctype.h>
 #include <dirent.h>
 #include <limits.h>
+#include"default_settings.h"
 
-#define PATH_NAME_MAX_SIZE PATH_MAX
-
-#define MAX_LINES    1000
-#define MAX_LINE_SIZE 1024
-#define LINE_NUMBER_SPACE 4
-#define INDENT_RANGE 8
-#define JMP_SET_CUR_POS 10  
-#define DEFAULT_LOAD_LINE_SiZE 10000
-#define LOAD_BUFFER_LINES 100
-#define SHOW_STATUS_BAR 1
-#define DEFAULT_DRAW_SPLIT_LINE 1
-#define DEFAULT_STATUS_BAR_SIDE top
-#define JUMP_LINE_NUM_DIGITS 4
 #define CTRL(x) ((x) & 0x1f)// 0x1fはCtrl
 
 enum status_bar_side{
@@ -44,11 +32,12 @@ struct editor_settings{
     enum status_bar_side bar_side_state;
     bool show_status_bar;
     bool draw_split_line;
+    bool ask_make_file;//ファイル変更時に何もファイルを開いていなかった場合ファイルを作るか聞く
 };
 struct file_data{
     FILE*   now_open_file;
     char**  file_str_data;
-    char    now_open_path_name[PATH_NAME_MAX_SIZE];
+    char    now_open_path_name[DEFAULT_PATH_NAME_MAX_SIZE];
     long*   file_line_start_num;
     long    file_line_start_num_counter;
     int     file_line_n;
@@ -66,12 +55,19 @@ enum now_screen_state{
     file_browse_screen,
     error_screen,
     line_jump_mode,
+    ask_make_file_mode,
 };
 
+struct make_file_mode_status{
+    bool is_input_scene;
+    char new_file_name[DEFAULT_PATH_NAME_MAX_SIZE];
+    int new_file_name_counter;
+};
 struct file_browse_select_state{
     enum select_state select_state;
     char select_name[NAME_MAX + 1];
 };
+
 struct pos {
     int x;
     int y;
@@ -116,15 +112,18 @@ struct editor_state {
     struct str_data            str;
     struct mouse_data          mouse;
     struct write_possible_area write_area;
+    struct make_file_mode_status make_file_mode_status;
     struct box                 file_browser_area;
-    struct box                 *file_browser_box;
-    struct box                 *status_bar;
+    struct box                *file_browser_box;
+    struct box                *status_bar;
+    struct box                 ask_make_file_box;
     struct file_data           file_data;
     struct jump_mode           jump_mode_data;
     enum now_screen_state      screen_state;
     int                        file_select_line; 
     int                        dir_num;
     bool                       is_cur_show;
+
 };
 
 // editor_line_limit(): 編集対象として扱える最大行数を返す。
@@ -136,6 +135,7 @@ static inline int editor_line_limit(struct editor_state *state){
        state->file_data.file_line_start_num_counter < limit){
         limit = (int)state->file_data.file_line_start_num_counter;
     }
+
     return (limit > 0) ? limit : 0;
 }
 
@@ -147,6 +147,7 @@ static inline int editor_col_limit(struct editor_state *state){
     if(state->str.col_capacity < limit){
         limit = state->str.col_capacity;
     }
+
     return (limit > 0) ? limit : 0;
 }
 
@@ -189,7 +190,7 @@ enum line_mode {
 
 void draw_line_numbers(struct editor_state *state);
 void draw_line(struct pos start_pos,struct pos end_pos,WINDOW *win,enum line_mode mode);
-void draw_box(struct editor_state *state,struct box box,WINDOW *win);
+void draw_box(struct box box,WINDOW *win);
 void draw_all_line(WINDOW *win,struct editor_state *state);
 void draw_editor_buffer_line(struct editor_state *state, int line, int screen_y);
 void draw_now_path_name(struct box file_browse_box,char *path_name);
@@ -226,5 +227,11 @@ void scr_show_line_str_down(WINDOW *win,struct editor_state *state);
 
 void editor_error_screen(struct editor_state *state,char *error_comment);
 void editor_screen_move_line(struct editor_state *state,WINDOW *win,int num);
+
+void set_line_limit(int limit);
+void ask_new_file_name(struct pos str_start_pos,int w,int h);
+void clear_box(struct box box);
+void get_new_file_name();
+int get_line_limit();
 
 #endif

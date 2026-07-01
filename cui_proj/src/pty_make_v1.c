@@ -215,7 +215,7 @@ int main(void) {
   ctx.term_size            = term_size;
   ctx.palms                = malloc(sizeof(int) * 16);
   ctx.palms_counter        = malloc(sizeof(int));
-  *ctx.palms_counter       = 0;
+ *ctx.palms_counter       = 0;
   ctx.paste_mode           = false;
   ctx.abs_path_name        = NULL;
   ctx.total_cells          = total;
@@ -641,6 +641,7 @@ int main(void) {
 
         // 画面への提示を実行
         VkResult presentResult = vkQueuePresentKHR(wd.graphicsQueue, &presentInfo);
+
         if (presentResult == VK_ERROR_OUT_OF_DATE_KHR || presentResult == VK_SUBOPTIMAL_KHR) {
             // サーフェスとスワップチェーンのサイズが食い違っている(リサイズ中など)。
             // 再作成して次フレームで描き直す。

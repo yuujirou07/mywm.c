@@ -1,5 +1,6 @@
 #include <dirent.h>
 #include <linux/limits.h>
+#include <ncurses.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,6 +10,7 @@
 #include"cjson/cJSON.h"
 #include "txt_editor.h"
 #include "json_read.h"
+#include"default_settings.h"
 
 // load_dir_table(): path_name配下のディレクトリエントリを読み込み、
 // ファイルブラウザ表示用の固定幅テーブルへ詰める。
@@ -244,7 +246,13 @@ void load_view_from_cursor(struct editor_state *state){
 // 返り値: なし。
 void save_file(struct editor_state *state){
     if(state->file_data.now_open_path_name[0] == '\0'){
-        editor_error_screen(state, "no file opened");
+        if(state->settings_data->ask_make_file){
+            state->screen_state = ask_make_file_mode;
+            return;
+        }
+        else{
+            editor_error_screen(state, "no file opened");
+        }
         return;
     }
 
@@ -300,6 +308,7 @@ void load_default_editor_settings(struct editor_settings *settings_data){
     settings_data->bar_side_state           = DEFAULT_STATUS_BAR_SIDE;
     settings_data->show_status_bar          = SHOW_STATUS_BAR;
     settings_data->draw_split_line          = DEFAULT_DRAW_SPLIT_LINE;
+    settings_data->ask_make_file            = DEFAULT_ASK_MAKE_FILE;
 }
 
 // load_custom_editor_settings(): 設定JSONがあれば読み込み、既定値を上書きする。
@@ -404,3 +413,17 @@ void load_custom_editor_settings(struct editor_settings *settings_data){
 
     cJSON_Delete(json_data);
 }
+
+void make_new_file(){
+
+}
+
+
+void ask_new_file_name(struct pos str_start_pos,int w,int h){
+    char *ask_str = "write a new file name";
+    int str_len = strlen(ask_str);
+    int ask_str_start_pos_x = str_start_pos.x + ((w - str_len)/2);
+    mvaddstr(str_start_pos.y,ask_str_start_pos_x,ask_str);
+
+}
+

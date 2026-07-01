@@ -18,13 +18,18 @@ static void end_process(struct editor_state *state);
 static void reset_jump_mode(struct editor_state *state);
 static struct pos jump_prompt_pos(struct editor_state *state);
 static long clamp_editor_target_line(struct editor_state *state, long target_line);
-static int draw_start_line_for_target(long target_line);
+static int draw_start_line_for_target(struct editor_state *state,long target_line);
 static void redraw_edit_screen(WINDOW *win, struct editor_state *state,
                                struct pos line_start_pos, struct pos line_end_pos);
 static void restore_edit_screen(WINDOW *win, struct editor_state *state,
                                 struct pos line_start_pos, struct pos line_end_pos);
 static void move_view_to_line(WINDOW *win, struct editor_state *state, long target_line,
                               int x, struct pos line_start_pos, struct pos line_end_pos);
+static void show_make_file_prompt(WINDOW *win, struct editor_state *state,struct box * file_box,
+                                  int screen_center_y, struct pos screen_center_pos);
+
+void my_mvaddstr(struct pos pos,char * str);
+void my_mvaddch(struct pos pos,char str);
 
 // main(): ncursesを初期化し、エディタ画面・ファイルブラウザ・エラー画面の
 // 入力ループを切り替えながら各処理関数へイベントを振り分ける。
@@ -59,8 +64,8 @@ int main(void)
 
     getmaxyx(win, state.scr.scr_size.y, state.scr.scr_size.x);
 
-    int line_cap = (state.scr.scr_size.y * 2 > state.settings_data->load_buffer_lines)
-        ? state.scr.scr_size.y * 2 : state.settings_data->load_buffer_lines;
+    set_line_limit(state.settings_data->default_load_line_size);
+    int line_cap = get_line_limit();
     int total_str_buff_size = state.scr.scr_size.x * line_cap;
     state.str.line_str_data = calloc(total_str_buff_size, sizeof(wint_t));
     if(state.str.line_str_data == NULL){
@@ -75,8 +80,10 @@ int main(void)
     }
     state.str.line_capacity = line_cap;
     state.str.col_capacity = state.scr.scr_size.x;
+
+    int screen_center_y =  state.scr.scr_size.y / 2;
     file_browse_box.w = state.scr.scr_size.x / 3;
-    file_browse_box.h = state.scr.scr_size.y / 2;
+    file_browse_box.h = screen_center_y;
     file_browse_box.pos.x = (state.scr.scr_size.x / 2) - file_browse_box.w / 2;
     file_browse_box.pos.y = state.scr.scr_size.y / 4;
 
@@ -126,6 +133,9 @@ int main(void)
     state.file_browser_area.h = file_browse_box.h - 2; //底辺から1引く
     state.file_browser_area.w = file_browse_box.w - 2;//同上 
 
+    state.make_file_mode_status.is_input_scene = false;
+    state.make_file_mode_status.new_file_name_counter = 0;
+
     state.file_select_line = 0;
     state.dir_num = 0;
     state.file_data.now_open_file = NULL;
@@ -140,7 +150,7 @@ int main(void)
 
     state.jump_mode_data.jump_line_num_counter = 0;
 
-    state.screen_state = edit_screen;
+    state.screen_state              = edit_screen;
     int dir_name_table_size         = state.file_browser_area.w * state.file_browser_area.h;
     char *dir_name_table            = calloc(dir_name_table_size,sizeof(char));
     int allocate_total_str_size     = state.settings_data->load_buffer_lines;
@@ -155,8 +165,10 @@ int main(void)
     }
     load_dir_table(&state,dir_name_table,dir_name_table_size,path_name);
 
-    struct pos line_start_pos = (struct pos){state.write_area.x_start-1,state.write_area.y_start};
-    struct pos line_end_pos = (struct pos){state.write_area.x_start-1,state.write_area.y_end};
+    struct pos line_start_pos       = (struct pos){state.write_area.x_start-1,state.write_area.y_start};
+    struct pos line_end_pos         = (struct pos){state.write_area.x_start-1,state.write_area.y_end};
+    struct pos screen_center_pos    = (struct pos){state.scr.scr_size.x/2,screen_center_y};
+
     draw_edit_screen_base(&state, win, line_start_pos, line_end_pos);
 
     init_pair(2, COLOR_BLACK, COLOR_WHITE);
@@ -165,12 +177,13 @@ int main(void)
     bkgd(COLOR_PAIR(1));
     move(state.write_area.y_start, state.write_area.x_start);
     refresh();
-
-
-    int running = 1;
+    int running = true;
     while (running) {
+        
         wint_t ch = 0;
-        int input_result = get_wch(&ch);
+        int input_result;
+  
+        input_result = get_wch(&ch);
 
         if (input_result == ERR)
             continue;
@@ -201,13 +214,21 @@ int main(void)
                     break;
                 }
                 if (ch == CTRL('f')) {
+                    state.screen_state = file_browse_screen;
                     getyx(win, state.mouse.scr_abs_now_pos.y, state.mouse.scr_abs_now_pos.x);
                     show_file_browse(&state, file_browse_box, dir_name_table, path_name, win);
                     refresh();
                     break;
                 }
                 else if(ch == CTRL('s')){
+                    getyx(win,state.scr.cursor_pos.y,state.scr.cursor_pos.x);
                     save_file(&state);
+                    flushinp();
+                    if(state.screen_state == ask_make_file_mode){
+                        show_make_file_prompt(win, &state,&state.ask_make_file_box,screen_center_y, screen_center_pos);
+                    }
+                    
+                    break;
                 }
                 if (ch == KEY_MOUSE) {
                     handle_mouse(win, &mouse_event, &state);
@@ -333,8 +354,11 @@ int main(void)
                     char *end;
                     long n = strtol(state.jump_mode_data.jump_line_num,&end, 10);
 
-                    if(end == state.jump_mode_data.jump_line_num || n < 1){
+                    if(n < 1){
                         n = 1;
+                    }
+                    else if( n > DEFAULT_LOAD_LINE_SiZE ){
+                        n = DEFAULT_LOAD_LINE_SiZE;
                     }
 
                     move_view_to_line(win, &state, n - 1, state.write_area.x_start,
@@ -354,10 +378,86 @@ int main(void)
                     draw_edit_screen_base(&state, win, line_start_pos, line_end_pos);
                     refresh();
                 }
+                break;
+
+            case ask_make_file_mode:
+            {
+                if(ch == KEY_ENTER || ch == '\n' || ch == '\r'){
+                    clear();
+                    state.screen_state = edit_screen;
+                    draw_edit_screen_base(&state, win, line_start_pos, line_end_pos);
+                    move(state.scr.cursor_pos.y,state.scr.cursor_pos.x);
+                    state.is_cur_show = true;
+                    curs_set(true);
+                    refresh();
+                }
+                else if(ch == 'y'){
+                    struct pos str_start_pos = (struct pos){state.ask_make_file_box.pos.x,state.ask_make_file_box.pos.y+1};
+                    struct box write_file_name_scene_box =  
+                        (struct box){state.ask_make_file_box.pos,state.ask_make_file_box.w,state.ask_make_file_box.h + 2};
+                    struct box input_new_file_name_wtrite_area = 
+                        (struct box){(struct pos){write_file_name_scene_box.pos.x+1,
+                        write_file_name_scene_box.pos.y  + write_file_name_scene_box.h - 3},
+                        write_file_name_scene_box.w - 2,2};
+
+                    clear_box(write_file_name_scene_box);
+                    draw_box(write_file_name_scene_box,win);
+                    draw_box(input_new_file_name_wtrite_area,win);
+                    ask_new_file_name(str_start_pos,write_file_name_scene_box.w,write_file_name_scene_box.h);
+                    state.make_file_mode_status.is_input_scene = true;
+                    state.is_cur_show = true;
+                    move(input_new_file_name_wtrite_area.pos.y + 1,input_new_file_name_wtrite_area.pos.x + 1);
+                    curs_set(true);
+               
+                }
+                else if(ch == 'n'){
+                    clear();
+                    draw_edit_screen_base(&state,win,line_start_pos,line_end_pos);
+                    redraw_edit_screen(win, &state,line_start_pos,line_end_pos);
+                    state.screen_state = edit_screen;
+                
+                }
+                if(state.make_file_mode_status.is_input_scene){
+                    state.make_file_mode_status.new_file_name[state.make_file_mode_status.new_file_name_counter++] = ch;
+                    addch(ch);
+                }
+                refresh();
+                
+            }
         }
     }
     end_process(&state);
     return 0;
+}
+
+static void show_make_file_prompt(WINDOW *win, struct editor_state *state,struct box * file_box,
+                                  int screen_center_y, struct pos screen_center_pos){
+    char comment_str[] = "The file cannot be found; would you like to create it?";
+    int comment_str_len = strlen(comment_str);
+    int box_h = (comment_str_len / state->scr.scr_size.x + 1) + 2;
+    int box_w = (state->scr.scr_size.x > comment_str_len + 2)
+        ? comment_str_len + 2 : state->scr.scr_size.x;
+    struct box make_file_box;
+    make_file_box.pos.y = screen_center_y - (screen_center_y / 2);
+    make_file_box.pos.x = screen_center_pos.x - (comment_str_len / 2);
+    make_file_box.h = box_h;
+    make_file_box.w = box_w;
+
+    draw_box(make_file_box, win);
+    struct pos in_box_str_pos = {make_file_box.pos.x + 1, make_file_box.pos.y + 1};
+    my_mvaddstr(in_box_str_pos, comment_str);
+
+    int yes_str = strlen("YES[y]");
+    int yes_str_pos_x = in_box_str_pos.x + (make_file_box.w / 2) - (yes_str + 2);
+    int no_str_pos_x  = in_box_str_pos.x + (make_file_box.w / 2) + 2;
+
+    mvaddstr(in_box_str_pos.y + 1, yes_str_pos_x, "YES[y]");
+    mvaddstr(in_box_str_pos.y + 1, no_str_pos_x, "NO[n]");
+
+    state->is_cur_show = false;
+    curs_set(0);
+    move(state->scr.cursor_pos.y, state->scr.cursor_pos.x);
+    *file_box = make_file_box;
 }
 
 // reset_jump_mode(): 行ジャンプ入力中の数字バッファを空に戻す。
@@ -403,7 +503,9 @@ static long clamp_editor_target_line(struct editor_state *state, long target_lin
 // draw_start_line_for_target(): 指定行を少し下に表示するための表示開始行を返す。
 // 引数: target_line=画面内に表示したい論理行番号。
 // 返り値: scr_start_numへ設定する表示開始行。
-static int draw_start_line_for_target(long target_line){
+static int draw_start_line_for_target(struct editor_state *state,long target_line){
+    int line_limit = get_line_limit();
+    target_line = ( target_line + state->write_area.h > line_limit ) ? line_limit -  state->write_area.h + 15 : target_line;
     return (target_line > 15) ? (target_line - 15) : 0;
 }
 
@@ -436,7 +538,7 @@ static void restore_edit_screen(WINDOW *win, struct editor_state *state,
 static void move_view_to_line(WINDOW *win, struct editor_state *state, long target_line,
                               int x, struct pos line_start_pos, struct pos line_end_pos){
     target_line = clamp_editor_target_line(state, target_line);
-    int draw_start_line = draw_start_line_for_target(target_line);
+    int draw_start_line = draw_start_line_for_target(state,target_line);
     state->mouse.now_mouce_line = target_line;
     state->scr.scr_start_num = draw_start_line;
     redraw_edit_screen(win, state, line_start_pos, line_end_pos);
@@ -460,4 +562,10 @@ static void end_process(struct editor_state *state){
     free(state->str.line_str_data);
     free(state->str.line);
     endwin();
+}
+void my_mvaddstr(struct pos pos,char * str){
+    mvaddstr(pos.y,pos.x,str);
+}
+void my_mvaddch(struct pos pos,char str){
+    mvaddch(pos.y,pos.x,str);
 }

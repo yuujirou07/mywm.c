@@ -21,6 +21,8 @@ enum cur_allow_mode{
   NORMAL_MODE
 };
 
+
+
 // raylibのColor型の代替（同じレイアウト・値で定義し、移行時の見た目を変えない）
 typedef struct Color {
   unsigned char r;

@@ -183,14 +183,7 @@ void draw_line(struct pos start_pos,struct pos end_pos,WINDOW *win,enum line_mod
 // draw_box(): 指定された矩形領域の枠線と四隅を描画し、表示中はカーソルを隠す。
 // 引数: state=カーソル表示状態、box=描く矩形、win=描画先ウィンドウ。
 // 返り値: なし。
-void draw_box(struct editor_state *state, struct box box, WINDOW *win){
-    state->is_cur_show = false;
-    curs_set(0);
-
-    int cur_x;
-    int cur_y;
-
-    getyx(win,cur_y,cur_x);
+void draw_box(struct box box, WINDOW *win){
 
     int x = box.pos.x;
     int y = box.pos.y;
@@ -212,8 +205,6 @@ void draw_box(struct editor_state *state, struct box box, WINDOW *win){
     mvaddch(y + h, x,     ACS_LLCORNER);
     mvaddch(y + h, x + w, ACS_LRCORNER);
 
-    move(cur_y,cur_x);
-    refresh();
 }
 
 // draw_all_line(): 現在行が見える位置を基準に、編集バッファから画面全体を再描画する。
@@ -322,9 +313,8 @@ void draw_select_dir_scene_color(struct editor_state *state,int num){
 // 引数: state=画面状態、file_browse_box=枠、dir_name_table=一覧、path_name=現在パス、win=描画先。
 // 返り値: なし。
 void show_file_browse(struct editor_state *state,struct box file_browse_box,char *dir_name_table,char *path_name,WINDOW *win){
-    state->screen_state = file_browse_screen;
 
-    draw_box(state, file_browse_box,win);
+    draw_box(file_browse_box,win);
     draw_now_path_name(file_browse_box,path_name);
     draw_box_inside_dir(state,dir_name_table);
     draw_select_dir_scene_color(state,2);
@@ -470,3 +460,12 @@ void draw_status_bar_path(struct editor_state *state, WINDOW *win){
     mvaddnstr(status_y, draw_x, draw_path, draw_len);
     move(y, x);
 }
+
+void clear_box(struct box box){
+    for(int i = box.pos.y;i < box.pos.y + box.h;i++){
+        char buff[box.w];
+        memset(buff,' ',sizeof(buff));
+        mvaddnstr(i,box.pos.x,buff,box.w);
+    }
+}
+
