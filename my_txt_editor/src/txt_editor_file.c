@@ -131,6 +131,7 @@ void set_line_memory(struct editor_state *state){
     for(int i = 0; i < state->settings_data->default_load_line_size; i++){
         state->file_data.file_line_start_num[state->file_data.file_line_start_num_counter++] = ftell(state->file_data.now_open_file);
         if(fgets(dummy_buff, max_line_size, state->file_data.now_open_file) == NULL){
+            state->file_data.description_line_end = i;
             return;
         }
         while(strlen(dummy_buff) == (size_t)(max_line_size - 1) && dummy_buff[max_line_size - 2] != '\n'){
@@ -424,6 +425,5 @@ void ask_new_file_name(struct pos str_start_pos,int w,int h){
     int str_len = strlen(ask_str);
     int ask_str_start_pos_x = str_start_pos.x + ((w - str_len)/2);
     mvaddstr(str_start_pos.y,ask_str_start_pos_x,ask_str);
-
 }
 

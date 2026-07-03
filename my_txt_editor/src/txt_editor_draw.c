@@ -274,6 +274,7 @@ void draw_edit_screen_base(struct editor_state *state,WINDOW *win,struct pos sta
     }
     if(state->settings_data->show_status_bar){
         draw_status_bar_line(state,*state->status_bar,win);
+        draw_line_status(state,win);
     }
     draw_line_numbers(state);
 }
@@ -293,7 +294,7 @@ void draw_box_inside_dir(struct editor_state *state,char *table){
         mvaddstr(state->file_browser_area.pos.y + i, state->file_browser_area.pos.x,clear);
         char *entry = table + i * state->file_browser_area.w;
         if(*entry == '\0') continue;
-        mvaddstr(state->file_browser_area.pos.y + i, state->file_browser_area.pos.x,entry);
+        mvaddstr(state->file_browser_area.pos.y + i, state->file_browser_area.pos.x+1,entry);
     }
 }
 
@@ -307,6 +308,7 @@ void draw_select_dir_scene_color(struct editor_state *state,int num){
     }
     int ligthing_line = state->file_browser_area.pos.y + state->file_select_line;
     mvchgat(ligthing_line,state->file_browser_area.pos.x,state->file_browser_area.w,A_NORMAL,num,NULL);
+   
 }
 
 // show_file_browse(): 画面状態をファイルブラウザへ切り替え、枠・パス・一覧・選択行を描く。
@@ -469,3 +471,33 @@ void clear_box(struct box box){
     }
 }
 
+//ステータスバーに現在の行数と終端行を記述する
+void draw_line_status(struct editor_state *state,WINDOW *win){
+    if(!state->settings_data->show_status_bar){
+        return;
+    }
+
+    int x;
+    int y;
+    getyx(win, y, x);
+    char line_status_str[32];
+    snprintf(line_status_str, sizeof(line_status_str), "%d/%ld",
+             state->mouse.now_mouce_line+1, state->file_data.description_line_end);
+    int total_line_len = strlen(line_status_str);
+    struct pos write_start_pos;
+    write_start_pos.y = (state->settings_data->bar_side_state == top)
+        ? state->status_bar->pos.y - 1 : state->status_bar->pos.y;
+    if(total_line_len > state->status_bar->w){
+        total_line_len = state->status_bar->w;
+    }
+    write_start_pos.x = state->status_bar->pos.x + state->status_bar->w - total_line_len;
+
+    int clear_len = (state->status_bar->w < (int)sizeof(line_status_str))
+        ? state->status_bar->w : (int)sizeof(line_status_str);
+    mvhline(write_start_pos.y,
+            state->status_bar->pos.x + state->status_bar->w - clear_len,
+            ' ', clear_len);
+    mvaddnstr(write_start_pos.y, write_start_pos.x, line_status_str, total_line_len);
+    move(y,x);
+    refresh();
+}

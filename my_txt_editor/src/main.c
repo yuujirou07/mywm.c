@@ -28,8 +28,6 @@ static void move_view_to_line(WINDOW *win, struct editor_state *state, long targ
 static void show_make_file_prompt(WINDOW *win, struct editor_state *state,struct box * file_box,
                                   int screen_center_y, struct pos screen_center_pos);
 
-void my_mvaddstr(struct pos pos,char * str);
-void my_mvaddch(struct pos pos,char str);
 
 // main(): ncursesを初期化し、エディタ画面・ファイルブラウザ・エラー画面の
 // 入力ループを切り替えながら各処理関数へイベントを振り分ける。
@@ -107,7 +105,7 @@ int main(void)
         perror("getcwd");
         return 1;
     }
-
+    state.file_data.description_line_end = 0;
     state.write_area.x_start = state.settings_data->line_number_space + 1;
     state.write_area.y_start = 0;
     state.write_area.x_end   = state.scr.scr_size.x-1;
@@ -135,6 +133,8 @@ int main(void)
 
     state.make_file_mode_status.is_input_scene = false;
     state.make_file_mode_status.new_file_name_counter = 0;
+    
+    memset(&state.write_file_name_area,0,sizeof(struct box));
 
     state.file_select_line = 0;
     state.dir_num = 0;
@@ -196,6 +196,8 @@ int main(void)
             case edit_screen:
                 if(state.file_data.now_open_path_name[0] != '\0' && state.settings_data->show_status_bar){
                     draw_status_bar_path(&state, win);
+                    draw_status_bar_line(&state,*state.status_bar,win);
+                    draw_line_status(&state,win);
                     refresh();
                 }
                 if (input_result == KEY_CODE_YES && ch == KEY_BACKSPACE && state.is_cur_show) {
@@ -233,18 +235,25 @@ int main(void)
                 if (ch == KEY_MOUSE) {
                     handle_mouse(win, &mouse_event, &state);
                     draw_line(line_start_pos, line_end_pos, win, all_draw_mode);
+                    if(state.settings_data->show_status_bar){
+                        draw_status_bar_line(&state,*state.status_bar,win);
+                        draw_line_status(&state,win);
+                    }
                     break;
                 }
                 if (state.is_cur_show) {
                     if (ch == KEY_ENTER || ch == '\n' || ch == '\r') {
                         handle_newline(win, &state);
+                        draw_line_status(&state,win);
                     } else if (ch == '\t') {
                         handle_tab(&state);
                     } else if (ch == KEY_LEFT || ch == KEY_RIGHT || ch == KEY_UP || ch == KEY_DOWN){
                         handle_input_allow(win, ch, &state);
+                        draw_line_status(&state,win);
                     } else if (input_result == OK && iswprint((wint_t)ch)) {
                         if (ch == 'q') { running = 0; break; }
                         handle_char_input(win, (wchar_t)ch, &state);
+                        draw_line_status(&state,win);
                     }
                 } else {
                     if (input_result == OK && iswprint((wint_t)ch)) {
@@ -258,6 +267,7 @@ int main(void)
                         state.is_cur_show = true;
                         curs_set(1);
                         handle_char_input(win, (wchar_t)ch, &state);
+                        draw_line_status(&state,win);
                         refresh();
                     }
                 }
@@ -316,8 +326,10 @@ int main(void)
                     }
                     if(state.file_data.now_open_file != NULL){
                         load_screen_size(&state);
+                        state.mouse.scr_abs_now_pos = (struct pos){state.write_area.x_start, state.write_area.y_start};
                         restore_edit_screen(win, &state, line_start_pos, line_end_pos);
                         draw_status_bar_path(&state, win);
+                        draw_line_status(&state,win);
                         refresh();
                     }
                 }
@@ -363,6 +375,7 @@ int main(void)
 
                     move_view_to_line(win, &state, n - 1, state.write_area.x_start,
                                       line_start_pos, line_end_pos);
+                    draw_line_status(&state,win);
                     curs_set(1);
                     refresh();
                     reset_jump_mode(&state);
@@ -382,48 +395,72 @@ int main(void)
 
             case ask_make_file_mode:
             {
-                if(ch == KEY_ENTER || ch == '\n' || ch == '\r'){
-                    clear();
-                    state.screen_state = edit_screen;
-                    draw_edit_screen_base(&state, win, line_start_pos, line_end_pos);
-                    move(state.scr.cursor_pos.y,state.scr.cursor_pos.x);
-                    state.is_cur_show = true;
-                    curs_set(true);
-                    refresh();
-                }
-                else if(ch == 'y'){
-                    struct pos str_start_pos = (struct pos){state.ask_make_file_box.pos.x,state.ask_make_file_box.pos.y+1};
-                    struct box write_file_name_scene_box =  
-                        (struct box){state.ask_make_file_box.pos,state.ask_make_file_box.w,state.ask_make_file_box.h + 2};
-                    struct box input_new_file_name_wtrite_area = 
-                        (struct box){(struct pos){write_file_name_scene_box.pos.x+1,
-                        write_file_name_scene_box.pos.y  + write_file_name_scene_box.h - 3},
-                        write_file_name_scene_box.w - 2,2};
-
-                    clear_box(write_file_name_scene_box);
-                    draw_box(write_file_name_scene_box,win);
-                    draw_box(input_new_file_name_wtrite_area,win);
-                    ask_new_file_name(str_start_pos,write_file_name_scene_box.w,write_file_name_scene_box.h);
-                    state.make_file_mode_status.is_input_scene = true;
-                    state.is_cur_show = true;
-                    move(input_new_file_name_wtrite_area.pos.y + 1,input_new_file_name_wtrite_area.pos.x + 1);
-                    curs_set(true);
-               
-                }
-                else if(ch == 'n'){
-                    clear();
-                    draw_edit_screen_base(&state,win,line_start_pos,line_end_pos);
-                    redraw_edit_screen(win, &state,line_start_pos,line_end_pos);
-                    state.screen_state = edit_screen;
-                
-                }
                 if(state.make_file_mode_status.is_input_scene){
-                    state.make_file_mode_status.new_file_name[state.make_file_mode_status.new_file_name_counter++] = ch;
-                    addch(ch);
+                    if(input_result == OK && iswprint((wint_t)ch) && state.ask_make_file_box.w > 
+                        state.make_file_mode_status.new_file_name_counter){
+                        state.make_file_mode_status.new_file_name[state.make_file_mode_status.new_file_name_counter++] = ch;
+                        addch(ch);
+                    }
+                    else if (input_result == KEY_CODE_YES && ch == KEY_BACKSPACE && state.is_cur_show 
+                        && state.make_file_mode_status.new_file_name_counter >0){
+                        state.make_file_mode_status.new_file_name_counter--;  
+                    
+                        int x;
+                        int y;
+                        getyx(win,y,x);
+                        mvaddch(y, x - 1,' ');
+                        move(y, x - 1);
+                    }
+                    else if(ch == KEY_ENTER || ch == '\n' || ch == '\r' || ch == ' '){
+                        state.make_file_mode_status.new_file_name[state.make_file_mode_status.new_file_name_counter + 1] = '\0';
+                        state.screen_state = edit_screen;
+                        memcpy(state.file_data.now_open_path_name,
+                            state.make_file_mode_status.new_file_name,
+                            sizeof(state.file_data.now_open_path_name));
+
+                        save_file(&state);
+
+                        state.make_file_mode_status.new_file_name_counter = 0;
+                        memset(state.make_file_mode_status.new_file_name,
+                            0,
+                            sizeof(state.make_file_mode_status.new_file_name));
+                    }
+                }
+                else{
+                //ファイル名入力モードに入る前
+                    if(ch == 'y'){
+                        struct pos str_start_pos = (struct pos){state.ask_make_file_box.pos.x,state.ask_make_file_box.pos.y+1};
+                        struct box write_file_name_scene_box =  
+                            (struct box){state.ask_make_file_box.pos,state.ask_make_file_box.w,state.ask_make_file_box.h + 2};
+                        struct box input_new_file_name_wtrite_area = 
+                            (struct box){(struct pos){write_file_name_scene_box.pos.x+1,
+                            write_file_name_scene_box.pos.y  + write_file_name_scene_box.h - 3},
+                            write_file_name_scene_box.w - 2,2};
+
+                        clear_box(write_file_name_scene_box);
+                        draw_box(write_file_name_scene_box,win);
+                        draw_box(input_new_file_name_wtrite_area,win);
+                        ask_new_file_name(str_start_pos,write_file_name_scene_box.w,write_file_name_scene_box.h);
+                        state.make_file_mode_status.is_input_scene = true;
+                        state.is_cur_show = true;
+                        move(input_new_file_name_wtrite_area.pos.y + 1,input_new_file_name_wtrite_area.pos.x + 1);
+                        curs_set(true);
+                        state.write_file_name_area = input_new_file_name_wtrite_area;
+                        continue;
+                
+                    }
+                    else if(ch == 'n'){
+                        clear();
+                        draw_edit_screen_base(&state,win,line_start_pos,line_end_pos);
+                        redraw_edit_screen(win, &state,line_start_pos,line_end_pos);
+                        state.screen_state = edit_screen;
+                    
+                    }
+            
                 }
                 refresh();
-                
-            }
+                    
+                }
         }
     }
     end_process(&state);

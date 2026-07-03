@@ -249,7 +249,7 @@ void handle_mouse(WINDOW *win, MEVENT *event, struct editor_state *state) {
 void handle_input_allow(WINDOW *win, wchar_t ch, struct editor_state *state){
     int x, y;
     getyx(win, y, x);
-    int line_limit = editor_line_limit(state);
+    int line_limit = get_line_limit();
     if(line_limit <= 0){
         return;
     }
@@ -313,4 +313,30 @@ void set_line_limit(int line_limit){
 }
 int get_line_limit(){
     return limit;
+}
+
+char *uint_to_str(unsigned int value, char *buf)
+{
+    char tmp[10];
+    int i = 0;
+    int j = 0;
+
+    if (value == 0) {
+        buf[0] = '0';
+        buf[1] = '\0';
+        return buf;
+    }
+
+    while (value > 0) {
+        tmp[i++] = '0' + (value % 10);
+        value /= 10;
+    }
+
+    while (i > 0) {
+        buf[j++] = tmp[--i];
+    }
+
+    buf[j] = '\0';
+
+    return buf;
 }

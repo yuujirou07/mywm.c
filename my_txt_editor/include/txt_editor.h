@@ -40,6 +40,7 @@ struct file_data{
     char    now_open_path_name[DEFAULT_PATH_NAME_MAX_SIZE];
     long*   file_line_start_num;
     long    file_line_start_num_counter;
+    long    description_line_end;
     int     file_line_n;
     bool    is_open_file;
 };
@@ -117,6 +118,7 @@ struct editor_state {
     struct box                *file_browser_box;
     struct box                *status_bar;
     struct box                 ask_make_file_box;
+    struct box                 write_file_name_area;
     struct file_data           file_data;
     struct jump_mode           jump_mode_data;
     enum now_screen_state      screen_state;
@@ -228,10 +230,16 @@ void scr_show_line_str_down(WINDOW *win,struct editor_state *state);
 void editor_error_screen(struct editor_state *state,char *error_comment);
 void editor_screen_move_line(struct editor_state *state,WINDOW *win,int num);
 
+
 void set_line_limit(int limit);
 void ask_new_file_name(struct pos str_start_pos,int w,int h);
 void clear_box(struct box box);
 void get_new_file_name();
+char *uint_to_str(unsigned int value, char *buf);
 int get_line_limit();
+
+void my_mvaddstr(struct pos pos,char * str);
+void my_mvaddch(struct pos pos,char str);
+void draw_line_status(struct editor_state *state,WINDOW *win);
 
 #endif
