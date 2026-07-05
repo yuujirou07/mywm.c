@@ -64,6 +64,11 @@ int main(void)
     keypad(win, TRUE); 
     curs_set(0);
     
+    start_color();
+    if (has_colors()) {
+        init_pair(1, COLOR_WHITE, COLOR_BLACK);
+        attrset(COLOR_PAIR(1));
+    }
     init_pair(2, COLOR_BLACK, COLOR_WHITE);
     init_pair(3, COLOR_BLACK, COLOR_RED);
 
@@ -79,6 +84,9 @@ int main(void)
     //スタートメニュー表示判定
      if(state.settings_data->show_start_menu){
         void *handle = dlopen("so_file/start_menu_plug.so", RTLD_NOW);
+        if(handle == NULL){
+            handle = dlopen("/home/yuujirou07/vscode_proj/mywm_proj/my_txt_editor/so_file/start_menu_plug.so", RTLD_NOW);
+        }
         if(handle == NULL){
             error_log_write("sry can not open so file :(\n");
             end_process(&state);
@@ -127,14 +135,8 @@ int main(void)
 
     curs_set(1);
     raw();
-    start_color();
     scrollok(win, TRUE);
     mousemask(ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION, NULL);  
-
-    if (has_colors()) {
-        init_pair(1, COLOR_WHITE, COLOR_BLACK);
-        attrset(COLOR_PAIR(1));
-    }
     
     char path_name[PATH_MAX];
     if(getcwd(path_name, sizeof(path_name)) == NULL) {
@@ -477,6 +479,14 @@ int main(void)
                         memset(state.make_file_mode_status.new_file_name,
                             0,
                             sizeof(state.make_file_mode_status.new_file_name));
+                        
+
+                        
+                        clear();
+                        draw_edit_screen_base(&state,win,line_start_pos,line_end_pos);
+                        draw_file_data(&state);
+                        move(state.scr.cursor_pos.y, state.scr.cursor_pos.x);
+                        refresh();
                     }
                 }
                 else{

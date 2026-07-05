@@ -7,23 +7,45 @@
 #include"start_menu.h"
 #include"txt_editor.h"
 
+
 #define option_list_max 8
 
-int draw_start_menu(int screen_max_w,int screen_max_h);
+typedef void (*option_func)(char key,int *return_num);
+
+struct option_data{
+        char *option_name;
+        char short_cut_key;
+        void (*option_func)(char key,int return_num);
+        int x;
+        int y;
+        int w;
+};   
+void option_fn(char *key,int *return_numk);
+int draw_option(struct pos screen_max_pos,struct pos *option_start_pos,struct ascii_data ascii_data,struct option_data *option_data,int size);
+int  draw_start_menu(int screen_max_w,int screen_max_h);
 void draw_ascii_logo(struct pos screen_max_pos,struct ascii_data *ascii_data);
-void draw_option(struct pos screen_max_pos,struct pos screen_mid_pos,struct ascii_data ascii_data);
 void draw_varsion(struct pos screen_mid_pos,struct ascii_data ascii_data);
 
 
 
 int draw_start_menu(int screen_max_w,int screen_max_h){
-        struct pos screen_max_pos = (struct pos){screen_max_w,screen_max_h};
-        struct pos screen_mid_pos = (struct pos){screen_max_w/2,screen_max_h/2};
+        struct pos screen_max_pos   = (struct pos){screen_max_w,screen_max_h};
+        struct pos screen_mid_pos   = (struct pos){screen_max_w/2,screen_max_h/2};
+        struct pos option_start_pos = {0};
         struct ascii_data ascii_data = {0};
+        struct option_data option_data[option_list_max];
+
         draw_ascii_logo(screen_mid_pos,&ascii_data);
-        draw_option(screen_max_pos, screen_mid_pos,ascii_data);
+        int option_count = draw_option(screen_max_pos,&option_start_pos,ascii_data,option_data,option_list_max);
         draw_varsion(screen_mid_pos,ascii_data);
+        int now_option_select = 0;
+
+        if(option_count > 0){
+                mvchgat(option_data[now_option_select].y,option_data[now_option_select].x,
+                        option_data[now_option_select].w,A_BOLD,1,NULL);
+        }
         refresh();
+
         while(1){
                 wint_t ch = 0;
                 int input_result;
@@ -31,14 +53,14 @@ int draw_start_menu(int screen_max_w,int screen_max_h){
                 if(input_result == ERR){
                         continue;
                 }
+                 
+                for(int i = 0;i < option_list_max;i++){
+                        if(ch == option_data[i].short_cut_key){
 
-                if(ch == 'q'){
-                    clear();
-                    refresh();
-                    return 1;
+                        }
                 }
-                
-                
+
+                refresh();
         }
         
         
@@ -67,52 +89,70 @@ void draw_ascii_logo(struct pos screen_mid_pos,struct ascii_data *ascii_data){
 }
 
 
-void draw_option(struct pos screen_max_pos,struct pos screen_mid_pos,struct ascii_data ascii_data){
+int draw_option(struct pos screen_max_pos,struct pos *option_start_pos,struct ascii_data ascii_data,struct option_data *option_data,int size){
+
         int ascii_art_option_space = 5;
         int option_list_counter = 0;
         int option_short_cut_key = screen_max_pos.x/3;
-
-        struct option_data{
-                char *option_name;
-                char *short_cut_key;
-        };        
-        struct option_data option_data[option_list_max];
-        option_data[option_list_counter].option_name    = "new file";
-        option_data[option_list_counter].short_cut_key  = "[n]";
-        option_list_counter++;
-
-        option_data[option_list_counter].option_name    = "select folder";
-        option_data[option_list_counter].short_cut_key  = "[f]";
-        option_list_counter++;
-
-        option_data[option_list_counter].option_name    = "settings";
-        option_data[option_list_counter].short_cut_key  = "[s]";
-        option_list_counter++;
-
-        option_data[option_list_counter].option_name    = "quit my txt editor";
-        option_data[option_list_counter].short_cut_key  = "[q]";
-        option_list_counter++;
-
-
-        for(int i = 0; i < option_list_counter;i++){
-                int option_list_str_len = strlen(option_data[i].option_name);
-                int option_pos_y = ascii_data.h + ascii_art_option_space + i;
-                int option_pos_x = screen_max_pos.x/3;
-
-                if( option_pos_y > screen_max_pos.y ){
-                        //画面を大きくしろの警告を表示
-                        return;
-                }
-                else if(option_list_str_len > screen_max_pos.x){
-                        //画面を大きくしろの警告を表示
-                        return;
-                }
-
-                mvaddstr(option_pos_y,option_pos_x,option_data[i].option_name);
-                mvaddstr(option_pos_y,option_pos_x + option_short_cut_key,option_data[i].short_cut_key);
+     
+        if(option_list_counter < size){
+                option_data[option_list_counter].option_name    = "new file";
+                option_data[option_list_counter].short_cut_key  = 'n';
+                option_list_counter++;
         }
 
+        if(option_list_counter < size){
+                option_data[option_list_counter].option_name    = "select folder";
+                option_data[option_list_counter].short_cut_key  = 'f';
+                option_list_counter++;
+        }
 
+        if(option_list_counter < size){
+                option_data[option_list_counter].option_name    = "settings";
+                option_data[option_list_counter].short_cut_key  = 's';
+                option_list_counter++;
+        }
+
+        if(option_list_counter < size){
+                option_data[option_list_counter].option_name    = "quit my txt editor";
+                option_data[option_list_counter].short_cut_key  = 'q';
+                option_list_counter++;
+        }
+
+        int option_pos_y = ascii_data.h + ascii_art_option_space;
+        int option_pos_x = screen_max_pos.x/3;
+
+        *option_start_pos = (struct pos){option_pos_x,option_pos_y};
+        char skt[4];
+        skt[0]= '[';
+        //skt[1] in loop
+        skt[2]= ']';
+        skt[3]= '\0';
+
+        for(int i = 0; i < option_list_counter;i++){
+                skt[1] = option_data[i].short_cut_key;
+                int short_cut_key_len = strlen(skt);
+                int option_draw_len = option_short_cut_key + short_cut_key_len;
+                int option_y = option_pos_y + (i * 2);
+
+                if( option_y > screen_max_pos.y ){
+                        //画面を大きくしろの警告を表示
+                        return 0;
+                }
+                else if(option_pos_x + option_draw_len > screen_max_pos.x){
+                        //画面を大きくしろの警告を表示
+                        return 0;
+                }
+
+                option_data[i].x = option_pos_x;
+                option_data[i].y = option_y;
+                option_data[i].w = option_draw_len;
+
+                mvaddstr(option_y,option_pos_x,option_data[i].option_name);
+                mvaddstr(option_y,option_pos_x + option_short_cut_key,skt);
+        }
+
+        return option_list_counter;
 }
 
 void draw_varsion(struct pos screen_mid_pos,struct ascii_data ascii_data){
@@ -122,3 +162,30 @@ void draw_varsion(struct pos screen_mid_pos,struct ascii_data ascii_data){
         mvaddstr(ascii_data.h-1,screen_mid_pos.x - (len/2),var);
 }
 
+void option_fn(char *key,int *return_num){
+        switch(*key){
+                case 'q':{
+                        *return_num = 1;
+                        break;
+                }
+                case 'n':{
+                        return_num = 0;
+                        break;
+                }
+
+
+
+
+
+
+                default:{
+                        error_log_write("start menu option short kut key error");
+                        break;
+                }
+
+        }
+
+
+        return;
+
+}

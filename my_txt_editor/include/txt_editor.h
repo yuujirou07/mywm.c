@@ -10,6 +10,11 @@
 #include"default_settings.h"
 
 #define my_txt_editor_var 0.0
+#define new_file 0
+#define quit 1
+#define settings 2
+#define select_folder 3
+
 
 #define CTRL(x) ((x) & 0x1f)// 0x1fはCtrl
 
