@@ -9,6 +9,8 @@
 #include <limits.h>
 #include"default_settings.h"
 
+#define my_txt_editor_var 0.0
+
 #define CTRL(x) ((x) & 0x1f)// 0x1fはCtrl
 
 enum status_bar_side{

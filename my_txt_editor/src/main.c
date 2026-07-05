@@ -19,8 +19,7 @@
 
 
 
-typedef void (*Start_Menu)(int screen_w, int screen_h);
-
+typedef int (*Start_Menu)(int screen_w, int screen_h);
 static void end_process(struct editor_state *state);
 static void reset_jump_mode(struct editor_state *state);
 static struct pos jump_prompt_pos(struct editor_state *state);
@@ -51,7 +50,6 @@ int main(void)
     MEVENT mouse_event;
     WINDOW *win;
 
-    keypad(win, TRUE); 
     load_default_editor_settings(state.settings_data);
     load_custom_editor_settings(state.settings_data);
     set_error_log_file("my_editor_error_log.txt");
@@ -63,6 +61,12 @@ int main(void)
 
     cbreak();
     noecho();
+    keypad(win, TRUE); 
+    curs_set(0);
+    
+    init_pair(2, COLOR_BLACK, COLOR_WHITE);
+    init_pair(3, COLOR_BLACK, COLOR_RED);
+
     state.scr.cursor_pos.x = 0;
     state.scr.cursor_pos.y = 0;
     state.scr.scr_start_num = 0;
@@ -77,16 +81,22 @@ int main(void)
         void *handle = dlopen("so_file/start_menu_plug.so", RTLD_NOW);
         if(handle == NULL){
             error_log_write("sry can not open so file :(\n");
+            end_process(&state);
             return 1;
         }
         Start_Menu start_menu = (Start_Menu)dlsym(handle,"draw_start_menu");
         if(start_menu == NULL){
             error_log_write("dlsym failed\n");
             dlclose(handle);
+            end_process(&state);
             return 1;
         }
-        start_menu(state.scr.scr_size.y, state.scr.scr_size.x);
+        int start_menu_result = start_menu(state.scr.scr_size.x,state.scr.scr_size.y);
         dlclose(handle);
+        if(start_menu_result != 0){
+            end_process(&state);
+            return 0;
+        }
     }
 
     set_line_limit(state.settings_data->default_load_line_size);
@@ -196,9 +206,6 @@ int main(void)
     struct pos screen_center_pos    = (struct pos){state.scr.scr_size.x/2,screen_center_y};
 
     draw_edit_screen_base(&state, win, line_start_pos, line_end_pos);
-
-    init_pair(2, COLOR_BLACK, COLOR_WHITE);
-    init_pair(3, COLOR_BLACK, COLOR_RED);
     
     bkgd(COLOR_PAIR(1));
     move(state.write_area.y_start, state.write_area.x_start);
