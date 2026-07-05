@@ -275,6 +275,9 @@ void draw_edit_screen_base(struct editor_state *state,WINDOW *win,struct pos sta
     if(state->settings_data->show_status_bar){
         draw_status_bar_line(state,*state->status_bar,win);
         draw_line_status(state,win);
+        if(state->settings_data->show_status_bar){
+            draw_status_bar_path(state,win);
+        }
     }
     draw_line_numbers(state);
 }
@@ -346,7 +349,7 @@ void file_sellect_line_update(struct editor_state *state,int line){
 // 引数: state=カーソル行と表示開始行、win=スクロール対象、num=移動行数。
 // 返り値: なし。
 void editor_screen_move_line(struct editor_state *state,WINDOW *win,int num){
-    int line_limit = editor_line_limit(state);
+    int line_limit = get_line_limit();
     int next_mouse_line = state->mouse.now_mouce_line + num;
     int next_scr_start = state->scr.scr_start_num + num;
     if(line_limit <= 0 || next_mouse_line < 0 || next_mouse_line >= line_limit || next_scr_start < 0){
@@ -499,5 +502,5 @@ void draw_line_status(struct editor_state *state,WINDOW *win){
             ' ', clear_len);
     mvaddnstr(write_start_pos.y, write_start_pos.x, line_status_str, total_line_len);
     move(y,x);
-    refresh();
 }
+

@@ -33,6 +33,7 @@ struct editor_settings{
     bool show_status_bar;
     bool draw_split_line;
     bool ask_make_file;//ファイル変更時に何もファイルを開いていなかった場合ファイルを作るか聞く
+    bool show_start_menu;
 };
 struct file_data{
     FILE*   now_open_file;

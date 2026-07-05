@@ -6,6 +6,8 @@
 #include <sys/syscall.h>   // SYS_getdents64
 #include <sys/types.h>     // uint64_t など
 #include <dirent.h>
+#include<dlfcn.h>
+#include <time.h>
 #include <wchar.h>
 #include <wctype.h>
 #include<dirent.h>
@@ -13,6 +15,11 @@
 #include <limits.h>
 #include<unistd.h>
 #include "txt_editor.h"
+#include"error_log.h"
+
+
+
+typedef void (*Start_Menu)(int screen_w, int screen_h);
 
 static void end_process(struct editor_state *state);
 static void reset_jump_mode(struct editor_state *state);
@@ -35,6 +42,7 @@ static void show_make_file_prompt(WINDOW *win, struct editor_state *state,struct
 // 返り値: 正常終了なら0、ncurses初期化やメモリ確保に失敗したら1。
 int main(void)
 {
+
     struct editor_settings settings_data = {0};
     struct editor_state state = {0};
     state.settings_data = &settings_data;
@@ -43,8 +51,10 @@ int main(void)
     MEVENT mouse_event;
     WINDOW *win;
 
+    keypad(win, TRUE); 
     load_default_editor_settings(state.settings_data);
     load_custom_editor_settings(state.settings_data);
+    set_error_log_file("my_editor_error_log.txt");
 
     setlocale(LC_ALL, "");
     win = initscr();
@@ -61,6 +71,23 @@ int main(void)
     state.mouse.scr_abs_now_pos = (struct pos){0,0};
 
     getmaxyx(win, state.scr.scr_size.y, state.scr.scr_size.x);
+    clear();
+    //スタートメニュー表示判定
+     if(state.settings_data->show_start_menu){
+        void *handle = dlopen("so_file/start_menu_plug.so", RTLD_NOW);
+        if(handle == NULL){
+            error_log_write("sry can not open so file :(\n");
+            return 1;
+        }
+        Start_Menu start_menu = (Start_Menu)dlsym(handle,"draw_start_menu");
+        if(start_menu == NULL){
+            error_log_write("dlsym failed\n");
+            dlclose(handle);
+            return 1;
+        }
+        start_menu(state.scr.scr_size.y, state.scr.scr_size.x);
+        dlclose(handle);
+    }
 
     set_line_limit(state.settings_data->default_load_line_size);
     int line_cap = get_line_limit();
@@ -92,8 +119,7 @@ int main(void)
     raw();
     start_color();
     scrollok(win, TRUE);
-    mousemask(ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION, NULL);
-    keypad(win, TRUE);   
+    mousemask(ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION, NULL);  
 
     if (has_colors()) {
         init_pair(1, COLOR_WHITE, COLOR_BLACK);
@@ -173,11 +199,17 @@ int main(void)
 
     init_pair(2, COLOR_BLACK, COLOR_WHITE);
     init_pair(3, COLOR_BLACK, COLOR_RED);
-
+    
     bkgd(COLOR_PAIR(1));
     move(state.write_area.y_start, state.write_area.x_start);
     refresh();
     int running = true;
+
+
+
+
+
+
     while (running) {
         
         wint_t ch = 0;
@@ -212,6 +244,7 @@ int main(void)
                     move(prompt_pos.y,prompt_pos.x+1);
                     clrtoeol();
                     addstr("JMP_LINE ");
+                    draw_line_status(&state,win);
                     refresh();
                     break;
                 }
@@ -244,17 +277,16 @@ int main(void)
                 if (state.is_cur_show) {
                     if (ch == KEY_ENTER || ch == '\n' || ch == '\r') {
                         handle_newline(win, &state);
-                        draw_line_status(&state,win);
                     } else if (ch == '\t') {
                         handle_tab(&state);
                     } else if (ch == KEY_LEFT || ch == KEY_RIGHT || ch == KEY_UP || ch == KEY_DOWN){
-                        handle_input_allow(win, ch, &state);
-                        draw_line_status(&state,win);
+                        handle_input_allow(win, ch, &state); 
                     } else if (input_result == OK && iswprint((wint_t)ch)) {
                         if (ch == 'q') { running = 0; break; }
-                        handle_char_input(win, (wchar_t)ch, &state);
-                        draw_line_status(&state,win);
+                        handle_char_input(win, (wchar_t)ch, &state); 
                     }
+                    draw_line_status(&state,win);
+                    refresh();
                 } else {
                     if (input_result == OK && iswprint((wint_t)ch)) {
                         int x = getcurx(win);
@@ -270,12 +302,24 @@ int main(void)
                         draw_line_status(&state,win);
                         refresh();
                     }
+                    if (ch == KEY_LEFT || ch == KEY_RIGHT 
+                        || ch == KEY_UP || ch == KEY_DOWN){
+                            int n = state.mouse.now_mouce_line;
+                            state.is_cur_show = true;
+                            curs_set(1);
+                            clear();
+                            draw_edit_screen_base(&state, win, line_start_pos, line_end_pos);   
+                            move_view_to_line(win, &state, n - 1, state.write_area.x_start,
+                                line_start_pos, line_end_pos);
+
+                    }
                 }
                 if(ch == 'q') { running = 0; break; }
                 break;
             case file_browse_screen:
                 if (ch == CTRL('f')) {
                     restore_edit_screen(win, &state, line_start_pos, line_end_pos);
+                    refresh();
                     break;
                 }
 
@@ -344,6 +388,7 @@ int main(void)
                 else if(ch == CTRL('h')){
                     reset_jump_mode(&state);
                     restore_edit_screen(win, &state, line_start_pos, line_end_pos);
+                    refresh();
                 }
                 else if(ch == KEY_BACKSPACE && state.jump_mode_data.jump_line_num_counter > 0){
 
@@ -379,6 +424,7 @@ int main(void)
                     curs_set(1);
                     refresh();
                     reset_jump_mode(&state);
+                    draw_edit_screen_base(&state, win, line_start_pos, line_end_pos);
                     state.screen_state = edit_screen;
                 }
                 break;
@@ -460,7 +506,7 @@ int main(void)
                 }
                 refresh();
                     
-                }
+            }
         }
     }
     end_process(&state);
@@ -566,7 +612,7 @@ static void restore_edit_screen(WINDOW *win, struct editor_state *state,
     curs_set(true);
     redraw_edit_screen(win, state, line_start_pos, line_end_pos);
     move(state->mouse.scr_abs_now_pos.y, state->mouse.scr_abs_now_pos.x);
-    refresh();
+    
 }
 
 // move_view_to_line(): 指定行が見える位置へ表示開始行とカーソルを移動する。
@@ -598,6 +644,8 @@ static void end_process(struct editor_state *state){
     free(state->file_data.file_line_start_num);
     free(state->str.line_str_data);
     free(state->str.line);
+
+    close_error_log_file();
     endwin();
 }
 void my_mvaddstr(struct pos pos,char * str){
@@ -605,4 +653,6 @@ void my_mvaddstr(struct pos pos,char * str){
 }
 void my_mvaddch(struct pos pos,char str){
     mvaddch(pos.y,pos.x,str);
+
+
 }

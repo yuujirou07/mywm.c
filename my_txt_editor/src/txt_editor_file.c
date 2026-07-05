@@ -310,6 +310,7 @@ void load_default_editor_settings(struct editor_settings *settings_data){
     settings_data->show_status_bar          = SHOW_STATUS_BAR;
     settings_data->draw_split_line          = DEFAULT_DRAW_SPLIT_LINE;
     settings_data->ask_make_file            = DEFAULT_ASK_MAKE_FILE;
+    settings_data->show_start_menu          = true;
 }
 
 // load_custom_editor_settings(): 設定JSONがあれば読み込み、既定値を上書きする。
