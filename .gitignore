@@ -1,0 +1,27 @@
+build/
+.cache/
+
+compile_commands.json
+*.o
+*.so
+*.save
+*error_log.txt
+
+/git
+
+cui_proj/alloc_ts
+cui_proj/cui
+cui_proj/cui_soft
+cui_proj/func_ptr
+cui_proj/loot
+cui_proj/paiza
+cui_proj/pty_make_v1
+cui_proj/vulkan_window
+cui_proj/ystemd-inhibit --list
+
+my_txt_editor/main
+my_txt_editor/fork
+my_txt_editor/so_file/
+
+mybar_proj/mybar
+mybar_proj/result.png
