@@ -121,6 +121,7 @@ executable(
     'txt_editor',
     [
         'my_txt_editor/src/main.c',
+        'my_txt_editor/src/txt_editor_state.c',
         'my_txt_editor/src/txt_editor_func.c',
         'my_txt_editor/src/txt_editor_draw.c',
         'my_txt_editor/src/txt_editor_file.c',

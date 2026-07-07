@@ -2,6 +2,7 @@
 #include<ncurses.h>
 #include <string.h>
 #include<stdlib.h>
+#include <wctype.h>
 #include"error_log.h"
 #include"ascii_art_comb.h"
 #include"start_menu.h"
@@ -10,25 +11,20 @@
 
 #define option_list_max 8
 
-typedef void (*option_func)(char key,int *return_num);
-
 struct option_data{
         char *option_name;
         char short_cut_key;
-        void (*option_func)(char key,int return_num);
         int x;
         int y;
         int w;
 };   
 void option_fn(char *key,int *return_numk);
 int draw_option(struct pos screen_max_pos,struct pos *option_start_pos,struct ascii_data ascii_data,struct option_data *option_data,int size);
-int  draw_start_menu(int screen_max_w,int screen_max_h);
 void draw_ascii_logo(struct pos screen_max_pos,struct ascii_data *ascii_data);
 void draw_varsion(struct pos screen_mid_pos,struct ascii_data ascii_data);
 
 
-
-int draw_start_menu(int screen_max_w,int screen_max_h){
+int draw_start_menu(int screen_max_w,int screen_max_h,struct ascii_data *ascii_data_ptr){
         struct pos screen_max_pos   = (struct pos){screen_max_w,screen_max_h};
         struct pos screen_mid_pos   = (struct pos){screen_max_w/2,screen_max_h/2};
         struct pos option_start_pos = {0};
@@ -40,12 +36,12 @@ int draw_start_menu(int screen_max_w,int screen_max_h){
         draw_varsion(screen_mid_pos,ascii_data);
         int now_option_select = 0;
 
-        if(option_count > 0){
-                mvchgat(option_data[now_option_select].y,option_data[now_option_select].x,
-                        option_data[now_option_select].w,A_BOLD,1,NULL);
+
+        for(int i = 0;i < option_count;i++){
+                mvchgat(option_data[i].y,option_data[i].x,
+                        option_data[i].w,A_BOLD,1,NULL);
         }
         refresh();
-
         while(1){
                 wint_t ch = 0;
                 int input_result;
@@ -53,19 +49,18 @@ int draw_start_menu(int screen_max_w,int screen_max_h){
                 if(input_result == ERR){
                         continue;
                 }
-                 
+
+                int return_num = 0;
                 for(int i = 0;i < option_list_max;i++){
-                        if(ch == option_data[i].short_cut_key){
-
+                        if(ch != (wint_t)option_data[i].short_cut_key){continue;}
+                        option_fn(&option_data[i].short_cut_key,&return_num);
+                        if(ascii_data_ptr != NULL){
+                                *ascii_data_ptr = ascii_data;
                         }
+                        return return_num;
                 }
-
                 refresh();
         }
-        
-        
-
-
         return 0;
 }
 
@@ -104,12 +99,6 @@ int draw_option(struct pos screen_max_pos,struct pos *option_start_pos,struct as
         if(option_list_counter < size){
                 option_data[option_list_counter].option_name    = "select folder";
                 option_data[option_list_counter].short_cut_key  = 'f';
-                option_list_counter++;
-        }
-
-        if(option_list_counter < size){
-                option_data[option_list_counter].option_name    = "settings";
-                option_data[option_list_counter].short_cut_key  = 's';
                 option_list_counter++;
         }
 
@@ -165,27 +154,21 @@ void draw_varsion(struct pos screen_mid_pos,struct ascii_data ascii_data){
 void option_fn(char *key,int *return_num){
         switch(*key){
                 case 'q':{
-                        *return_num = 1;
+                        *return_num = quit;
                         break;
                 }
                 case 'n':{
-                        return_num = 0;
+                        *return_num = new_file;
                         break;
                 }
-
-
-
-
-
-
+                case 'f':{
+                        *return_num = select_folder;
+                        break;
+                }
                 default:{
-                        error_log_write("start menu option short kut key error");
+                        *return_num = none;
                         break;
                 }
-
         }
-
-
         return;
-
 }

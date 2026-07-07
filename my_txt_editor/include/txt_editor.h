@@ -12,8 +12,8 @@
 #define my_txt_editor_var 0.0
 #define new_file 0
 #define quit 1
-#define settings 2
 #define select_folder 3
+#define none 4
 
 
 #define CTRL(x) ((x) & 0x1f)// 0x1fはCtrl
@@ -136,6 +136,22 @@ struct editor_state {
 
 };
 
+struct editor_input_context {
+    WINDOW *win;                 // 入力処理と描画で使うncursesウィンドウ。
+    MEVENT *mouse_event;         // KEY_MOUSE時にgetmouse()へ渡すイベント格納先。
+    struct editor_state *state;  // 画面状態・カーソル・ファイル情報をまとめた本体状態。
+    struct box file_browse_box;  // ファイルブラウザ外枠の位置とサイズ。
+    char *dir_name_table;        // ファイルブラウザに表示する固定幅のディレクトリ一覧。
+    int dir_name_table_size;     // dir_name_tableの確保済みバイト数。
+    char *path_name;             // ファイルブラウザが現在開いているディレクトリパス。
+    struct pos line_start_pos;   // 編集領域左の区切り線の開始座標。
+    struct pos line_end_pos;     // 編集領域左の区切り線の終了座標。
+    int screen_center_y;         // 確認ダイアログを縦方向中央寄せするときの基準。
+    struct pos screen_center_pos;// 確認ダイアログを中央寄せするときの基準座標。
+    bool *open_start_menu;       // file browserからstart menuへ戻る要求を書き込む先。
+    bool has_start_menu;         // start menu pluginがロード済みならtrue。
+};
+
 // editor_line_limit(): 編集対象として扱える最大行数を返す。
 // 引数: state=行バッファ容量と読み込み済みファイル行数を持つエディタ状態。
 // 返り値: 0以上の有効行数。
@@ -231,6 +247,7 @@ void handle_newline(WINDOW *win, struct editor_state *state);
 void handle_tab(struct editor_state *state);
 void handle_char_input(WINDOW *win, wchar_t ch, struct editor_state *state);
 void handle_mouse(WINDOW *win, MEVENT *event, struct editor_state *state);
+bool editor_handle_screen_input(struct editor_input_context *ctx, int input_result, wint_t ch);
 
 void scr_show_line_str(WINDOW *win,struct editor_state *state);
 void scr_show_line_str_down(WINDOW *win,struct editor_state *state);
