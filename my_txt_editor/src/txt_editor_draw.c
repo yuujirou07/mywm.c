@@ -329,7 +329,7 @@ void show_file_browse(struct editor_state *state,struct box file_browse_box,char
 // 引数: state=現在の選択状態、line=新しく選択する行番号。
 // 返り値: なし。
 void file_sellect_line_update(struct editor_state *state,int line){
-    if(state->dir_num <= 0){
+    if(state->dir_num <= 0 || state->settings_data->file_select_scene_lighting == false){
         return;
     }
     if(line < 0){

@@ -1,8 +1,8 @@
 #include<stdio.h>
 #include<ncurses.h>
 #include <string.h>
-#include<stdlib.h>
 #include <wctype.h>
+#include<time.h>
 #include"error_log.h"
 #include"ascii_art_comb.h"
 #include"start_menu.h"
@@ -18,13 +18,19 @@ struct option_data{
         int y;
         int w;
 };   
+
+
 void option_fn(char *key,int *return_numk);
 int draw_option(struct pos screen_max_pos,struct pos *option_start_pos,struct ascii_data ascii_data,struct option_data *option_data,int size);
 void draw_ascii_logo(struct pos screen_max_pos,struct ascii_data *ascii_data);
 void draw_varsion(struct pos screen_mid_pos,struct ascii_data ascii_data);
+static void write_startup_time_log(const struct timespec *start_time, const char *log_path);
 
 
-int draw_start_menu(int screen_max_w,int screen_max_h,struct ascii_data *ascii_data_ptr){
+int draw_start_menu(int screen_max_w,int screen_max_h,struct ascii_data *ascii_data_ptr,
+                    const struct timespec *startup_start_time,
+                    const char *startup_log_path){
+        static bool is_first_start_menu = 1;
         struct pos screen_max_pos   = (struct pos){screen_max_w,screen_max_h};
         struct pos screen_mid_pos   = (struct pos){screen_max_w/2,screen_max_h/2};
         struct pos option_start_pos = {0};
@@ -34,7 +40,6 @@ int draw_start_menu(int screen_max_w,int screen_max_h,struct ascii_data *ascii_d
         draw_ascii_logo(screen_mid_pos,&ascii_data);
         int option_count = draw_option(screen_max_pos,&option_start_pos,ascii_data,option_data,option_list_max);
         draw_varsion(screen_mid_pos,ascii_data);
-        int now_option_select = 0;
 
 
         for(int i = 0;i < option_count;i++){
@@ -42,7 +47,13 @@ int draw_start_menu(int screen_max_w,int screen_max_h,struct ascii_data *ascii_d
                         option_data[i].w,A_BOLD,1,NULL);
         }
         refresh();
+        if(is_first_start_menu){
+                write_startup_time_log(startup_start_time,startup_log_path);
+                is_first_start_menu = 0;
+        }
+        
         while(1){
+
                 wint_t ch = 0;
                 int input_result;
                 input_result = get_wch(&ch);
@@ -62,6 +73,26 @@ int draw_start_menu(int screen_max_w,int screen_max_h,struct ascii_data *ascii_d
                 refresh();
         }
         return 0;
+}
+
+static void write_startup_time_log(const struct timespec *start_time, const char *log_path){
+        if(start_time == NULL || log_path == NULL){
+                return;
+        }
+
+        struct timespec end_time;
+        clock_gettime(CLOCK_MONOTONIC, &end_time);
+        double msec = (end_time.tv_sec - start_time->tv_sec) * 1000.0 +
+                      (end_time.tv_nsec - start_time->tv_nsec) / 1000000.0;
+
+        FILE *startup_timer_log_file = fopen(log_path, "w");
+        if(startup_timer_log_file == NULL){
+                error_log_write("can not count start up time :(");
+                return;
+        }
+
+        fprintf(startup_timer_log_file,"%f\n",msec);
+        fclose(startup_timer_log_file);
 }
 
 void draw_ascii_logo(struct pos screen_mid_pos,struct ascii_data *ascii_data){

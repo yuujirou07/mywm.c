@@ -7,6 +7,7 @@
 #include <sys/types.h>     // uint64_t など
 #include <dirent.h>
 #include<dlfcn.h>
+#include<time.h>
 #include <wctype.h>
 #include<dirent.h>
 #include <libgen.h>
@@ -17,8 +18,6 @@
 #include"error_log.h"
 
 
-
-typedef int (*Start_Menu)(int screen_w, int screen_h,struct ascii_data *ascii_data);
 static void end_process(struct editor_state *state);
 
 
@@ -26,8 +25,32 @@ static void end_process(struct editor_state *state);
 // 入力ループを切り替えながら各処理関数へイベントを振り分ける。
 // 引数: なし。
 // 返り値: 正常終了なら0、ncurses初期化やメモリ確保に失敗したら1。
-int main(void)
+int main(int argc, char *argv[])
 {
+
+    char startuptime_log_file_path_name[PATH_MAX] = {0};
+    struct timespec startup_start_time;
+    clock_gettime(CLOCK_MONOTONIC, &startup_start_time);
+
+    bool startup_timer = 0;
+    set_error_log_file("my_editor_error_log.txt");
+
+    if(argc > startuptime_log_file_argument_num){
+        char *result = strstr(argv[startuptime_log_file_argument_num],"startuptime_log.log");
+
+        if(result != NULL){
+            int st_up_ag_num = startuptime_log_file_argument_num;
+            int startuptime_log_file_name_size = strlen(argv[st_up_ag_num]);
+            if((int)sizeof(startuptime_log_file_path_name) > startuptime_log_file_name_size){
+                memcpy(startuptime_log_file_path_name,argv[st_up_ag_num],startuptime_log_file_name_size);
+                startuptime_log_file_path_name[startuptime_log_file_name_size] = '\0';
+                startup_timer = 1;
+            }
+            else{
+                error_log_write("path to long");
+            }
+        }
+    }
 
     struct editor_settings settings_data = {0};
     struct editor_state state = {0};
@@ -40,7 +63,6 @@ int main(void)
 
     load_default_editor_settings(state.settings_data);
     load_custom_editor_settings(state.settings_data);
-    set_error_log_file("my_editor_error_log.txt");
 
     setlocale(LC_ALL, "");
     win = initscr();
@@ -151,7 +173,7 @@ int main(void)
 
     state.jump_mode_data.jump_line_num_counter = 0;
 
-    state.screen_state              = edit_screen;
+    state.screen_state              = state.settings_data->show_start_menu ? start_menu_screen : edit_screen;
     int dir_name_table_size         = state.file_browser_area.w * state.file_browser_area.h;
     char *dir_name_table            = calloc(dir_name_table_size,sizeof(char));
     int allocate_total_str_size     = state.settings_data->load_buffer_lines;
@@ -175,7 +197,6 @@ int main(void)
     refresh();
 
 
-    int start_menu_result = 0;
     void *handle = NULL;
     //スタートメニュー表示判定
 
@@ -204,63 +225,6 @@ int main(void)
 
     int running = true;
     while (running) {
-        
-        if(open_start_menu && start_menu != NULL){
-            state.is_cur_show = false;
-            curs_set(0);
-            clear();
-            start_menu_result = start_menu(state.scr.scr_size.x,state.scr.scr_size.y,&ascii_data);
-            flushinp();
-            open_start_menu = false;
-
-            if(start_menu_result == quit){
-                running = false;
-                break;
-            }
-            else if(start_menu_result == select_folder){
-                state.screen_state = file_browse_screen;
-                state.is_cur_show = false;
-                curs_set(0);
-
-                struct box clear_area;
-                clear_area.pos = (struct pos){0,ascii_data.h};
-                clear_area.w = state.scr.scr_size.x - 1;
-                clear_area.h = state.scr.scr_size.y - ascii_data.h;
-
-                clear_box(clear_area);
-                show_file_browse(&state,file_browse_box,dir_name_table,path_name,win);
-                refresh();
-                continue;
-            }
-            else if(start_menu_result == new_file){
-                state.screen_state = edit_screen;
-                state.is_cur_show = true;
-                curs_set(1);
-                clear();
-                draw_edit_screen_base(&state, win, line_start_pos, line_end_pos);
-                move(state.write_area.y_start, state.write_area.x_start);
-                refresh();
-                continue;
-            }
-            state.is_cur_show = true;
-            curs_set(1);
-        }
-
-
-
-
-        wint_t ch = 0;
-        int input_result;
-  
-        input_result = get_wch(&ch);
-
-        if (input_result == ERR)
-            continue;
-
-        if (input_result == KEY_CODE_YES && ch == KEY_RESIZE) {
-            handle_resize(win, &state,&line_start_pos,&line_end_pos);
-            continue;
-        }
         struct editor_input_context input_context = {
             .win = win,
             .mouse_event = &mouse_event,
@@ -275,7 +239,32 @@ int main(void)
             .screen_center_pos = screen_center_pos,
             .open_start_menu = &open_start_menu,
             .has_start_menu = (start_menu != NULL),
+            .start_menu = start_menu,
+            .ascii_data = &ascii_data,
+            .startup_start_time = startup_timer ? &startup_start_time : NULL,
+            .startup_log_path = startup_timer ? startuptime_log_file_path_name : NULL,
         };
+
+        if(open_start_menu && start_menu != NULL){
+            state.screen_state = start_menu_screen;
+        }
+        if(state.screen_state == start_menu_screen){
+            running = editor_handle_screen_input(&input_context, OK, 0);
+            continue;
+        }
+
+        wint_t ch = 0;
+        int input_result;
+
+        input_result = get_wch(&ch);
+
+        if (input_result == ERR)
+            continue;
+
+        if (input_result == KEY_CODE_YES && ch == KEY_RESIZE) {
+            handle_resize(win, &state,&line_start_pos,&line_end_pos);
+            continue;
+        }
         running = editor_handle_screen_input(&input_context, input_result, ch);
         continue;
 

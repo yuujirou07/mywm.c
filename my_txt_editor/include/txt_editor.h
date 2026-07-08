@@ -7,6 +7,8 @@
 #include <wctype.h>
 #include <dirent.h>
 #include <limits.h>
+#include <time.h>
+#include "ascii_art_comb.h"
 #include"default_settings.h"
 
 #define my_txt_editor_var 0.0
@@ -14,9 +16,17 @@
 #define quit 1
 #define select_folder 3
 #define none 4
+#define startuptime_log_file_argument_num 1
 
 
 #define CTRL(x) ((x) & 0x1f)// 0x1fはCtrl
+
+typedef int (*Start_Menu)(int screen_w, int screen_h, struct ascii_data *ascii_data,
+                          const struct timespec *startup_start_time,
+                          const char *startup_log_path);
+
+
+
 
 enum status_bar_side{
     top,
@@ -28,20 +38,6 @@ struct jump_mode{
     int  jump_line_num_counter;
 };
 
-struct editor_settings{
-    int max_lines;
-    int max_line_size;
-    int line_number_space;
-    int indent_range;
-    int jmp_set_cur_pos;
-    int default_load_line_size;
-    int load_buffer_lines;
-    enum status_bar_side bar_side_state;
-    bool show_status_bar;
-    bool draw_split_line;
-    bool ask_make_file;//ファイル変更時に何もファイルを開いていなかった場合ファイルを作るか聞く
-    bool show_start_menu;
-};
 struct file_data{
     FILE*   now_open_file;
     char**  file_str_data;
@@ -62,6 +58,8 @@ enum select_state{
 enum now_screen_state{
     edit_screen,
     file_browse_screen,
+    start_menu_file_browse_screen,
+    start_menu_screen,
     error_screen,
     line_jump_mode,
     ask_make_file_mode,
@@ -136,6 +134,7 @@ struct editor_state {
 
 };
 
+
 struct editor_input_context {
     WINDOW *win;                 // 入力処理と描画で使うncursesウィンドウ。
     MEVENT *mouse_event;         // KEY_MOUSE時にgetmouse()へ渡すイベント格納先。
@@ -150,7 +149,12 @@ struct editor_input_context {
     struct pos screen_center_pos;// 確認ダイアログを中央寄せするときの基準座標。
     bool *open_start_menu;       // file browserからstart menuへ戻る要求を書き込む先。
     bool has_start_menu;         // start menu pluginがロード済みならtrue。
+    Start_Menu start_menu;
+    struct ascii_data *ascii_data;
+    const struct timespec *startup_start_time;
+    const char *startup_log_path;
 };
+
 
 // editor_line_limit(): 編集対象として扱える最大行数を返す。
 // 引数: state=行バッファ容量と読み込み済みファイル行数を持つエディタ状態。

@@ -71,6 +71,7 @@ void load_file(struct editor_state *state, char *table,char *path_name,struct fi
         select_state->select_state = error;
         return;
     }
+
     int idx = state->file_select_line *state->file_browser_area.w;
     char *file_name_start_ptr = table+idx;
     char *file_name_end_ptr = strchr(file_name_start_ptr,'\0');
@@ -120,6 +121,7 @@ void load_file(struct editor_state *state, char *table,char *path_name,struct fi
     state->file_data.now_open_file = file;
     snprintf(state->file_data.now_open_path_name,
          sizeof(state->file_data.now_open_path_name), "%s",path_name_buff);
+    return;
 }
 
 // set_line_memory(): ファイル各行の開始位置(ftell)を保存し、後で任意行へfseekできるようにする。
@@ -299,18 +301,19 @@ void load_screen_size(struct editor_state *state){
 // 引数: settings_data=初期化する設定構造体。
 // 返り値: なし。
 void load_default_editor_settings(struct editor_settings *settings_data){
-    settings_data->default_load_line_size   = DEFAULT_LOAD_LINE_SiZE;
-    settings_data->load_buffer_lines        = LOAD_BUFFER_LINES;
-    settings_data->max_line_size            = MAX_LINE_SIZE;
-    settings_data->max_lines                = MAX_LINES;
-    settings_data->line_number_space        = LINE_NUMBER_SPACE;
-    settings_data->indent_range             = INDENT_RANGE;
-    settings_data->jmp_set_cur_pos          = JMP_SET_CUR_POS;
-    settings_data->bar_side_state           = DEFAULT_STATUS_BAR_SIDE;
-    settings_data->show_status_bar          = SHOW_STATUS_BAR;
-    settings_data->draw_split_line          = DEFAULT_DRAW_SPLIT_LINE;
-    settings_data->ask_make_file            = DEFAULT_ASK_MAKE_FILE;
-    settings_data->show_start_menu          = true;
+    settings_data->default_load_line_size       = DEFAULT_LOAD_LINE_SiZE;
+    settings_data->load_buffer_lines            = LOAD_BUFFER_LINES;
+    settings_data->max_line_size                = MAX_LINE_SIZE;
+    settings_data->max_lines                    = MAX_LINES;
+    settings_data->line_number_space            = LINE_NUMBER_SPACE;
+    settings_data->indent_range                 = INDENT_RANGE;
+    settings_data->jmp_set_cur_pos              = JMP_SET_CUR_POS;
+    settings_data->bar_side_state               = DEFAULT_STATUS_BAR_SIDE;
+    settings_data->show_status_bar              = SHOW_STATUS_BAR;
+    settings_data->draw_split_line              = DEFAULT_DRAW_SPLIT_LINE;
+    settings_data->ask_make_file                = DEFAULT_ASK_MAKE_FILE;
+    settings_data->file_select_scene_lighting   = DEFAULT_FILE_SELECT_SCENE_LIGHTING;
+    settings_data->show_start_menu              = DEFAULT_SHOW_START_MENU;
 }
 
 // load_custom_editor_settings(): 設定JSONがあれば読み込み、既定値を上書きする。
@@ -400,6 +403,11 @@ void load_custom_editor_settings(struct editor_settings *settings_data){
         settings_data->draw_split_line = cJSON_IsTrue(draw_split_line);
     }
 
+    cJSON *show_start_menu = cJSON_GetObjectItemCaseSensitive(json_data, "show_start_menu");
+    if(cJSON_IsBool(show_start_menu)){
+        settings_data->show_start_menu = cJSON_IsTrue(show_start_menu);
+    }
+
     if(settings_data->max_line_size < 2){
         settings_data->max_line_size = MAX_LINE_SIZE;
     }
@@ -427,4 +435,3 @@ void ask_new_file_name(struct pos str_start_pos,int w,int h){
     int ask_str_start_pos_x = str_start_pos.x + ((w - str_len)/2);
     mvaddstr(str_start_pos.y,ask_str_start_pos_x,ask_str);
 }
-

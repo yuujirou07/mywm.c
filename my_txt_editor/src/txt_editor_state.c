@@ -21,6 +21,8 @@ static bool handle_file_browse_screen_input(struct editor_input_context *ctx, wi
 static bool handle_line_jump_mode_input(struct editor_input_context *ctx, wint_t ch);
 static bool handle_error_screen_input(struct editor_input_context *ctx, wint_t ch);
 static bool handle_ask_make_file_mode_input(struct editor_input_context *ctx, int input_result, wint_t ch);
+static bool handle_start_menu_input(struct editor_input_context *ctx, wint_t ch);
+
 
 // editor_handle_screen_input(): 現在のscreen_stateに応じて入力処理を各state関数へ振り分ける。
 // 引数: ctx=描画対象や共有状態をまとめた入力context、input_result=get_wch()の結果、ch=入力文字またはKEY_*。
@@ -28,9 +30,13 @@ static bool handle_ask_make_file_mode_input(struct editor_input_context *ctx, in
 bool editor_handle_screen_input(struct editor_input_context *ctx, int input_result, wint_t ch)
 {
     switch (ctx->state->screen_state) {
+        case start_menu_screen:
+            return handle_start_menu_input(ctx, ch);
         case edit_screen:
             return handle_edit_screen_input(ctx, input_result, ch);
         case file_browse_screen:
+            return handle_file_browse_screen_input(ctx, ch);
+        case start_menu_file_browse_screen://関数内にstart_menu_file_browse_screenの場合の分岐を記述している
             return handle_file_browse_screen_input(ctx, ch);
         case line_jump_mode:
             return handle_line_jump_mode_input(ctx, ch);
@@ -154,7 +160,9 @@ static bool handle_file_browse_screen_input(struct editor_input_context *ctx, wi
     struct editor_state *state = ctx->state;
     WINDOW *win = ctx->win;
 
+
     if (ch == 'q' && ctx->has_start_menu) {
+        state->screen_state = start_menu_screen;
         *ctx->open_start_menu = true;
         return true;
     }
@@ -163,33 +171,40 @@ static bool handle_file_browse_screen_input(struct editor_input_context *ctx, wi
         refresh();
         return true;
     }
+    
+    if(state->settings_data->file_select_scene_lighting){
+        if (ch == KEY_UP || ch == 'k') {
+            // next_lineはハイライトを移す先。端では上下に循環させる。
+            int next_line;
+            if (state->file_select_line <= 0){
+                next_line = state->dir_num - 1;
+            }
+            else{
+            next_line = state->file_select_line - 1;
+            }
+        
+            file_sellect_line_update(state, next_line);
+            
+        } else if (ch == KEY_DOWN  || ch == 'j') {
+            // next_lineはハイライトを移す先。端では上下に循環させる。
+            int next_line;
+            if (state->file_select_line >= state->dir_num - 1){
+                next_line = 0;
+            }
+            else{
 
-    if (ch == KEY_UP || ch == 'k') {
-        // next_lineはハイライトを移す先。端では上下に循環させる。
-        int next_line;
-        if (state->file_select_line <= 0){
-            next_line = state->dir_num - 1;
+                next_line = state->file_select_line + 1;
+            }
+            file_sellect_line_update(state, next_line);
         }
-        else{
-           next_line = state->file_select_line - 1;
-        }
-        file_sellect_line_update(state, next_line);
-    } else if (ch == KEY_DOWN  || ch == 'j') {
-        // next_lineはハイライトを移す先。端では上下に循環させる。
-        int next_line;
-        if (state->file_select_line >= state->dir_num - 1){
-            next_line = 0;
-        }
-        else{
-            next_line = state->file_select_line + 1;
-        }
-        file_sellect_line_update(state, next_line);
-
-    } else if (ch == KEY_ENTER || ch == '\n' || ch == '\r' || ch == ' ') {
+    } 
+    if (ch == KEY_ENTER || ch == '\n' || ch == '\r' || ch == ' ') {
         // select_state.select_nameが空でなければディレクトリ選択、空ならファイル読み込み完了側を見る。
         struct file_browse_select_state select_state;
         load_file(state, ctx->dir_name_table, ctx->path_name, &select_state);
+
         if(select_state.select_name[0] != '\0'){
+            
             char now_path_name[PATH_MAX] = {0};
             size_t path_len = strlen(ctx->path_name);
             size_t select_name_len = strlen(select_state.select_name);
@@ -199,16 +214,19 @@ static bool handle_file_browse_screen_input(struct editor_input_context *ctx, wi
                 return true;
             }
 
+
             memcpy(now_path_name, ctx->path_name, path_len);
             now_path_name[path_len] = '/';
             memcpy(now_path_name + path_len + 1, select_state.select_name, select_name_len + 1);
             memcpy(ctx->path_name, now_path_name, path_len + 1 + select_name_len + 1);
+      
             draw_edit_screen_base(state, win, ctx->line_start_pos, ctx->line_end_pos);
+            
             load_dir_table(state, ctx->dir_name_table, ctx->dir_name_table_size, ctx->path_name);
             show_file_browse(state, ctx->file_browse_box, ctx->dir_name_table, ctx->path_name, win);
             refresh();
         }
-        if(state->file_data.now_open_file != NULL){
+        if(state->file_data.now_open_file != NULL && select_state.select_state == file){
             load_screen_size(state);
             state->mouse.scr_abs_now_pos = (struct pos){state->write_area.x_start, state->write_area.y_start};
             restore_edit_screen(win, state, ctx->line_start_pos, ctx->line_end_pos);
@@ -500,4 +518,59 @@ static void move_view_to_line(WINDOW *win, struct editor_state *state, long targ
     int screen_mouce_pos_y = target_line - draw_start_line;
     x = editor_cursor_x_on_line(state, target_line, x);
     move(state->write_area.y_start + screen_mouce_pos_y, x);
+}
+
+static bool handle_start_menu_input(struct editor_input_context *ctx, wint_t ch){
+    (void)ch;
+    struct editor_state *state = ctx->state;
+    WINDOW *win = ctx->win;
+
+    if(ctx->start_menu == NULL){
+        restore_edit_screen(win, state, ctx->line_start_pos, ctx->line_end_pos);
+        return true;
+    }
+
+    state->is_cur_show = false;
+    curs_set(0);
+    clear();
+    int start_menu_result = ctx->start_menu(state->scr.scr_size.x,state->scr.scr_size.y,
+                                            ctx->ascii_data,
+                                            ctx->startup_start_time,
+                                            ctx->startup_log_path);
+    flushinp();
+    *ctx->open_start_menu = false;
+
+    if(start_menu_result == quit){
+        return false;
+    }
+    else if(start_menu_result == select_folder){
+        state->screen_state = start_menu_file_browse_screen;
+        state->is_cur_show = false;
+        curs_set(0);
+
+        struct box clear_area;
+        int logo_h = ctx->ascii_data != NULL ? ctx->ascii_data->h : 0;
+        clear_area.pos = (struct pos){0,logo_h};
+        clear_area.w = state->scr.scr_size.x - 1;
+        clear_area.h = state->scr.scr_size.y - logo_h;
+
+        clear_box(clear_area);
+        show_file_browse(state,ctx->file_browse_box,ctx->dir_name_table,ctx->path_name,win);
+        refresh();
+        return true;
+    }
+    else if(start_menu_result == new_file){
+        state->screen_state = edit_screen;
+        state->is_cur_show = true;
+        curs_set(1);
+        clear();
+        draw_edit_screen_base(state, win, ctx->line_start_pos, ctx->line_end_pos);
+        move(state->write_area.y_start, state->write_area.x_start);
+        refresh();
+        return true;
+    }
+    state->screen_state = edit_screen;
+    state->is_cur_show = true;
+    curs_set(1);
+    return true;
 }
