@@ -14,6 +14,7 @@
 #include <limits.h>
 #include<unistd.h>
 #include "ascii_art_comb.h"
+#include "language_server_communication.h"
 #include "txt_editor.h"
 #include"error_log.h"
 
@@ -220,6 +221,62 @@ int main(int argc, char *argv[])
             return 1;
         }
     }
+
+
+    ///LSP
+    int to_child[2];    // 親からclangdへ送る用
+    int from_child[2];  // clangdから親へ返す用
+    int read_result  = pipe(to_child);
+    int write_result = pipe(from_child);
+
+    if(read_result == 0 && write_result == 0){
+        pid_t pid;
+        pid = fork();
+        if (pid == -1) {
+            perror("fork");
+            return 1;
+        }
+        if(pid == 0){
+            dup2(to_child[0], STDIN_FILENO);
+            dup2(from_child[1], STDOUT_FILENO);
+            dup2(from_child[1], STDERR_FILENO);
+
+            close(to_child[0]);
+            close(to_child[1]);
+            close(from_child[0]);
+            close(from_child[1]);
+
+            char *argv[] = {
+                "clangd",
+                NULL
+            };
+
+            execvp("clangd", argv);
+            // execvpに失敗したときだけここに来る
+            perror("execvp");
+            exit(1);
+        }
+        else if(pid > 0){
+            close(to_child[0]);     // 親はここから読まない
+            close(from_child[1]);   // 親はここへ書かない
+
+            const char *json =
+                "{\"jsonrpc\":\"2.0\","
+                "\"id\":1,"
+                "\"method\":\"initialize\","
+                "\"params\":{"
+                    "\"processId\":1234,"
+                    "\"rootUri\":\"file:///home/yuujirou07/my_txt_editor\","
+                    "\"capabilities\":{}"
+                "}}";
+            lsp_send(to_child[1], json);
+        }
+    }
+    else if(read_result == -1 || write_result == -1){
+        error_log_write("cant make pipe :(");
+    }
+
+    
 
 
 

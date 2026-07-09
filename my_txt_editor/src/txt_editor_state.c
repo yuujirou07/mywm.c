@@ -79,6 +79,8 @@ static bool handle_edit_screen_input(struct editor_input_context *ctx, int input
         return true;
     }
     if (ch == CTRL('f')) {
+        ctx->state->is_cur_show = false;
+        curs_set(0);
         state->screen_state = file_browse_screen;
         getyx(win, state->mouse.scr_abs_now_pos.y, state->mouse.scr_abs_now_pos.x);
         show_file_browse(state, ctx->file_browse_box, ctx->dir_name_table, ctx->path_name, win);
@@ -161,9 +163,17 @@ static bool handle_file_browse_screen_input(struct editor_input_context *ctx, wi
     WINDOW *win = ctx->win;
 
 
-    if (ch == 'q' && ctx->has_start_menu) {
-        state->screen_state = start_menu_screen;
-        *ctx->open_start_menu = true;
+
+    if (ch == 'q') {
+        if(state->screen_state == start_menu_file_browse_screen){
+            state->screen_state = start_menu_screen;
+            *ctx->open_start_menu = true;
+        }
+        else{
+            state->screen_state = edit_screen;
+            restore_edit_screen(win, state, ctx->line_start_pos, ctx->line_end_pos);
+            refresh();
+        }
         return true;
     }
     if (ch == CTRL('f')) {
@@ -171,7 +181,7 @@ static bool handle_file_browse_screen_input(struct editor_input_context *ctx, wi
         refresh();
         return true;
     }
-    
+
     if(state->settings_data->file_select_scene_lighting){
         if (ch == KEY_UP || ch == 'k') {
             // next_lineはハイライトを移す先。端では上下に循環させる。
@@ -559,6 +569,7 @@ static bool handle_start_menu_input(struct editor_input_context *ctx, wint_t ch)
         refresh();
         return true;
     }
+
     else if(start_menu_result == new_file){
         state->screen_state = edit_screen;
         state->is_cur_show = true;
@@ -569,6 +580,7 @@ static bool handle_start_menu_input(struct editor_input_context *ctx, wint_t ch)
         refresh();
         return true;
     }
+    
     state->screen_state = edit_screen;
     state->is_cur_show = true;
     curs_set(1);

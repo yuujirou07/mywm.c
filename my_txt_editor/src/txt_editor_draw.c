@@ -305,6 +305,10 @@ void draw_box_inside_dir(struct editor_state *state,char *table){
 // 引数: state=選択行と表示領域、num=適用するncursesカラーペア番号。
 // 返り値: なし。
 void draw_select_dir_scene_color(struct editor_state *state,int num){
+    if(state->settings_data->file_select_scene_lighting == false)
+        return;
+    
+
     if(state->file_browser_area.w <= 0 || state->dir_num <= 0 ||
        state->file_select_line < 0 || state->file_select_line >= state->dir_num){
         return;
@@ -318,7 +322,6 @@ void draw_select_dir_scene_color(struct editor_state *state,int num){
 // 引数: state=画面状態、file_browse_box=枠、dir_name_table=一覧、path_name=現在パス、win=描画先。
 // 返り値: なし。
 void show_file_browse(struct editor_state *state,struct box file_browse_box,char *dir_name_table,char *path_name,WINDOW *win){
-
     draw_box(file_browse_box,win);
     draw_now_path_name(file_browse_box,path_name);
     draw_box_inside_dir(state,dir_name_table);

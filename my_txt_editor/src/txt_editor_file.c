@@ -314,6 +314,7 @@ void load_default_editor_settings(struct editor_settings *settings_data){
     settings_data->ask_make_file                = DEFAULT_ASK_MAKE_FILE;
     settings_data->file_select_scene_lighting   = DEFAULT_FILE_SELECT_SCENE_LIGHTING;
     settings_data->show_start_menu              = DEFAULT_SHOW_START_MENU;
+    settings_data->lsp_lanch_startup_editor     = DEFAULT_LSP_PROCESS_LANCH_STARTUP_EDITOR;                                                         
 }
 
 // load_custom_editor_settings(): 設定JSONがあれば読み込み、既定値を上書きする。

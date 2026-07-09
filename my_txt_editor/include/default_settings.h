@@ -15,8 +15,9 @@
 #define JUMP_LINE_NUM_DIGITS 4//行指定の書き込みセル数
 #define DEFAULT_ASK_MAKE_FILE 1//ファイル変更時に何もファイルを開いていなかった場合ファイルを作るか聞く
 #define DEFAULT_PATH_NAME_MAX_SIZE PATH_MAX
-#define DEFAULT_FILE_SELECT_SCENE_LIGHTING false
+#define DEFAULT_FILE_SELECT_SCENE_LIGHTING true
 #define DEFAULT_SHOW_START_MENU true
+#define DEFAULT_LSP_PROCESS_LANCH_STARTUP_EDITOR true
 
 struct editor_settings{
     int max_lines;
@@ -32,6 +33,6 @@ struct editor_settings{
     bool ask_make_file;//ファイル変更時に何もファイルを開いていなかった場合ファイルを作るか聞く
     bool show_start_menu;
     bool file_select_scene_lighting;
-    
+    bool lsp_lanch_startup_editor;
 };
 #endif 
