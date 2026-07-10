@@ -223,62 +223,23 @@ int main(int argc, char *argv[])
     }
 
 
-    ///LSP
-    int to_child[2];    // 親からclangdへ送る用
-    int from_child[2];  // clangdから親へ返す用
-    int read_result  = pipe(to_child);
-    int write_result = pipe(from_child);
+    struct lsp_process lsp;
+    lsp_process_init(&lsp);
+    if(state.settings_data->lsp_lanch_startup_editor){
+        char root_uri[(PATH_MAX * 3) + sizeof("file://")];
+        char *lsp_argv[] = {"clangd", NULL};
 
-    if(read_result == 0 && write_result == 0){
-        pid_t pid;
-        pid = fork();
-        if (pid == -1) {
-            perror("fork");
-            return 1;
+        if(lsp_path_to_file_uri(root_uri, sizeof(root_uri), path_name) == -1){
+            error_log_write("cant make lsp root uri :(");
         }
-        if(pid == 0){
-            dup2(to_child[0], STDIN_FILENO);
-            dup2(from_child[1], STDOUT_FILENO);
-            dup2(from_child[1], STDERR_FILENO);
-
-            close(to_child[0]);
-            close(to_child[1]);
-            close(from_child[0]);
-            close(from_child[1]);
-
-            char *argv[] = {
-                "clangd",
-                NULL
-            };
-
-            execvp("clangd", argv);
-            // execvpに失敗したときだけここに来る
-            perror("execvp");
-            exit(1);
+        else if(lsp_start_server(&lsp, "clangd", lsp_argv) == -1){
+            error_log_write("cant start lsp server :(");
         }
-        else if(pid > 0){
-            close(to_child[0]);     // 親はここから読まない
-            close(from_child[1]);   // 親はここへ書かない
-
-            const char *json =
-                "{\"jsonrpc\":\"2.0\","
-                "\"id\":1,"
-                "\"method\":\"initialize\","
-                "\"params\":{"
-                    "\"processId\":1234,"
-                    "\"rootUri\":\"file:///home/yuujirou07/my_txt_editor\","
-                    "\"capabilities\":{}"
-                "}}";
-            lsp_send(to_child[1], json);
+        else if(lsp_send_initialize(lsp.to_server_fd, 1, getpid(), root_uri) == -1){
+            error_log_write("cant send lsp initialize :(");
+            lsp_close_server(&lsp);
         }
     }
-    else if(read_result == -1 || write_result == -1){
-        error_log_write("cant make pipe :(");
-    }
-
-    
-
-
 
     int running = true;
     while (running) {
@@ -328,6 +289,7 @@ int main(int argc, char *argv[])
     }
     if(handle != NULL)
         dlclose(handle);
+    lsp_close_server(&lsp);
     end_process(&state);
     return 0;
 }
