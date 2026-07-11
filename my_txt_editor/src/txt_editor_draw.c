@@ -2,7 +2,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stddef.h>
 #include "txt_editor.h"
+
+#define container_of(ptr, type, member) \
+    ((type *)((char *)(ptr) - offsetof(type, member)))
 
 // line_draw_info(): 線の向きから描画範囲・移動量・罫線文字を決める。
 // 引数: start_pos/end_pos=線の端点、range/step_x/step_y/line_ch=計算結果の書き込み先。
@@ -81,7 +85,7 @@ void draw_editor_buffer_line(struct editor_state *state, int line, int screen_y)
     if(line < 0 || line >= editor_line_limit(state)) return;
     if(state->str.line[line] <= 0) return;
 
-    // line_str_dataは画面セル位置に合わせて格納している。
+    // wint_line_str_dataは画面セル位置に合わせて格納している。
     // addwstrで詰めて描くと2桁幅文字の後ろでズレるため、
     // セルごとのx座標へ1文字ずつ描く。
     int line_base = line * state->str.col_capacity;
@@ -89,7 +93,7 @@ void draw_editor_buffer_line(struct editor_state *state, int line, int screen_y)
     if(max_col > col_limit) max_col = col_limit;
 
     for(int col = 0; col < max_col; col++){
-        wint_t cell = state->str.line_str_data[line_base + col];
+        wint_t cell = state->str.wint_line_str_data[line_base + col];
         if(cell == 0) continue;
 
         wchar_t ch = (wchar_t)cell;
@@ -207,6 +211,14 @@ void draw_box(struct box box, WINDOW *win){
 
 }
 
+void request_draw_box(struct editor_state *state,struct box box){
+    if(state->draw_box_count >= DRAW_BOX_REQUEST_MAX){
+        return;
+    }
+    state->draw_box_data[state->draw_box_count++] = box;
+    state->render_flags |= RENDER_BOX;
+}
+
 // draw_all_line(): 現在行が見える位置を基準に、編集バッファから画面全体を再描画する。
 // 引数: win=描画先ウィンドウ、state=現在行・表示開始行・文字バッファ。
 // 返り値: なし。
@@ -310,28 +322,33 @@ void draw_select_dir_scene_color(struct editor_state *state,int num){
     
 
     if(state->file_browser_area.w <= 0 || state->dir_num <= 0 ||
-       state->file_select_line < 0 || state->file_select_line >= state->dir_num){
+       state->file_select_line_data.now_line < 0 || state->file_select_line_data.now_line >= state->dir_num){
         return;
     }
-    int ligthing_line = state->file_browser_area.pos.y + state->file_select_line;
+    int ligthing_line = state->file_browser_area.pos.y + state->file_select_line_data.now_line;
     mvchgat(ligthing_line,state->file_browser_area.pos.x,state->file_browser_area.w,A_NORMAL,num,NULL);
-   
+
+    if(state->file_select_line_data.previous_line != state->file_select_line_data.now_line){
+        int previous_line = state->file_browser_area.pos.y + state->file_select_line_data.previous_line;
+        mvchgat(previous_line,state->file_browser_area.pos.x,state->file_browser_area.w,A_NORMAL,1,NULL);
+    }
 }
 
-// show_file_browse(): 画面状態をファイルブラウザへ切り替え、枠・パス・一覧・選択行を描く。
-// 引数: state=画面状態、file_browse_box=枠、dir_name_table=一覧、path_name=現在パス、win=描画先。
+// show_file_browse(): ファイルブラウザ全体の再描画を要求する。
+// 引数: state=描画要求の保存先、残りは呼び出し互換のため受け取る。
 // 返り値: なし。
 void show_file_browse(struct editor_state *state,struct box file_browse_box,char *dir_name_table,char *path_name,WINDOW *win){
-    draw_box(file_browse_box,win);
-    draw_now_path_name(file_browse_box,path_name);
-    draw_box_inside_dir(state,dir_name_table);
-    draw_select_dir_scene_color(state,2);
+    (void)file_browse_box;
+    (void)dir_name_table;
+    (void)path_name;
+    (void)win;
+    state->render_flags |= RENDER_FILE_BROWSE;
 }
 
-// file_sellect_line_update(): 旧選択行のハイライトを消し、新しい選択行をハイライトする。
+// set_file_sellect_line(): 選択行を更新し、選択表示の再描画を要求する。
 // 引数: state=現在の選択状態、line=新しく選択する行番号。
 // 返り値: なし。
-void file_sellect_line_update(struct editor_state *state,int line){
+void set_file_sellect_line(struct editor_state *state,int line){
     if(state->dir_num <= 0 || state->settings_data->file_select_scene_lighting == false){
         return;
     }
@@ -341,17 +358,16 @@ void file_sellect_line_update(struct editor_state *state,int line){
     if(line >= state->dir_num){
         line = state->dir_num - 1;
     }
-    draw_select_dir_scene_color(state,1);
-    state->file_select_line = line;
-    draw_select_dir_scene_color(state,2);
 
-    refresh();
+    file_select_line_update(&state->file_select_line_data, line);
+    state->render_flags |= RENDER_SELECT_DIR_SCENE_COLOR;
 }
 
 // editor_screen_move_line(): 画面をnum行スクロールし、論理カーソル行と表示開始行を同期する。
 // 引数: state=カーソル行と表示開始行、win=スクロール対象、num=移動行数。
 // 返り値: なし。
 void editor_screen_move_line(struct editor_state *state,WINDOW *win,int num){
+    (void)win;
     int line_limit = get_line_limit();
     int next_mouse_line = state->mouse.now_mouce_line + num;
     int next_scr_start = state->scr.scr_start_num + num;
@@ -359,18 +375,10 @@ void editor_screen_move_line(struct editor_state *state,WINDOW *win,int num){
         return;
     }
 
-    wsetscrreg(win, state->write_area.y_start, state->write_area.y_end - 1);
-    wscrl(win, num);
-    wsetscrreg(win, 0, state->scr.scr_size.y - 1);
-
     state->mouse.now_mouce_line = next_mouse_line;
     state->scr.scr_start_num = next_scr_start;
-
-    struct pos line_start_pos = (struct pos){state->write_area.x_start-1,state->write_area.y_start};
-    struct pos line_end_pos = (struct pos){state->write_area.x_start-1,state->write_area.y_end};
-
-    draw_line_numbers(state);
-    draw_line(line_start_pos,line_end_pos,win,all_draw_mode);
+    state->render_flags |= RENDER_EDIT_SCREEN_BASE;
+    state->render_flags |= RENDER_FILE_DATA;
 }
 
 // editor_error_screen(): エラー表示用の画面へ切り替え、中央にメッセージを表示する。
@@ -409,7 +417,6 @@ void draw_file_data(struct editor_state *state){
         int line = state->scr.scr_start_num + i;
         draw_editor_buffer_line(state, line, state->write_area.y_start + i);
     }
-    refresh();
 }
 
 // draw_status_bar_line(): ステータスバーの横線と区切り接続部を描画する。
@@ -469,12 +476,16 @@ void draw_status_bar_path(struct editor_state *state, WINDOW *win){
     move(y, x);
 }
 
-void clear_box(struct box box){
-    for(int i = box.pos.y;i < box.pos.y + box.h;i++){
-        char buff[box.w];
-        memset(buff,' ',sizeof(buff));
-        mvaddnstr(i,box.pos.x,buff,box.w);
+void clear_box(struct clear_box_data *clear_box){
+    for(int f = 0;f < clear_box->clear_box_counter;f++){
+        struct box box = clear_box->clear_box[f];
+        for(int i = box.pos.y;i < box.pos.y + box.h;i++){
+            char buff[box.w];
+            memset(buff,' ',sizeof(buff));
+            mvaddnstr(i,box.pos.x,buff,box.w);
+        }
     }
+    clear_box->clear_box_counter = 0;
 }
 
 //ステータスバーに現在の行数と終端行を記述する
@@ -507,3 +518,153 @@ void draw_line_status(struct editor_state *state,WINDOW *win){
     move(y,x);
 }
 
+static void draw_make_file_dialog(struct editor_input_context *ctx){
+    struct editor_state *state = ctx->state;
+    WINDOW *win = ctx->win;
+
+    if(!state->make_file_mode_status.is_input_scene){
+        char comment[] = "The file cannot be found; would you like to create it?";
+        int comment_len = strlen(comment);
+        int box_h = comment_len / state->scr.scr_size.x + 3;
+        int box_w = (state->scr.scr_size.x > comment_len + 2)
+            ? comment_len + 2 : state->scr.scr_size.x;
+        struct box box = {
+            .pos = {ctx->screen_center_pos.x - comment_len / 2,
+                    ctx->screen_center_y - ctx->screen_center_y / 2},
+            .w = box_w,
+            .h = box_h,
+        };
+        struct pos text_pos = {box.pos.x + 1, box.pos.y + 1};
+
+        state->ask_make_file_box = box;
+        draw_box(box, win);
+        my_mvaddstr(text_pos, comment);
+        mvaddstr(text_pos.y + 1, text_pos.x + box.w / 2 - (int)strlen("YES[y]") - 2, "YES[y]");
+        mvaddstr(text_pos.y + 1, text_pos.x + box.w / 2 + 2, "NO[n]");
+        curs_set(0);
+        move(state->scr.cursor_pos.y, state->scr.cursor_pos.x);
+        return;
+    }
+
+    struct box write_box = {
+        .pos = state->ask_make_file_box.pos,
+        .w = state->ask_make_file_box.w,
+        .h = state->ask_make_file_box.h + 2,
+    };
+    struct box input_box = {
+        .pos = {write_box.pos.x + 1, write_box.pos.y + write_box.h - 3},
+        .w = write_box.w - 2,
+        .h = 2,
+    };
+    char *label = "write a new file name";
+    int label_x = write_box.pos.x + (write_box.w - (int)strlen(label)) / 2;
+
+    struct clear_box_data clear_data = {
+        .clear_box = {write_box},
+        .clear_box_counter = 1,
+    };
+
+    clear_box(&clear_data);
+    draw_box(write_box, win);
+    draw_box(input_box, win);
+    mvaddstr(write_box.pos.y + 1, label_x, label);
+    mvaddnstr(input_box.pos.y + 1, input_box.pos.x + 1,
+               state->make_file_mode_status.new_file_name,
+               state->make_file_mode_status.new_file_name_counter);
+    state->write_file_name_area = input_box;
+    move(input_box.pos.y + 1, input_box.pos.x + 1 +
+         state->make_file_mode_status.new_file_name_counter);
+    curs_set(1);
+}
+
+void update_screen(struct editor_input_context *ctx){
+
+    
+    unsigned int flags = ctx->state->render_flags;
+    struct editor_state *state = ctx->state;
+    WINDOW *win = ctx->win;
+    
+    if(flags & RENDER_ALL){
+        
+    }
+    else{
+        if(flags & RENDER_CLEAR_BOX){
+            clear_box(&state->clear_box_data);
+        }
+        if(flags & RENDER_LINE_STATUS){
+            draw_line_status(state, win);
+        }
+        if(flags & RENDER_STATUS_BAR_LINE){
+            draw_status_bar_line(state, *state->status_bar, win);
+        }
+
+        if(flags & RENDER_LINE){
+            draw_line(ctx->line_start_pos, ctx->line_end_pos, win, all_draw_mode);
+        }
+        if(flags & RENDER_SELECT_DIR_SCENE_COLOR){
+            draw_select_dir_scene_color(state,2);
+        }
+        if(flags & RENDER_EDIT_SCREEN_BASE){
+            draw_edit_screen_base(state, win, ctx->line_start_pos, ctx->line_end_pos);
+        }
+        if(flags & RENDER_FILE_DATA){
+            int x;
+            int y;
+            getyx(win, y, x);
+            draw_file_data(state);
+            move(y,x);
+        }
+        if(flags & RENDER_FILE_BROWSE){
+            draw_box(ctx->file_browse_box, win);
+            draw_now_path_name(ctx->file_browse_box, ctx->path_name);
+            draw_box_inside_dir(state, ctx->dir_name_table);
+            draw_select_dir_scene_color(state, 2);
+        }
+        if(flags & RENDER_BOX){
+            for(int i = 0; i < state->draw_box_count; i++){
+                draw_box(state->draw_box_data[i], win);
+            }
+            state->draw_box_count = 0;
+        }
+        if(flags & RENDER_LINE_JUMP){
+           draw_line_jump(state);
+        }
+        if(flags & RENDER_MAKE_FILE){
+            draw_make_file_dialog(ctx);
+        }
+    }
+
+    ctx->state->render_flags = RENDER_NONE;
+    refresh();
+}
+
+void request_clear_box(struct editor_state *state, struct box box){
+    if(state->clear_box_data.clear_box_counter >= box_retention_max){
+        editor_error_screen(state,"clear box over flow ");
+        return;
+    }
+
+    int *counter = &state->clear_box_data.clear_box_counter;
+    state->clear_box_data.clear_box[(*counter)++] = box; 
+    state->render_flags |= RENDER_CLEAR_BOX;
+}
+
+
+
+void draw_line_jump(struct editor_state *state){
+     struct pos prompt_pos = {0, state->write_area.y_start};
+
+    if(state->settings_data->show_status_bar){
+        prompt_pos.y = (state->settings_data->bar_side_state == top)
+            ? state->status_bar->pos.y - 1 : state->status_bar->pos.y;
+        prompt_pos.x = state->status_bar->pos.x;
+    }
+    mvhline(prompt_pos.y, prompt_pos.x + 1, ' ',
+            strlen("JMP_LINE ") + JUMP_LINE_NUM_DIGITS);
+    mvaddstr(prompt_pos.y, prompt_pos.x + 1, "JMP_LINE ");
+    mvaddnstr(prompt_pos.y, prompt_pos.x + 1 + (int)strlen("JMP_LINE "),
+                state->jump_mode_data.jump_line_num,
+                state->jump_mode_data.jump_line_num_counter);
+    move(prompt_pos.y, prompt_pos.x + 1 + (int)strlen("JMP_LINE ") +
+            state->jump_mode_data.jump_line_num_counter);
+}

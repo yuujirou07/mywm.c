@@ -116,7 +116,10 @@ executable(
 # --- txt_editor ---
 ncursesw_dep = dependency('ncursesw')
 cjson_dep = meson.get_compiler('c').find_library('cjson')
-txt_editor_inc = include_directories('my_txt_editor/include')
+txt_editor_inc = include_directories(
+    'my_txt_editor/include',
+    'my_txt_editor/include/lsp_src',
+)
 executable(
     'txt_editor',
     [
@@ -128,6 +131,7 @@ executable(
         'my_txt_editor/src/json_read.c',
         'my_txt_editor/src/my_cui_lib_linux.c',
         'my_txt_editor/src/error_log.c',
+        'my_txt_editor/src/lsp_src/language_server_communication.c',
     ],
     include_directories: txt_editor_inc,
     dependencies: [ncursesw_dep, cjson_dep],

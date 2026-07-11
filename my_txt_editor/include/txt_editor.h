@@ -10,6 +10,7 @@
 #include <time.h>
 #include "ascii_art_comb.h"
 #include"default_settings.h"
+#include"lsp_src/language_server_communication.h"
 
 #define my_txt_editor_var 0.0
 #define new_file 0
@@ -17,6 +18,26 @@
 #define select_folder 3
 #define none 4
 #define startuptime_log_file_argument_num 1
+#define FDS_N 4
+#define DRAW_BOX_REQUEST_MAX 64
+#define box_retention_max 64
+
+enum render_flags {
+    RENDER_NONE       = 0,
+    RENDER_LINE_STATUS     = 1 << 0,
+    RENDER_STATUS_BAR_LINE = 1 << 1,
+    RENDER_LINE  = 1 << 2,
+    RENDER_STATUS_BAR = 1 << 3,
+    RENDER_SELECT_DIR_SCENE_COLOR = 1 << 4,
+    RENDER_EDIT_SCREEN_BASE = 1<<5,
+    RENDER_FILE_DATA = 1<<6,
+    RENDER_FILE_BROWSE = 1 << 7,
+    RENDER_BOX        = 1 << 8,
+    RENDER_CLEAR_BOX = 1 << 9,
+    RENDER_ALL        = 1 << 10,
+    RENDER_LINE_JUMP = 1 << 11,
+    RENDER_MAKE_FILE = 1 << 12,
+};
 
 
 #define CTRL(x) ((x) & 0x1f)// 0x1fはCtrl
@@ -45,6 +66,7 @@ struct file_data{
     long*   file_line_start_num;
     long    file_line_start_num_counter;
     long    description_line_end;
+    long    file_str_line_end;//可視文字がある行数
     int     file_line_n;
     bool    is_open_file;
 };
@@ -80,6 +102,10 @@ struct pos {
     int y;
 };
 
+struct file_select_line {
+    int now_line;
+    int previous_line;
+};
 struct box {
     struct pos pos;
     int w;
@@ -102,7 +128,8 @@ struct scr_data {
 };
 
 struct str_data {
-    wint_t *line_str_data;
+    wint_t *wint_line_str_data;
+    char   *chr_file_all_str_data;
     int    *line;
     int     line_capacity;
     int     col_capacity;
@@ -113,6 +140,12 @@ struct mouse_data {
     struct pos scr_abs_now_pos;
 };
 
+struct clear_box_data{
+    struct box clear_box[box_retention_max];
+    int clear_box_counter;
+};
+
+
 struct editor_state {
     struct editor_settings    *settings_data;
     struct scr_data            scr;
@@ -121,15 +154,19 @@ struct editor_state {
     struct write_possible_area write_area;
     struct make_file_mode_status make_file_mode_status;
     struct box                 file_browser_area;
+    struct box                 draw_box_data[DRAW_BOX_REQUEST_MAX];
+    int                        draw_box_count;
     struct box                *file_browser_box;
     struct box                *status_bar;
     struct box                 ask_make_file_box;
     struct box                 write_file_name_area;
     struct file_data           file_data;
     struct jump_mode           jump_mode_data;
+    struct file_select_line    file_select_line_data;
+    struct clear_box_data      clear_box_data;
     enum now_screen_state      screen_state;
-    int                        file_select_line; 
     int                        dir_num;
+    int                        render_flags;
     bool                       is_cur_show;
 
 };
@@ -153,6 +190,7 @@ struct editor_input_context {
     struct ascii_data *ascii_data;
     const struct timespec *startup_start_time;
     const char *startup_log_path;
+    struct lsp_process *lsp_data;
 };
 
 
@@ -221,26 +259,25 @@ enum line_mode {
 void draw_line_numbers(struct editor_state *state);
 void draw_line(struct pos start_pos,struct pos end_pos,WINDOW *win,enum line_mode mode);
 void draw_box(struct box box,WINDOW *win);
+void request_draw_box(struct editor_state *state,struct box box);
 void draw_all_line(WINDOW *win,struct editor_state *state);
 void draw_editor_buffer_line(struct editor_state *state, int line, int screen_y);
 void draw_now_path_name(struct box file_browse_box,char *path_name);
 void draw_edit_screen_base(struct editor_state *state,WINDOW *win,struct pos start_pos,struct pos end_pos);
 void draw_box_inside_dir(struct editor_state *state,char *table);
 void draw_select_dir_scene_color(struct editor_state *state,int num);
-void show_file_browse(struct editor_state *state,struct box file_browse_box,char *dir_name_table,char *path_name,WINDOW *win);
-void file_sellect_line_update(struct editor_state *state,int line);
-void load_string_data(struct editor_state *state,long load_start_line,int load_size);
+void draw_line_status(struct editor_state *state,WINDOW *win);
 void draw_file_data(struct editor_state *state);
 void draw_status_bar_line(struct editor_state *state,struct box status_bar,WINDOW *win);
 void draw_status_bar_path(struct editor_state *state, WINDOW *win);
-void load_view_from_cursor(struct editor_state *state);
+void draw_line_jump(struct editor_state *state);
 
+void load_view_from_cursor(struct editor_state *state);
 void load_dir_table(struct editor_state *state,char *table,int table_size,char *path_name);
 void load_file(struct editor_state *state,char *table,char *path_name,struct file_browse_select_state *select_state);
 void load_screen_size(struct editor_state *state);
-void set_line_memory(struct editor_state *state);
 void load_all_lines(struct editor_state *state);
-void save_file(struct editor_state *state);
+void load_string_data(struct editor_state *state,long load_start_line,int load_size);
 void load_default_editor_settings(struct editor_settings *settings_data);
 void load_custom_editor_settings(struct editor_settings *settings_data);
 
@@ -258,17 +295,28 @@ void scr_show_line_str_down(WINDOW *win,struct editor_state *state);
 
 void editor_error_screen(struct editor_state *state,char *error_comment);
 void editor_screen_move_line(struct editor_state *state,WINDOW *win,int num);
+char *editor_buffer_to_utf8(struct editor_state *state);
 
 
 void set_line_limit(int limit);
+void set_line_memory(struct editor_state *state);
+void save_file(struct editor_state *state);
+
+void show_file_browse(struct editor_state *state,struct box file_browse_box,char *dir_name_table,char *path_name,WINDOW *win);
+void set_file_sellect_line(struct editor_state *state,int line);
+void file_select_line_update(struct file_select_line *file_select_line,int line);
+
 void ask_new_file_name(struct pos str_start_pos,int w,int h);
-void clear_box(struct box box);
+void clear_box(struct clear_box_data *clear_box);
+
 void get_new_file_name();
-char *uint_to_str(unsigned int value, char *buf);
 int get_line_limit();
+
+char *uint_to_str(unsigned int value, char *buf);
 
 void my_mvaddstr(struct pos pos,char * str);
 void my_mvaddch(struct pos pos,char str);
-void draw_line_status(struct editor_state *state,WINDOW *win);
+void update_screen(struct editor_input_context *ctx);
+void request_clear_box(struct editor_state *state, struct box box);
 
 #endif

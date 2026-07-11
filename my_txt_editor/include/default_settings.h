@@ -2,6 +2,7 @@
 #define DEFALT_SETTINGS_H
 
 #include<ncurses.h>
+
 #define MAX_LINES    1000
 #define MAX_LINE_SIZE 1024
 #define LINE_NUMBER_SPACE 4 
@@ -18,6 +19,16 @@
 #define DEFAULT_FILE_SELECT_SCENE_LIGHTING true
 #define DEFAULT_SHOW_START_MENU true
 #define DEFAULT_LSP_PROCESS_LANCH_STARTUP_EDITOR true
+#define DEFAULT_EPOLL_TIME_OUT_MS 16
+#define DEFAULT_LSP_USE true
+
+
+struct lsp_settings_data{
+    bool lsp_use;
+    bool lsp_lanch_startup_editor;
+    int lsp_epoll_timeout_ms;
+    char lsp_language[32];
+};
 
 struct editor_settings{
     int max_lines;
@@ -33,6 +44,6 @@ struct editor_settings{
     bool ask_make_file;//ファイル変更時に何もファイルを開いていなかった場合ファイルを作るか聞く
     bool show_start_menu;
     bool file_select_scene_lighting;
-    bool lsp_lanch_startup_editor;
+    struct lsp_settings_data lsp;
 };
 #endif 

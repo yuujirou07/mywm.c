@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include <unistd.h>
 #include <wchar.h>
 #include <sys/stat.h>
@@ -54,10 +55,10 @@ void load_dir_table(struct editor_state *state,char *table,int table_size,char *
     }
     closedir(dir);
     if(state->dir_num <= 0){
-        state->file_select_line = 0;
+        
     }
-    else if(state->file_select_line >= state->dir_num){
-        state->file_select_line = state->dir_num - 1;
+    else if(state->file_select_line_data.now_line >= state->dir_num){
+        file_select_line_update(&state->file_select_line_data,state->dir_num - 1);
     }
 }
 
@@ -67,12 +68,12 @@ void load_dir_table(struct editor_state *state,char *table,int table_size,char *
 // 返り値: なし。成功時はstate->file_data.now_open_fileにFILE*を保存する。
 void load_file(struct editor_state *state, char *table,char *path_name,struct file_browse_select_state *select_state){
     select_state->select_name[0] = '\0';
-    if(state->file_select_line < 0 || state->file_select_line >= state->dir_num){
+    if(state->file_select_line_data.now_line < 0 || state->file_select_line_data.now_line  >= state->dir_num){
         select_state->select_state = error;
         return;
     }
 
-    int idx = state->file_select_line *state->file_browser_area.w;
+    int idx = state->file_select_line_data.now_line  *state->file_browser_area.w;
     char *file_name_start_ptr = table+idx;
     char *file_name_end_ptr = strchr(file_name_start_ptr,'\0');
 
@@ -176,20 +177,36 @@ void load_all_lines(struct editor_state *state){
         exit(1);
     }
 
-    free(state->str.line_str_data);
-    free(state->str.line);
-    state->str.line_str_data = calloc((size_t)total * w, sizeof(wint_t));
+    char *file_all_str_data = read_file_all(state->file_data.now_open_path_name);
+    if(file_all_str_data == NULL){
+        editor_error_screen(state, "can not read file");
+        return;
+    }
+    free(state->str.chr_file_all_str_data);
+    state->str.chr_file_all_str_data = file_all_str_data;
+
+    if(state->str.wint_line_str_data != NULL){
+        free(state->str.wint_line_str_data);
+    }
+
+    if(state->str.line != NULL){
+        free(state->str.line);
+    }
+    state->str.wint_line_str_data = calloc((size_t)total * w, sizeof(wint_t));
     state->str.line          = calloc((size_t)total, sizeof(int));
-    if(state->str.line_str_data == NULL || state->str.line == NULL){
+    if(state->str.wint_line_str_data == NULL || state->str.line == NULL){
         editor_error_screen(state, "can not allocate file buffer");
         exit(1);
     }
+
     state->str.line_capacity = (int)total;
     state->str.col_capacity = w;
 
     int max_line_size = state->settings_data->max_line_size;
     char buf[max_line_size];
     wchar_t wide_buf[max_line_size];
+  
+    
     for(long i = 0; i < state->file_data.file_line_start_num_counter; i++){
         fseek(state->file_data.now_open_file, state->file_data.file_line_start_num[i], SEEK_SET);
         if(fgets(buf, max_line_size, state->file_data.now_open_file) == NULL){
@@ -204,7 +221,7 @@ void load_all_lines(struct editor_state *state){
         size_t converted = mbstowcs(wide_buf, buf, max_line_size - 1);
         if (converted == (size_t)-1) {
             state->str.line[i] = 0;
-            state->str.line_str_data[i * w] = 0;
+            state->str.wint_line_str_data[i * w] = 0;
             continue;
         }
 
@@ -212,7 +229,7 @@ void load_all_lines(struct editor_state *state){
         for(size_t j = 0; j < converted && visible_width < w; j++){
             if(wide_buf[j] == '\t'){
                 for(int k = 0; k < state->settings_data->indent_range && visible_width < w; k++){
-                    state->str.line_str_data[i * w + visible_width] = L' ';
+                    state->str.wint_line_str_data[i * w + visible_width] = L' ';
                     visible_width++;
                 }
                 continue;
@@ -220,7 +237,7 @@ void load_all_lines(struct editor_state *state){
 
             // state->str.lineは文字数ではなく画面上の桁数として使う。
             // 日本語など2桁幅の文字でもカーソル位置と配列位置が合うように、
-            // line_str_dataもvisible_widthの位置へ配置する。
+            // wint_line_str_dataもvisible_widthの位置へ配置する。
             int char_width = wcwidth(wide_buf[j]);
             if(char_width < 1){
                 char_width = 1;
@@ -229,11 +246,67 @@ void load_all_lines(struct editor_state *state){
                 break;
             }
 
-            state->str.line_str_data[i * w + visible_width] = wide_buf[j];
+            state->str.wint_line_str_data[i * w + visible_width] = wide_buf[j];
             visible_width += char_width;
         }
         state->str.line[i] = visible_width;
     }
+}
+
+char *editor_buffer_to_utf8(struct editor_state *state)
+{
+    int line_count;
+    size_t capacity = 1;
+    size_t pos = 0;
+    char *text;
+
+    if(state == NULL || state->str.wint_line_str_data == NULL ||
+       state->str.line == NULL || state->str.col_capacity < 1){
+        return NULL;
+    }
+
+    line_count = state->file_data.description_line_end;
+    if(line_count < 0 || line_count > state->str.line_capacity){
+        return NULL;
+    }
+
+    for(int line = 0; line < line_count; line++){
+        int line_len = editor_line_len(state, line);
+        if(line_len < 0 ||
+           (size_t)line_len > (SIZE_MAX - capacity - 1) / MB_CUR_MAX){
+            return NULL;
+        }
+        capacity += (size_t)line_len * MB_CUR_MAX + 1;
+    }
+
+    text = malloc(capacity);
+    if(text == NULL){
+        return NULL;
+    }
+
+    for(int line = 0; line < line_count; line++){
+        int line_len = editor_line_len(state, line);
+        mbstate_t conversion_state = {0};
+
+        for(int col = 0; col < line_len; col++){
+            wint_t cell = state->str.wint_line_str_data[
+                line * state->str.col_capacity + col];
+            if(cell == 0){
+                continue;
+            }
+
+            size_t bytes = wcrtomb(text + pos, (wchar_t)cell, &conversion_state);
+            if(bytes == (size_t)-1){
+                free(text);
+                return NULL;
+            }
+            pos += bytes;
+        }
+        text[pos++] = '\n';
+    }
+
+    text[pos] = '\0';
+    return text;
 }
 
 // load_view_from_cursor(): 現在の論理カーソル行から表示用の行データを読み込む。
@@ -244,7 +317,7 @@ void load_view_from_cursor(struct editor_state *state){
 }
 
 // save_file(): 現在の編集バッファを開いているファイルパスへ書き戻す。
-// line_str_dataは画面セル位置に合わせているため、0のセルは書かずに飛ばす。
+// wint_line_str_dataは画面セル位置に合わせているため、0のセルは書かずに飛ばす。
 // 引数: state=保存先パスと編集バッファを持つエディタ状態。
 // 返り値: なし。
 void save_file(struct editor_state *state){
@@ -266,13 +339,13 @@ void save_file(struct editor_state *state){
     }
 
     int w = editor_col_limit(state);
-    int line_count = editor_line_limit(state);
+    int line_count = state->file_data.file_str_line_end + 1;
     for(int line = 0; line < line_count; line++){
         int max_col = state->str.line[line];
         if(max_col > w) max_col = w;
 
         for(int col = 0; col < max_col; col++){
-            wint_t cell = state->str.line_str_data[line * state->str.col_capacity + col];
+            wint_t cell = state->str.wint_line_str_data[line * state->str.col_capacity + col];
             if(cell == 0) continue;
             if(fputwc((wchar_t)cell, file) == WEOF){
                 fclose(file);
@@ -314,7 +387,9 @@ void load_default_editor_settings(struct editor_settings *settings_data){
     settings_data->ask_make_file                = DEFAULT_ASK_MAKE_FILE;
     settings_data->file_select_scene_lighting   = DEFAULT_FILE_SELECT_SCENE_LIGHTING;
     settings_data->show_start_menu              = DEFAULT_SHOW_START_MENU;
-    settings_data->lsp_lanch_startup_editor     = DEFAULT_LSP_PROCESS_LANCH_STARTUP_EDITOR;                                                         
+    settings_data->lsp.lsp_lanch_startup_editor = DEFAULT_LSP_PROCESS_LANCH_STARTUP_EDITOR;
+    settings_data->lsp.lsp_epoll_timeout_ms     = DEFAULT_EPOLL_TIME_OUT_MS;
+    settings_data->lsp.lsp_use                  = DEFAULT_LSP_USE;
 }
 
 // load_custom_editor_settings(): 設定JSONがあれば読み込み、既定値を上書きする。
@@ -409,6 +484,22 @@ void load_custom_editor_settings(struct editor_settings *settings_data){
         settings_data->show_start_menu = cJSON_IsTrue(show_start_menu);
     }
 
+    cJSON *lsp = cJSON_GetObjectItemCaseSensitive(json_data, "lsp");
+    if(cJSON_IsObject(lsp)){
+        cJSON *launch_startup_editor =
+            cJSON_GetObjectItemCaseSensitive(lsp, "launch_startup_editor");
+        cJSON *epoll_timeout_ms =
+            cJSON_GetObjectItemCaseSensitive(lsp, "epoll_timeout_ms");
+
+        if(cJSON_IsBool(launch_startup_editor)){
+            settings_data->lsp.lsp_lanch_startup_editor =
+                cJSON_IsTrue(launch_startup_editor);
+        }
+        if(cJSON_IsNumber(epoll_timeout_ms) && epoll_timeout_ms->valueint >= 0){
+            settings_data->lsp.lsp_epoll_timeout_ms = epoll_timeout_ms->valueint;
+        }
+    }
+
     if(settings_data->max_line_size < 2){
         settings_data->max_line_size = MAX_LINE_SIZE;
     }
@@ -436,3 +527,9 @@ void ask_new_file_name(struct pos str_start_pos,int w,int h){
     int ask_str_start_pos_x = str_start_pos.x + ((w - str_len)/2);
     mvaddstr(str_start_pos.y,ask_str_start_pos_x,ask_str);
 }
+
+void file_select_line_update(struct file_select_line *file_select_line,int line){
+    file_select_line->previous_line = file_select_line->now_line;
+    file_select_line->now_line = line;
+}
+

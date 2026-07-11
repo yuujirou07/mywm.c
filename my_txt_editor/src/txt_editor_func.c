@@ -36,11 +36,10 @@ void handle_resize(WINDOW *win, struct editor_state *state,struct pos *start_pos
     *start_pos = (struct pos){state->write_area.x_start-1,state->write_area.y_start};
     *end_pos = (struct pos){state->write_area.x_start-1,state->write_area.y_end};
 
-    draw_edit_screen_base(state, win,*start_pos,*end_pos);
-
     clear();
     move(cy, cx);
-    refresh();
+    state->render_flags |= RENDER_EDIT_SCREEN_BASE;
+    state->render_flags |= RENDER_FILE_DATA;
 }
 
 // handle_backspace(): カーソル左の1文字を削除し、行バッファを左へ詰める。
@@ -61,7 +60,6 @@ void handle_backspace(WINDOW *win, struct editor_state *state) {
         if(del_pos < 0 || del_pos >= col_limit || del_pos >= state->str.line[line]){
             return;
         }
-        mvdelch(y, x - 1);
         state->str.line[line]--;
 
         int line_base = line * state->str.col_capacity;
@@ -69,17 +67,18 @@ void handle_backspace(WINDOW *win, struct editor_state *state) {
 
         int move_count = new_len - del_pos;
         if (move_count > 0)
-            memmove(&state->str.line_str_data[line_base + del_pos],
-                    &state->str.line_str_data[line_base + del_pos + 1],
+            memmove(&state->str.wint_line_str_data[line_base + del_pos],
+                    &state->str.wint_line_str_data[line_base + del_pos + 1],
                     move_count * sizeof(wint_t));
 
-        state->str.line_str_data[line_base + new_len] = 0;
+        state->str.wint_line_str_data[line_base + new_len] = 0;
+        move(y, x - 1);
 
     } else if (state->write_area.y_start < y && state->mouse.now_mouce_line > 0) {
         state->mouse.now_mouce_line--;
         move(y - 1, editor_cursor_x_on_line(state, state->mouse.now_mouce_line, state->write_area.x_end));
     }
-    refresh();
+    state->render_flags |= RENDER_FILE_DATA;
 }
 
 // handle_newline(): 次の画面行の先頭へカーソルを移動し、
@@ -98,7 +97,6 @@ void handle_newline(WINDOW *win, struct editor_state *state) {
         move(y, state->write_area.x_start);
     }
     state->mouse.now_mouce_line++;
-    refresh();
 }
 
 // handle_tab(): INDENT_RANGE個の空白を挿入し、現在行の文字数へ反映する。
@@ -113,15 +111,15 @@ void handle_tab(struct editor_state *state) {
     if(state->str.line[line] >= col_limit){
         return;
     }
+
     int add_count = state->settings_data->indent_range;
     if(state->str.line[line] + add_count > col_limit){
         add_count = col_limit - state->str.line[line];
-    }
+    } 
     for (int i = 0; i < add_count; i++){
         addch(' ');
     }
     state->str.line[line] += add_count;
-    refresh();
 }
 
 // handle_char_input(): 通常文字をカーソル位置へ挿入する。
@@ -137,6 +135,11 @@ void handle_char_input(WINDOW *win, wchar_t ch, struct editor_state *state){
     if(line < 0 || line >= editor_line_limit(state) || col_limit <= 0){
         return;
     }
+
+    if(state->file_data.file_str_line_end < line){
+        state->file_data.description_line_end = line;
+    }
+    
     x = editor_clamp_int(x, state->write_area.x_start, state->write_area.x_start + col_limit - 1);
     move(y, x);
 
@@ -160,14 +163,14 @@ void handle_char_input(WINDOW *win, wchar_t ch, struct editor_state *state){
         }
         int insert_count = line_len - writing_area;
         if (insert_count > 0)
-            memmove(&state->str.line_str_data[idx + char_width],
-                    &state->str.line_str_data[idx],
+            memmove(&state->str.wint_line_str_data[idx + char_width],
+                    &state->str.wint_line_str_data[idx],
                     insert_count * sizeof(wint_t));
     }
 
-    state->str.line_str_data[idx] = ch;
+    state->str.wint_line_str_data[idx] = ch;
     for(int i = 1; i < char_width; i++){
-        state->str.line_str_data[idx + i] = 0;
+        state->str.wint_line_str_data[idx + i] = 0;
     }
     if(state->str.line[line] <= writing_area){
         state->str.line[line] = writing_area + char_width;
@@ -176,13 +179,12 @@ void handle_char_input(WINDOW *win, wchar_t ch, struct editor_state *state){
         state->str.line[line] += char_width;
     }
 
-    draw_editor_buffer_line(state, line, y);
     move(y, x + char_width);
     if (x >= state->write_area.x_end-1 && state->mouse.now_mouce_line + 1 < editor_line_limit(state)){
         move(y + 1, state->write_area.x_start);
         state->mouse.now_mouce_line++;
     }
-    refresh();
+    state->render_flags |= RENDER_FILE_DATA;
 }
 
 // handle_mouse(): マウスホイールで表示開始行を上下に動かし、
@@ -202,10 +204,6 @@ void handle_mouse(WINDOW *win, MEVENT *event, struct editor_state *state) {
     bool can_scroll_down = state->scr.scr_start_num + state->write_area.h < line_limit;
 
     if (event->bstate & BUTTON5_PRESSED && state->screen_state == edit_screen && can_scroll_down) {
-        wsetscrreg(win, state->write_area.y_start, state->write_area.y_end - 1);
-        wscrl(win, 1);
-        wsetscrreg(win, 0, state->scr.scr_size.y - 1);
-
         if (state->scr.scr_start_num < state->mouse.now_mouce_line){
             move(editor_clamp_int(y - 1, state->write_area.y_start, state->write_area.y_end - 1), x);
         }
@@ -214,12 +212,8 @@ void handle_mouse(WINDOW *win, MEVENT *event, struct editor_state *state) {
         }
 
         state->scr.scr_start_num++;
-        scr_show_line_str_down(win, state);
 
     } else if ((event->bstate & BUTTON4_PRESSED) && state->scr.scr_start_num > 0 && state->screen_state == edit_screen) {
-        wsetscrreg(win, state->write_area.y_start, state->write_area.y_end - 1);
-        wscrl(win, -1);
-        wsetscrreg(win, 0, state->scr.scr_size.y - 1);
         if(state->scr.scr_start_num + state->write_area.y_end >= state->mouse.now_mouce_line){
             move(editor_clamp_int(y + 1, state->write_area.y_start, state->write_area.y_end - 1), x);
         }
@@ -228,7 +222,6 @@ void handle_mouse(WINDOW *win, MEVENT *event, struct editor_state *state) {
         }
 
         state->scr.scr_start_num--;
-        scr_show_line_str(win,state);
 
         if(state->scr.scr_start_num <= state->mouse.now_mouce_line){
             if(state->is_cur_show == false){
@@ -237,9 +230,9 @@ void handle_mouse(WINDOW *win, MEVENT *event, struct editor_state *state) {
             }
         }
     }
-    draw_line_numbers(state);
     curs_set(state->is_cur_show ? 1 : 0);
-    refresh();
+    state->render_flags |= RENDER_EDIT_SCREEN_BASE;
+    state->render_flags |= RENDER_FILE_DATA;
 }
 
 // handle_input_allow(): 矢印キー入力を処理し、行長を超えない位置へカーソルを移動する。
@@ -262,7 +255,6 @@ void handle_input_allow(WINDOW *win, wchar_t ch, struct editor_state *state){
             }
             else if(state->scr.scr_start_num > 0){
               editor_screen_move_line(state, win,-1);
-              scr_show_line_str(win, state);
             }
             break;
         }
@@ -276,7 +268,6 @@ void handle_input_allow(WINDOW *win, wchar_t ch, struct editor_state *state){
             }
             else{
                 editor_screen_move_line(state,win,1);
-                scr_show_line_str_down(win, state);
             }
             break;
         }
@@ -305,7 +296,7 @@ void handle_input_allow(WINDOW *win, wchar_t ch, struct editor_state *state){
             break;
         }
     }
-    refresh();
+    state->render_flags |= RENDER_LINE_STATUS;
 }
 
 void set_line_limit(int line_limit){

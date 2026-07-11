@@ -13,8 +13,9 @@
 #include <libgen.h>
 #include <limits.h>
 #include<unistd.h>
+#include<sys/epoll.h>
 #include "ascii_art_comb.h"
-#include "language_server_communication.h"
+#include "lsp_src/language_server_communication.h"
 #include "txt_editor.h"
 #include"error_log.h"
 
@@ -30,7 +31,9 @@ int main(int argc, char *argv[])
 {
 
     char startuptime_log_file_path_name[PATH_MAX] = {0};
+
     struct timespec startup_start_time;
+    
     clock_gettime(CLOCK_MONOTONIC, &startup_start_time);
 
     bool startup_timer = 0;
@@ -64,6 +67,7 @@ int main(int argc, char *argv[])
 
     load_default_editor_settings(state.settings_data);
     load_custom_editor_settings(state.settings_data);
+    //カスタム設定のバグになる値を検出する関数の設置
 
     setlocale(LC_ALL, "");
     win = initscr();
@@ -86,7 +90,7 @@ int main(int argc, char *argv[])
     state.scr.cursor_pos.x = 0;
     state.scr.cursor_pos.y = 0;
     state.scr.scr_start_num = 0;
-
+    
     state.mouse.now_mouce_line = 0;
     state.mouse.scr_abs_now_pos = (struct pos){0,0};
 
@@ -96,19 +100,20 @@ int main(int argc, char *argv[])
     set_line_limit(state.settings_data->default_load_line_size);
     int line_cap = get_line_limit();
     int total_str_buff_size = state.scr.scr_size.x * line_cap;
-    state.str.line_str_data = calloc(total_str_buff_size, sizeof(wint_t));
-    if(state.str.line_str_data == NULL){
-        printf("state.str.line_str_data calloc error");
+    state.str.wint_line_str_data = calloc(total_str_buff_size, sizeof(wint_t));
+    if(state.str.wint_line_str_data == NULL){
+        printf("state.str.wint_line_str_data calloc error");
         return 1;
     }
     //行に入っている文字数を入れる
     state.str.line = calloc(line_cap, sizeof(int));
     if(state.str.line == NULL){
-        free(state.str.line_str_data);
+        free(state.str.wint_line_str_data);
         return 1;
     }
     state.str.line_capacity = line_cap;
     state.str.col_capacity = state.scr.scr_size.x;
+    state.str.chr_file_all_str_data = NULL;
 
     int screen_center_y =  state.scr.scr_size.y / 2;
     file_browse_box.w = state.scr.scr_size.x / 3;
@@ -149,6 +154,7 @@ int main(int argc, char *argv[])
     state.status_bar   = &status_bar;
     state.write_area.w = state.write_area.x_end - state.write_area.x_start;
     state.write_area.h = state.write_area.y_end - state.write_area.y_start;
+    state.file_data.file_str_line_end = 0;
 
     state.file_browser_area.pos.x = file_browse_box.pos.x + 1;
     state.file_browser_area.pos.y = file_browse_box.pos.y + 1;
@@ -157,17 +163,22 @@ int main(int argc, char *argv[])
 
     state.make_file_mode_status.is_input_scene        = false;
     state.make_file_mode_status.new_file_name_counter = 0;
-    
+
+    snprintf(state.settings_data->lsp.lsp_language,
+         sizeof(state.settings_data->lsp.lsp_language),
+         "%s", "c");
+
     memset(&state.write_file_name_area,0,sizeof(struct box));
 
-    state.file_select_line  = 0;
+    state.file_select_line_data.now_line = 0;
+    state.file_select_line_data.previous_line = 0;
     state.dir_num = 0;
     state.file_data.now_open_file = NULL;
     state.file_data.is_open_file = 0;
     state.file_data.file_line_start_num_counter = 0;
     state.file_data.file_line_start_num = calloc(state.settings_data->default_load_line_size, sizeof(long));
     if(state.file_data.file_line_start_num == NULL){
-        free(state.str.line_str_data);
+        free(state.str.wint_line_str_data);
         free(state.str.line);
         return 1;
     }
@@ -183,7 +194,7 @@ int main(int argc, char *argv[])
         free(dir_name_table);
         free(state.file_data.file_str_data);
         free(state.file_data.file_line_start_num);
-        free(state.str.line_str_data);
+        free(state.str.wint_line_str_data);
         free(state.str.line);
         return 1;
     }
@@ -223,11 +234,21 @@ int main(int argc, char *argv[])
     }
 
 
+      /* epoll_waitの結果の格納先 */
+    struct epoll_event events[FDS_N];
+    /* ファイルディスクリプタと紐付けるイベント情報 */
+    struct epoll_event  ev;
+    int epfd = -1;
+
     struct lsp_process lsp;
+
     lsp_process_init(&lsp);
-    if(state.settings_data->lsp_lanch_startup_editor){
+    if(state.settings_data->lsp.lsp_lanch_startup_editor){
+        
         char root_uri[(PATH_MAX * 3) + sizeof("file://")];
         char *lsp_argv[] = {"clangd", NULL};
+        
+        initialize_id(&lsp.id_data);
 
         if(lsp_path_to_file_uri(root_uri, sizeof(root_uri), path_name) == -1){
             error_log_write("cant make lsp root uri :(");
@@ -235,14 +256,37 @@ int main(int argc, char *argv[])
         else if(lsp_start_server(&lsp, "clangd", lsp_argv) == -1){
             error_log_write("cant start lsp server :(");
         }
-        else if(lsp_send_initialize(lsp.to_server_fd, 1, getpid(), root_uri) == -1){
+        else if(lsp_send_initialize(lsp.to_server_fd,lsp.id_data.used_id_history[lsp.id_data.id_strage_counter++], getpid(), root_uri) == -1){
             error_log_write("cant send lsp initialize :(");
             lsp_close_server(&lsp);
+
         }
+        else{
+            /* epollインスタンスを作成 */
+            epfd = epoll_create(FDS_N);
+            if(epfd < 0){
+                error_log_write("cant create lsp epoll\n");
+            }
+            else{
+                /* listen用ソケットに紐付けるイベント情報を設定する */
+                memset(&ev, 0, sizeof(struct epoll_event)); /* イベント情報の初期化 */
+                ev.events = EPOLLIN;    /* 入力待ち（読み込み待ち） */
+                ev.data.fd = lsp.from_server_fd;
+                /* epollインスタンスに、sd_listenと上記のイベント情報とを追加する */
+                if(epoll_ctl(epfd, EPOLL_CTL_ADD,lsp.from_server_fd, &ev) == -1){
+                    error_log_write("cant add lsp fd to epoll\n");
+                    close(epfd);
+                    epfd = -1;
+                }
+            }
+        }
+        set_lsp_use_language(&lsp,state.settings_data->lsp.lsp_language);
     }
+
 
     int running = true;
     while (running) {
+
         struct editor_input_context input_context = {
             .win = win,
             .mouse_event = &mouse_event,
@@ -261,16 +305,59 @@ int main(int argc, char *argv[])
             .ascii_data = &ascii_data,
             .startup_start_time = startup_timer ? &startup_start_time : NULL,
             .startup_log_path = startup_timer ? startuptime_log_file_path_name : NULL,
+            .lsp_data = &lsp,
         };
+
+        if(epfd >= 0 && state.settings_data->lsp.lsp_use){
+            int n_events = epoll_wait(epfd, events, FDS_N,
+                settings_data.lsp.lsp_epoll_timeout_ms);
+
+            if(n_events > 0){
+                for(int i = 0; i < n_events; i++){
+                    /* ディスクリプタが不正の場合 */
+                    if(events[i].data.fd < 0){
+                        continue;
+                    }
+
+                    if(events[i].data.fd == lsp.from_server_fd){
+                        char *msg = lsp_read_message(lsp.from_server_fd);
+                     
+                        if(msg == NULL){
+                            //lspとの通信エラーが起きたことを画面に表示する
+                            break;
+                        }
+                        int id = check_id(msg);
+                        if(id == initialize_id_num && !lsp.initialized){
+                            if(lsp_send(lsp.to_server_fd,
+                                "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}") == 0){
+                                lsp.initialized = true;
+                            }
+                        }
+                        else if(lsp_is_publish_diagnostics(msg)){
+                            error_log_write(msg);
+                            error_log_write("\n");
+                        }
+
+                        free(msg);
+                    }
+                }
+            }
+            else if(n_events < 0){
+                error_log_write("lsp epoll_wait error\n");
+                close(epfd);
+                epfd = -1;
+            }
+        }
 
         if(open_start_menu && start_menu != NULL){
             state.screen_state = start_menu_screen;
         }
         if(state.screen_state == start_menu_screen){
             running = editor_handle_screen_input(&input_context, OK, 0);
-            continue;
-        }
+            if(running == false){break;}
 
+        }
+        update_screen(&input_context);
         wint_t ch = 0;
         int input_result;
 
@@ -283,12 +370,15 @@ int main(int argc, char *argv[])
             handle_resize(win, &state,&line_start_pos,&line_end_pos);
             continue;
         }
+
         running = editor_handle_screen_input(&input_context, input_result, ch);
         continue;
 
     }
     if(handle != NULL)
         dlclose(handle);
+    if(epfd >= 0)
+        close(epfd);
     lsp_close_server(&lsp);
     end_process(&state);
     return 0;
@@ -305,7 +395,8 @@ static void end_process(struct editor_state *state){
     }
     free(state->file_data.file_str_data);
     free(state->file_data.file_line_start_num);
-    free(state->str.line_str_data);
+    free(state->str.wint_line_str_data);
+    free(state->str.chr_file_all_str_data);
     free(state->str.line);
 
     close_error_log_file();

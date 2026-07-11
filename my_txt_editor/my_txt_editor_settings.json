@@ -1,5 +1,8 @@
 {
   "show_status_bar": true,
-  "status_bar_side": "top"
+  "status_bar_side": "top",
+  "lsp": {
+    "launch_startup_editor": true,
+    "epoll_timeout_ms": 16
+  }
 }
-
