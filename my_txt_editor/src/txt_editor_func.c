@@ -97,6 +97,9 @@ void handle_newline(WINDOW *win, struct editor_state *state) {
         move(y, state->write_area.x_start);
     }
     state->mouse.now_mouce_line++;
+    if(state->mouse.now_mouce_line >= state->file_data.description_line_end){
+        state->file_data.description_line_end = state->mouse.now_mouce_line + 1;
+    }
 }
 
 // handle_tab(): INDENT_RANGE個の空白を挿入し、現在行の文字数へ反映する。
@@ -136,10 +139,6 @@ void handle_char_input(WINDOW *win, wchar_t ch, struct editor_state *state){
         return;
     }
 
-    if(state->file_data.file_str_line_end < line){
-        state->file_data.description_line_end = line;
-    }
-    
     x = editor_clamp_int(x, state->write_area.x_start, state->write_area.x_start + col_limit - 1);
     move(y, x);
 

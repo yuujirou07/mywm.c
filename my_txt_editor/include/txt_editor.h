@@ -300,6 +300,7 @@ char *editor_buffer_to_utf8(struct editor_state *state);
 
 void set_line_limit(int limit);
 void set_line_memory(struct editor_state *state);
+long get_last_visible_file_line(struct editor_state *state);
 void save_file(struct editor_state *state);
 
 void show_file_browse(struct editor_state *state,struct box file_browse_box,char *dir_name_table,char *path_name,WINDOW *win);

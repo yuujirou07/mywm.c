@@ -145,6 +145,27 @@ void set_line_memory(struct editor_state *state){
     }
 }
 
+// get_last_visible_file_line(): 画面上で文字がある最後の行番号を返す。
+// 引数: state=読み込み済み行の表示幅を持つエディタ状態。
+// 返り値: 1始まりの最終行番号。文字がない、または状態が不正なら0。
+long get_last_visible_file_line(struct editor_state *state){
+    if(state == NULL || state->str.line == NULL){
+        return 0;
+    }
+
+    long line_count = state->file_data.file_line_start_num_counter;
+    if(line_count > state->str.line_capacity){
+        line_count = state->str.line_capacity;
+    }
+
+    for(long i = line_count - 1; i >= 0; i--){
+        if(state->str.line[i] > 0){
+            return i + 1;
+        }
+    }
+    return 0;
+}
+
 // load_string_data(): 保存済みの行開始位置から指定行数分だけ読み込み、
 // file_str_dataへ文字列として格納する。
 // 引数: state=読み込み元FILE*と格納先、load_start_line=開始行、load_size=読み込む行数。
@@ -339,7 +360,7 @@ void save_file(struct editor_state *state){
     }
 
     int w = editor_col_limit(state);
-    int line_count = state->file_data.file_str_line_end + 1;
+    int line_count = state->file_data.description_line_end;
     for(int line = 0; line < line_count; line++){
         int max_col = state->str.line[line];
         if(max_col > w) max_col = w;
@@ -532,4 +553,3 @@ void file_select_line_update(struct file_select_line *file_select_line,int line)
     file_select_line->previous_line = file_select_line->now_line;
     file_select_line->now_line = line;
 }
-

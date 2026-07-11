@@ -381,7 +381,9 @@ static bool handle_ask_make_file_mode_input(struct editor_input_context *ctx, in
             state->render_flags |= RENDER_EDIT_SCREEN_BASE;
             state->render_flags |= RENDER_FILE_DATA;
             state->screen_state = edit_screen;
-
+            move(state->scr.cursor_pos.y, state->scr.cursor_pos.x);
+            state->is_cur_show = true;
+            curs_set(true);
         }
 
     }
