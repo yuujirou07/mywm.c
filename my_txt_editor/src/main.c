@@ -229,6 +229,7 @@ int main(int argc, char *argv[])
             error_log_write("dlsym failed\n");
             dlclose(handle);
             end_process(&state);
+            
             return 1;
         }
     }
