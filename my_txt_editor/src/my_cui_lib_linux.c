@@ -11,6 +11,9 @@ static int convert_eight_bit_rgb_color(enum eight_bit_rgb eight_bit_rgb);
 static char   big[4096];
 static size_t pos = 0;
 
+// 危険: 各関数はsnprintf()の「本来必要だった長さ」をそのままposへ加算する。
+// 一度でも切り詰めが起きるとposが配列サイズを越え、次の追記とfwrite()が配列外を参照する。
+
 // term_init(): ANSIエスケープシーケンスを溜める内部バッファを空にする。
 // 引数: なし。
 // 返り値: 初期化成功を表す0。

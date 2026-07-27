@@ -10,7 +10,7 @@
 #define JMP_SET_CUR_POS 10  
 #define DEFAULT_LOAD_LINE_SiZE 9999//行制限
 #define LOAD_BUFFER_LINES 100//行の最大文字
-#define SHOW_STATUS_BAR 1 //ステータスバーの表示
+#define SHOW_STATUS_BAR true //ステータスバーの表示
 #define DEFAULT_DRAW_SPLIT_LINE 1//行と書き込み領域の間を線で区切るか
 #define DEFAULT_STATUS_BAR_SIDE top//ステータスバーの位置
 #define JUMP_LINE_NUM_DIGITS 4//行指定の書き込みセル数

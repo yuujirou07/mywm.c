@@ -299,9 +299,7 @@ void draw_edit_screen_base(struct editor_state *state,WINDOW *win,struct pos sta
 // 引数: state=ファイルブラウザ領域、table=固定幅で詰めたディレクトリエントリ一覧。
 // 返り値: なし。
 void draw_box_inside_dir(struct editor_state *state,char *table){
-    if(state->file_browser_area.w <= 0 || state->file_browser_area.h <= 0){
-        return;
-    }
+    if(state->file_browser_area.w <= 0 || state->file_browser_area.h <= 0){return;}
     char clear[state->file_browser_area.w + 1];
     memset(clear,' ',state->file_browser_area.w * sizeof(char));
     clear[state->file_browser_area.w] = '\0';
@@ -319,7 +317,6 @@ void draw_box_inside_dir(struct editor_state *state,char *table){
 void draw_select_dir_scene_color(struct editor_state *state,int num){
     if(state->settings_data->file_select_scene_lighting == false)
         return;
-    
 
     if(state->file_browser_area.w <= 0 || state->dir_num <= 0 ||
        state->file_select_line_data.now_line < 0 || state->file_select_line_data.now_line >= state->dir_num){
@@ -388,7 +385,7 @@ void editor_error_screen(struct editor_state *state,char *error_comment){
     state->is_cur_show = false;
     curs_set(0);
     clear();
-    state->screen_state = error_screen;
+    editor_set_screen_state(state, error_screen);
 
     int screen_center_x     = state->file_browser_area.pos.x + (state->file_browser_area.w/2);
     int error_comment_size  = strlen(error_comment);
@@ -578,7 +575,9 @@ static void draw_make_file_dialog(struct editor_input_context *ctx){
 }
 
 void update_screen(struct editor_input_context *ctx){
-
+    int x;
+    int y;
+    getyx(ctx->win, y, x);
     
     unsigned int flags = ctx->state->render_flags;
     struct editor_state *state = ctx->state;
@@ -608,11 +607,7 @@ void update_screen(struct editor_input_context *ctx){
             draw_edit_screen_base(state, win, ctx->line_start_pos, ctx->line_end_pos);
         }
         if(flags & RENDER_FILE_DATA){
-            int x;
-            int y;
-            getyx(win, y, x);
             draw_file_data(state);
-            move(y,x);
         }
         if(flags & RENDER_FILE_BROWSE){
             draw_box(ctx->file_browse_box, win);
@@ -633,7 +628,7 @@ void update_screen(struct editor_input_context *ctx){
             draw_make_file_dialog(ctx);
         }
     }
-
+    move(y,x);
     ctx->state->render_flags = RENDER_NONE;
     refresh();
 }

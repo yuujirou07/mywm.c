@@ -75,7 +75,8 @@ void handle_backspace(WINDOW *win, struct editor_state *state) {
         move(y, x - 1);
 
     } else if (state->write_area.y_start < y && state->mouse.now_mouce_line > 0) {
-        state->mouse.now_mouce_line--;
+        int n = state->mouse.now_mouce_line - 1;
+        move_view_to_line(win, state, n, state->write_area.x_start, state->ctx->line_start_pos, state->ctx->line_end_pos);
         move(y - 1, editor_cursor_x_on_line(state, state->mouse.now_mouce_line, state->write_area.x_end));
     }
     state->render_flags |= RENDER_FILE_DATA;
@@ -202,7 +203,7 @@ void handle_mouse(WINDOW *win, MEVENT *event, struct editor_state *state) {
     int line_limit = editor_line_limit(state);
     bool can_scroll_down = state->scr.scr_start_num + state->write_area.h < line_limit;
 
-    if (event->bstate & BUTTON5_PRESSED && state->screen_state == edit_screen && can_scroll_down) {
+    if (event->bstate & BUTTON5_PRESSED && editor_get_screen_state(state) == edit_screen && can_scroll_down) {
         if (state->scr.scr_start_num < state->mouse.now_mouce_line){
             move(editor_clamp_int(y - 1, state->write_area.y_start, state->write_area.y_end - 1), x);
         }
@@ -212,7 +213,8 @@ void handle_mouse(WINDOW *win, MEVENT *event, struct editor_state *state) {
 
         state->scr.scr_start_num++;
 
-    } else if ((event->bstate & BUTTON4_PRESSED) && state->scr.scr_start_num > 0 && state->screen_state == edit_screen) {
+    } else if ((event->bstate & BUTTON4_PRESSED) && state->scr.scr_start_num > 0 &&
+               editor_get_screen_state(state) == edit_screen) {
         if(state->scr.scr_start_num + state->write_area.y_end >= state->mouse.now_mouce_line){
             move(editor_clamp_int(y + 1, state->write_area.y_start, state->write_area.y_end - 1), x);
         }

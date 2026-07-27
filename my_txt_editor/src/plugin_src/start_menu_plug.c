@@ -62,6 +62,8 @@ int draw_start_menu(int screen_max_w,int screen_max_h,struct ascii_data *ascii_d
                 }
 
                 int return_num = 0;
+                // 危険: 初期化済みなのはoption_count件だけで、残りのoption_dataは未初期化。
+                // option_list_maxまで読むと未初期化値をキーとして比較する未定義動作になる。
                 for(int i = 0;i < option_list_max;i++){
                         if(ch != (wint_t)option_data[i].short_cut_key){continue;}
                         option_fn(&option_data[i].short_cut_key,&return_num);

@@ -271,6 +271,8 @@ void lsp_close_server(struct lsp_process *lsp)
         lsp->from_server_fd = LSP_INVALID_FD;
     }
     if(lsp->pid > 0){
+        // 危険: WNOHANGで未終了だった場合も直後にpidを捨てる。
+        // 後からwait/killできず、子プロセスやゾンビを回収できなくなる可能性がある。
         waitpid(lsp->pid, NULL, WNOHANG);
         lsp->pid = -1;
     }
@@ -432,6 +434,8 @@ char *lsp_read_message(int fd)
     int content_length;
     char *json;
 
+    // 危険: epollが保証するのは「1バイト以上読める」ことだけで、完全なメッセージではない。
+    // blocking fdでヘッダや本文の残りを待つため、分割受信するとUI全体が停止する。
     while(header_len < LSP_HEADER_MAX){
         if(lsp_read_all(fd, &header[header_len], 1) == -1){
             return NULL;
@@ -453,6 +457,8 @@ char *lsp_read_message(int fd)
         return NULL;
     }
 
+    // 危険: Content-Lengthに実用上の上限がなく、相手の値だけで巨大なmallocを行う。
+    // 壊れたLanguage Serverからの入力でメモリ枯渇を起こし得る。
     json = malloc((size_t)content_length + 1);
     if(json == NULL){
         return NULL;
@@ -477,6 +483,8 @@ void initialize_id(struct lsp_send_receve_id_data *id_data){
 }
 
 int check_id(char *msg){
+    // 危険: Parseに成功したrootをcJSON_Delete()していない。
+    // LSPメッセージを受信するたびに解析ツリー全体がリークする。
     cJSON *root = cJSON_Parse(msg);
     cJSON *id = cJSON_GetObjectItemCaseSensitive(root, "id");
  

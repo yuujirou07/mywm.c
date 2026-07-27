@@ -21,22 +21,24 @@
 #define FDS_N 4
 #define DRAW_BOX_REQUEST_MAX 64
 #define box_retention_max 64
+#define screen_state_log_storage 256
 
+// update_screen()で再描画する領域を指定するビットフラグ。
 enum render_flags {
-    RENDER_NONE       = 0,
-    RENDER_LINE_STATUS     = 1 << 0,
-    RENDER_STATUS_BAR_LINE = 1 << 1,
-    RENDER_LINE  = 1 << 2,
-    RENDER_STATUS_BAR = 1 << 3,
-    RENDER_SELECT_DIR_SCENE_COLOR = 1 << 4,
-    RENDER_EDIT_SCREEN_BASE = 1<<5,
-    RENDER_FILE_DATA = 1<<6,
-    RENDER_FILE_BROWSE = 1 << 7,
-    RENDER_BOX        = 1 << 8,
-    RENDER_CLEAR_BOX = 1 << 9,
-    RENDER_ALL        = 1 << 10,
-    RENDER_LINE_JUMP = 1 << 11,
-    RENDER_MAKE_FILE = 1 << 12,
+    RENDER_NONE       = 0,       // 再描画要求なし。
+    RENDER_LINE_STATUS     = 1 << 0,  // 現在行表示を更新する。
+    RENDER_STATUS_BAR_LINE = 1 << 1,  // ステータスバーの区切り線を更新する。
+    RENDER_LINE  = 1 << 2,      // 編集領域左の縦線を更新する。
+    RENDER_STATUS_BAR = 1 << 3, // ステータスバーの内容を更新する。
+    RENDER_SELECT_DIR_SCENE_COLOR = 1 << 4, // ファイル選択行の反転表示を更新する。
+    RENDER_EDIT_SCREEN_BASE = 1<<5, // 編集画面の枠や基本線を更新する。
+    RENDER_FILE_DATA = 1<<6,    // 編集バッファの表示内容を更新する。
+    RENDER_FILE_BROWSE = 1 << 7, // ファイルブラウザ全体を更新する。
+    RENDER_BOX        = 1 << 8, // draw_box_dataに積まれた枠を描画する。
+    RENDER_CLEAR_BOX = 1 << 9,  // clear_box_dataに積まれた範囲を消す。
+    RENDER_ALL        = 1 << 10, // 画面全体更新用の予約フラグ。
+    RENDER_LINE_JUMP = 1 << 11, // 行ジャンプ入力欄を更新する。
+    RENDER_MAKE_FILE = 1 << 12, // 新規ファイル作成ダイアログを更新する。
 };
 
 
@@ -49,27 +51,32 @@ typedef int (*Start_Menu)(int screen_w, int screen_h, struct ascii_data *ascii_d
 
 
 
+// ステータスバーを画面上端か下端のどちらに出すか。
 enum status_bar_side{
     top,
     bottom,
 };
 
+// 行ジャンプモード中に入力された行番号を保持する。
 struct jump_mode{
-    char jump_line_num[JUMP_LINE_NUM_DIGITS + 1];
-    int  jump_line_num_counter;
+    char jump_line_num[JUMP_LINE_NUM_DIGITS + 1]; // 入力中のジャンプ先行番号文字列。
+    int  jump_line_num_counter; // jump_line_numに入っている文字数。
 };
 
+// 開いているファイルと、読み込み済みテキストの行情報。
 struct file_data{
-    FILE*   now_open_file;
-    char**  file_str_data;
-    char    now_open_path_name[DEFAULT_PATH_NAME_MAX_SIZE];
-    long*   file_line_start_num;
-    long    file_line_start_num_counter;
-    long    description_line_end;
-    long    file_str_line_end;//可視文字がある行数
-    int     file_line_n;
-    bool    is_open_file;
+    FILE*   now_open_file; // 現在開いているFILE。未オープンならNULL。
+    char**  file_str_data; // ファイルから読み込んだ各行の文字列配列。
+    char    now_open_path_name[DEFAULT_PATH_NAME_MAX_SIZE]; // 現在開いているファイルパス。
+    long*   file_line_start_num; // ファイル内で各行が始まるバイト位置。
+    long    file_line_start_num_counter; // file_line_start_numに登録済みの行数。
+    long    description_line_end; // 保存対象として扱う論理行数。
+    long    file_str_line_end; // 可視文字がある最終行番号。
+    int     file_line_n; // 画面に読み込むファイル行の作業用番号。
+    bool    is_open_file; // ファイルを開いて編集しているならtrue。
 };
+
+// ファイルブラウザで選択中の項目種別。
 enum select_state{
     file,
     folder,
@@ -77,99 +84,159 @@ enum select_state{
 };
 
 
+// 現在表示している画面・入力モード。
 enum now_screen_state{
-    edit_screen,
-    file_browse_screen,
-    start_menu_file_browse_screen,
-    start_menu_screen,
-    error_screen,
-    line_jump_mode,
-    ask_make_file_mode,
+    edit_screen, // 通常の編集画面。
+    file_browse_screen, // ファイルブラウザ画面。
+    start_menu_file_browse_screen, // start menuから開いたファイルブラウザ。
+    start_menu_screen, // start menu pluginの画面。
+    error_screen, // エラー表示画面。
+    line_jump_mode, // 行ジャンプ番号入力中。
+    ask_make_file_mode, // 新規ファイル作成確認中。
 };
 
+// 新規ファイル作成ダイアログの入力状態。
 struct make_file_mode_status{
-    bool is_input_scene;
-    char new_file_name[DEFAULT_PATH_NAME_MAX_SIZE];
-    int new_file_name_counter;
+    bool is_input_scene; // trueならファイル名入力欄を編集中。
+    char new_file_name[DEFAULT_PATH_NAME_MAX_SIZE]; // 入力された新規ファイル名。
+    int new_file_name_counter; // new_file_nameに入っている文字数。
 };
+
+// ファイルブラウザで決定された項目名と種別。
 struct file_browse_select_state{
-    enum select_state select_state;
-    char select_name[NAME_MAX + 1];
+    enum select_state select_state; // 選択項目がファイル・フォルダ・エラーのどれか。
+    char select_name[NAME_MAX + 1]; // 選択された項目名。
 };
 
+// ncurses画面上の座標。
 struct pos {
-    int x;
-    int y;
+    int x; // 横方向の座標。
+    int y; // 縦方向の座標。
 };
 
+// ファイルブラウザで反転表示する行の現在値と直前値。
 struct file_select_line {
-    int now_line;
-    int previous_line;
+    int now_line; // 現在選択中の行。
+    int previous_line; // 前回選択していた行。
 };
+
+// 画面上の矩形領域。
 struct box {
-    struct pos pos;
-    int w;
-    int h;
+    struct pos pos; // 左上座標。
+    int w; // 幅。
+    int h; // 高さ。
 };
 
+// 文字入力・描画が許可される編集領域。
 struct write_possible_area {
-    int x_start;
-    int y_start;
-    int x_end;
-    int y_end;
-    int w;
-    int h;
+    int x_start; // 入力可能範囲の左端。
+    int y_start; // 入力可能範囲の上端。
+    int x_end; // 入力可能範囲の右端。
+    int y_end; // 入力可能範囲の下端。
+    int w; // 入力可能範囲の幅。
+    int h; // 入力可能範囲の高さ。
 };
 
+// 画面サイズ・カーソル・スクロール開始行。
 struct scr_data {
-    struct pos cursor_pos;
-    struct pos scr_size;
-    int scr_start_num;
+    struct pos cursor_pos; // 保存しておくカーソル座標。
+    struct pos scr_size; // 現在の画面サイズ。
+    int scr_start_num; // 画面先頭に表示している論理行番号。
 };
 
+// 編集バッファ本体と、行ごとの文字数・容量情報。
 struct str_data {
-    wint_t *wint_line_str_data;
-    char   *chr_file_all_str_data;
-    int    *line;
-    int     line_capacity;
-    int     col_capacity;
+    wint_t *wint_line_str_data; // 編集中テキストを保持するワイド文字バッファ。
+    char   *chr_file_all_str_data; // ファイル全体をUTF-8文字列化するときの作業バッファ。
+    int    *line; // 各論理行の文字数。
+    int     line_capacity; // wint_line_str_dataで扱える最大行数。
+    int     col_capacity; // 1行あたりの最大列数。
 };
 
+// マウス位置と、現在編集対象にしている論理行。
 struct mouse_data {
-    int now_mouce_line;
-    struct pos scr_abs_now_pos;
+    int now_mouce_line; // 現在編集・選択対象にしている論理行番号。
+    struct pos scr_abs_now_pos; // 画面上の現在マウス絶対座標。
 };
 
+// 後で消去する矩形領域を一時的に保持する。
 struct clear_box_data{
-    struct box clear_box[box_retention_max];
-    int clear_box_counter;
+    struct box clear_box[box_retention_max]; // 消去予定の矩形配列。
+    int clear_box_counter; // clear_boxに積まれている数。
+};
+
+struct screen_state_log{
+    enum now_screen_state screen_state_log[screen_state_log_storage]; // 画面遷移履歴。
+    int screen_state_log_counter; // 記録済みの遷移数。
 };
 
 
+
+
+// エディタ全体で共有する実行時状態。
 struct editor_state {
-    struct editor_settings    *settings_data;
-    struct scr_data            scr;
-    struct str_data            str;
-    struct mouse_data          mouse;
-    struct write_possible_area write_area;
-    struct make_file_mode_status make_file_mode_status;
-    struct box                 file_browser_area;
-    struct box                 draw_box_data[DRAW_BOX_REQUEST_MAX];
-    int                        draw_box_count;
-    struct box                *file_browser_box;
-    struct box                *status_bar;
-    struct box                 ask_make_file_box;
-    struct box                 write_file_name_area;
-    struct file_data           file_data;
-    struct jump_mode           jump_mode_data;
-    struct file_select_line    file_select_line_data;
-    struct clear_box_data      clear_box_data;
-    enum now_screen_state      screen_state;
-    int                        dir_num;
-    int                        render_flags;
-    bool                       is_cur_show;
+    struct editor_settings    *settings_data; // 設定ファイルとデフォルト値から作った設定。
+    struct editor_input_context *ctx;
+    struct scr_data            scr; // 画面サイズ・カーソル・スクロール状態。
+    struct str_data            str; // 編集バッファと行長情報。
+    struct mouse_data          mouse; // マウス位置と現在の論理行。
+    struct write_possible_area write_area; // 編集可能な画面領域。
+    struct make_file_mode_status make_file_mode_status; // 新規ファイル作成ダイアログ状態。
+    struct box                 file_browser_area; // ファイル一覧を描画する内側領域。
+    struct box                 draw_box_data[DRAW_BOX_REQUEST_MAX]; // 次回描画する枠のキュー。
+    struct box                *file_browser_box; // ファイルブラウザ外枠への参照。
+    struct box                *status_bar; // ステータスバー領域への参照。
+    struct box                 ask_make_file_box; // 新規ファイル作成ダイアログ外枠。
+    struct box                 write_file_name_area; // 新規ファイル名入力欄。
+    struct file_data           file_data; // 現在開いているファイルと行情報。
+    struct jump_mode           jump_mode_data; // 行ジャンプ入力状態。
+    struct file_select_line    file_select_line_data; // ファイルブラウザの選択行状態。
+    struct clear_box_data      clear_box_data; // 次回消去する矩形領域。
+    struct screen_state_log    screen_log; // 現在状態を末尾に持つ画面遷移履歴。
+    int                        dir_num; // ファイルブラウザに表示中の項目数。
+    int                        render_flags; // update_screen()へ渡す再描画要求。
+    int                        draw_box_count; // draw_box_dataに積まれている数。
+    bool                       is_cur_show; // カーソル表示中ならtrue。
 
 };
+
+static inline enum now_screen_state editor_get_screen_state(struct editor_state *state){
+    if(state->screen_log.screen_state_log_counter <= 0){
+        return edit_screen;
+    }
+
+    return state->screen_log.screen_state_log[
+        state->screen_log.screen_state_log_counter - 1];
+}
+
+static inline enum now_screen_state editor_get_previous_screen_state(struct editor_state *state){
+    if(state->screen_log.screen_state_log_counter < 2){
+        return edit_screen;
+    }
+
+    return state->screen_log.screen_state_log[
+        state->screen_log.screen_state_log_counter - 2];
+}
+
+static inline void editor_set_screen_state(struct editor_state *state,
+                                           enum now_screen_state next_state){
+    struct screen_state_log *log = &state->screen_log;
+
+    if(log->screen_state_log_counter > 0 &&
+       log->screen_state_log[log->screen_state_log_counter - 1] == next_state){
+        return;
+    }
+    if(log->screen_state_log_counter >= screen_state_log_storage){
+        for(int i = 1; i < screen_state_log_storage; i++){
+            log->screen_state_log[i - 1] = log->screen_state_log[i];
+        }
+        log->screen_state_log_counter = screen_state_log_storage - 1;
+    }
+
+    log->screen_state_log[log->screen_state_log_counter++] = next_state;
+}
+
+
 
 
 struct editor_input_context {
@@ -186,11 +253,11 @@ struct editor_input_context {
     struct pos screen_center_pos;// 確認ダイアログを中央寄せするときの基準座標。
     bool *open_start_menu;       // file browserからstart menuへ戻る要求を書き込む先。
     bool has_start_menu;         // start menu pluginがロード済みならtrue。
-    Start_Menu start_menu;
-    struct ascii_data *ascii_data;
-    const struct timespec *startup_start_time;
-    const char *startup_log_path;
-    struct lsp_process *lsp_data;
+    Start_Menu start_menu;       // start menu pluginの関数ポインタ。
+    struct ascii_data *ascii_data; // start menuへ渡すASCIIアートデータ。
+    const struct timespec *startup_start_time; // 起動時間計測の開始時刻。
+    const char *startup_log_path; // 起動時間ログの出力先。不要ならNULL。
+    struct lsp_process *lsp_data; // LSPプロセスと通信状態。
 };
 
 
@@ -319,5 +386,8 @@ void my_mvaddstr(struct pos pos,char * str);
 void my_mvaddch(struct pos pos,char str);
 void update_screen(struct editor_input_context *ctx);
 void request_clear_box(struct editor_state *state, struct box box);
+
+void move_view_to_line(WINDOW *win, struct editor_state *state, long target_line,
+                              int x, struct pos line_start_pos, struct pos line_end_pos);
 
 #endif

@@ -114,6 +114,8 @@ void load_file(struct editor_state *state, char *table,char *path_name,struct fi
         return;
     }
     select_state->select_state = file;
+    // 危険: 既にnow_open_fileがある場合も閉じずに上書きするため、
+    // ファイルを開き直すたびにFILEとファイルディスクリプタが残る。
     FILE *file = fopen(path_name_buff,"r");
     if(file == NULL){
         editor_error_screen(state,"can not open file");
@@ -130,6 +132,8 @@ void load_file(struct editor_state *state, char *table,char *path_name,struct fi
 // 返り値: なし。
 void set_line_memory(struct editor_state *state){
     int max_line_size = state->settings_data->max_line_size;
+    // 危険: max_line_sizeは設定JSONで上限を検査していない。
+    // このVLAとload_all_lines()内のVLAが大きくなり、スタックを使い切る可能性がある。
     char dummy_buff[max_line_size];
     for(int i = 0; i < state->settings_data->default_load_line_size; i++){
         state->file_data.file_line_start_num[state->file_data.file_line_start_num_counter++] = ftell(state->file_data.now_open_file);
@@ -143,6 +147,8 @@ void set_line_memory(struct editor_state *state){
             }
         }
     }
+    // 危険: 行数上限まで到達した場合はdescription_line_endを更新しない。
+    // save_file()はこの値だけを書き戻すため、大きなファイルを空または途中までに切り詰め得る。
 }
 
 // get_last_visible_file_line(): 画面上で文字がある最後の行番号を返す。
@@ -213,6 +219,8 @@ void load_all_lines(struct editor_state *state){
     if(state->str.line != NULL){
         free(state->str.line);
     }
+    // 危険: 画面幅wを編集データ自体の列容量にしているため、長い行の後半は読み込み時に失われる。
+    // その状態でsave_file()を呼ぶと、画面外だった文字も元ファイルから永久に消える。
     state->str.wint_line_str_data = calloc((size_t)total * w, sizeof(wint_t));
     state->str.line          = calloc((size_t)total, sizeof(int));
     if(state->str.wint_line_str_data == NULL || state->str.line == NULL){
@@ -344,7 +352,7 @@ void load_view_from_cursor(struct editor_state *state){
 void save_file(struct editor_state *state){
     if(state->file_data.now_open_path_name[0] == '\0'){
         if(state->settings_data->ask_make_file){
-            state->screen_state = ask_make_file_mode;
+            editor_set_screen_state(state, ask_make_file_mode);
             return;
         }
         else{
@@ -353,6 +361,8 @@ void save_file(struct editor_state *state){
         return;
     }
 
+    // 危険: "w"で元ファイルを先に切り詰めてから書くため、
+    // 途中の変換・書き込み失敗やプロセス停止で元データを復元できない。
     FILE *file = fopen(state->file_data.now_open_path_name, "w");
     if(file == NULL){
         editor_error_screen(state, "can not save file");

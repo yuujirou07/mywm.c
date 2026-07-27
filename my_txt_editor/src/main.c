@@ -70,6 +70,8 @@ int main(int argc, char *argv[])
     //カスタム設定のバグになる値を検出する関数の設置
 
     setlocale(LC_ALL, "");
+    // 危険: initscr()以降の失敗returnでendwin()を呼ばない経路が複数ある。
+    // その経路では端末がraw/noecho相当の状態に残る可能性がある。
     win = initscr();
     if (win == NULL)
         return 1;
@@ -99,6 +101,8 @@ int main(int argc, char *argv[])
 
     set_line_limit(state.settings_data->default_load_line_size);
     int line_cap = get_line_limit();
+    // 危険: default_load_line_sizeは設定JSONから上限なしで入る。
+    // intの乗算がオーバーフローすると、確保量より後段の行容量が大きくなり範囲外アクセスにつながる。
     int total_str_buff_size = state.scr.scr_size.x * line_cap;
     state.str.wint_line_str_data = calloc(total_str_buff_size, sizeof(wint_t));
     if(state.str.wint_line_str_data == NULL){
@@ -185,7 +189,7 @@ int main(int argc, char *argv[])
 
     state.jump_mode_data.jump_line_num_counter = 0;
 
-    state.screen_state              = state.settings_data->show_start_menu ? start_menu_screen : edit_screen;
+    editor_set_screen_state(&state, state.settings_data->show_start_menu ? start_menu_screen : edit_screen);
     int dir_name_table_size         = state.file_browser_area.w * state.file_browser_area.h;
     char *dir_name_table            = calloc(dir_name_table_size,sizeof(char));
     int allocate_total_str_size     = state.settings_data->load_buffer_lines;
@@ -234,7 +238,7 @@ int main(int argc, char *argv[])
         }
     }
 
-
+    
       /* epoll_waitの結果の格納先 */
     struct epoll_event events[FDS_N];
     /* ファイルディスクリプタと紐付けるイベント情報 */
@@ -308,6 +312,7 @@ int main(int argc, char *argv[])
             .startup_log_path = startup_timer ? startuptime_log_file_path_name : NULL,
             .lsp_data = &lsp,
         };
+        input_context.state->ctx = &input_context;
 
         if(epfd >= 0 && state.settings_data->lsp.lsp_use){
             int n_events = epoll_wait(epfd, events, FDS_N,
@@ -351,9 +356,9 @@ int main(int argc, char *argv[])
         }
 
         if(open_start_menu && start_menu != NULL){
-            state.screen_state = start_menu_screen;
+            editor_set_screen_state(&state, start_menu_screen);
         }
-        if(state.screen_state == start_menu_screen){
+        if(editor_get_screen_state(&state) == start_menu_screen){
             running = editor_handle_screen_input(&input_context, OK, 0);
             if(running == false){break;}
 
