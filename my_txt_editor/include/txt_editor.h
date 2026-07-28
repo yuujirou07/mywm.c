@@ -17,11 +17,11 @@
 #define quit 1
 #define select_folder 3
 #define none 4
-#define resize_request 5
 #define startuptime_log_file_argument_num 1
 #define FDS_N 4
 #define DRAW_BOX_REQUEST_MAX 64
 #define box_retention_max 64
+#define resize_request 5
 #define screen_state_log_storage 256
 
 // update_screen()で再描画する領域を指定するビットフラグ。

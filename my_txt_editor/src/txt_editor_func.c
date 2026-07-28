@@ -66,7 +66,7 @@ void handle_resize(WINDOW *win, struct editor_input_context *ctx){
 
     clear();
     move(cy, cx);
-    state->render_flags |= RENDER_EDIT_SCREEN_BASE;
+  
     state->render_flags |= RENDER_FILE_DATA;
 }
 

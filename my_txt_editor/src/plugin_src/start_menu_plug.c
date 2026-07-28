@@ -107,11 +107,11 @@ void draw_ascii_logo(struct pos screen_mid_pos,struct ascii_data *ascii_data){
                 error_log_write("can not open ascii art file\n");
                 return;
         }
-        get_ascii_data(ascii_data,ascii_file);
+        get_ascii_data(ascii_data,ascii_file,screen_mid_pos.x*2);//スクリーン幅に戻す
         
         int h_counter = 0;
         int str_size = strlen(ascii_data->ascii_data[h_counter]);
-        while(h_counter < ascii_data->h ){
+        while(h_counter < ascii_data->h){
                 move(h_counter,screen_mid_pos.x-(str_size/2));
                 addstr(ascii_data->ascii_data[h_counter++]);
         }
