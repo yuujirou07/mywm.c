@@ -122,16 +122,18 @@ void handle_resize(WINDOW *win, struct editor_input_context *ctx){
 
     
 
-    //ファイルブラウザ表示中は編集画面ではなくブラウザを描き直す
-    switch(editor_get_screen_state(state)){
-        case file_browse_screen:
-        case start_menu_file_browse_screen:
-            state->render_flags |= RENDER_FILE_BROWSE;
-            break;
-        default:
-            state->render_flags |= RENDER_FILE_DATA;
-            break;
+    // 縮小や警告表示でカーソルが動いている。update_sccreen_ratio()は現在のx座標を
+    // 見て編集画面のカーソルを置き直すため、先に元の位置(画面内へ丸めた値)へ戻す。
+    if(cy >= state->scr.scr_size.y){
+        cy = state->scr.scr_size.y - 1;
     }
+    if(cx >= state->scr.scr_size.x){
+        cx = state->scr.scr_size.x - 1;
+    }
+    move(cy, cx);
+
+    //各画面の枠やカーソル位置を新しい画面サイズの比率へ合わせ、再描画を要求する
+    update_sccreen_ratio(ctx);
 }
 
 // handle_backspace(): カーソル左の1文字を削除し、行バッファを左へ詰める。

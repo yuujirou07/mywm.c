@@ -467,6 +467,7 @@ void move_view_to_line(WINDOW *win, struct editor_state *state, long target_line
 int remove_line_join_str_data(struct editor_state *state,long remove_line_num);
 int make_new_line_space(struct editor_state *state,long make_space_line_num);
 void resize_file_browser(struct editor_input_context *ctx);
+int  update_sccreen_ratio(struct editor_input_context *ctx);
 
 
 

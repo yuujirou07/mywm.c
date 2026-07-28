@@ -335,7 +335,7 @@ int main(int argc, char *argv[])
 
         if (input_result == KEY_CODE_YES && ch == KEY_RESIZE) {
             handle_resize(win, &input_context);
-            
+          
             continue;
         }
 

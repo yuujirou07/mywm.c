@@ -644,7 +644,6 @@ void request_clear_box(struct editor_state *state, struct box box){
         editor_error_screen(state,"clear box over flow ");
         return;
     }
-
     int *counter = &state->clear_box_data.clear_box_counter;
     state->clear_box_data.clear_box[(*counter)++] = box; 
     state->render_flags |= RENDER_CLEAR_BOX;

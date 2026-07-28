@@ -590,20 +590,130 @@ static bool handle_start_menu_input(struct editor_input_context *ctx, wint_t ch)
     curs_set(1);
     return true;
 }
+// browser_clear_area(): ファイルブラウザが実際に塗っていた範囲を返す。
+// 枠の右端(w+1桁目)と、枠の上に出るパス表示2行分を含める。
+// 引数: browse_box=消去したいファイルブラウザ外枠。
+// 返り値: 消去対象の矩形。
+static struct box browser_clear_area(struct box browse_box){
+    struct box area = browse_box;
+
+    area.pos.y = (browse_box.pos.y >= 2) ? browse_box.pos.y - 2 : 0;
+    area.h     = browse_box.h + (browse_box.pos.y - area.pos.y) + 1;
+    area.w     = browse_box.w + 1;
+    return area;
+}
+
+// clamp_box_to_screen(): 矩形を現在の画面内へ収める。
+// リサイズ前の矩形は新しい画面からはみ出すことがあり、clear_box()は
+// box.w分の一時バッファを取るため、負値や画面外を渡さないようにする。
+// 引数: state=現在の画面サイズ、box=丸める矩形。
+// 返り値: 画面内に収めた矩形。収まる部分が無ければw/hが0。
+static struct box clamp_box_to_screen(struct editor_state *state, struct box box){
+    if(box.pos.x < 0){
+        box.w += box.pos.x;
+        box.pos.x = 0;
+    }
+    if(box.pos.y < 0){
+        box.h += box.pos.y;
+        box.pos.y = 0;
+    }
+    if(box.pos.x + box.w > state->scr.scr_size.x){
+        box.w = state->scr.scr_size.x - box.pos.x;
+    }
+    if(box.pos.y + box.h > state->scr.scr_size.y){
+        box.h = state->scr.scr_size.y - box.pos.y;
+    }
+    if(box.w < 0){
+        box.w = 0;
+    }
+    if(box.h < 0){
+        box.h = 0;
+    }
+    return box;
+}
+
+// update_sccreen_ratio(): 画面サイズが変わったあと、今表示している画面の配置を
+// 新しい画面サイズの比率で作り直し、必要な再描画要求をrender_flagsへ積む。
+// 実際の描画はupdate_screen()が行うため、ここでは配置更新と要求だけを行う。
+// 引数: ctx=画面状態・各領域・中央寄せ基準を持つ入力context。
+// 返り値: 配置を更新したら1、ctxが無効で何もしなかったら0。
 int update_sccreen_ratio(struct editor_input_context *ctx){
+    if(ctx == NULL || ctx->state == NULL)return 0;
+
+    struct editor_state *state = ctx->state;
+
+    // 中央寄せ基準はどの画面でも使うため先に更新する
+    ctx->screen_center_y   = state->scr.scr_size.y / 2;
+    ctx->screen_center_pos = (struct pos){state->scr.scr_size.x / 2, ctx->screen_center_y};
+
     enum now_screen_state now_state = editor_get_screen_state(ctx->state);
     switch(now_state){
         case file_browse_screen:
+        case start_menu_file_browse_screen: {
+            // 枠を作り直すと縮小時に古い枠が残る。start menu側のロゴを消さないよう、
+            // clear()ではなく「前の枠+上のパス表示2行」の範囲だけを消去予約する。
+            struct box old_box = ctx->file_browse_box;
+
             resize_file_browser(ctx);
-            
+
+            struct box clear_area = clamp_box_to_screen(state, browser_clear_area(old_box));
+            bool is_box_moved = (old_box.pos.x != ctx->file_browse_box.pos.x ||
+                                 old_box.pos.y != ctx->file_browse_box.pos.y ||
+                                 old_box.w     != ctx->file_browse_box.w ||
+                                 old_box.h     != ctx->file_browse_box.h);
+
+            if(is_box_moved && clear_area.w > 0 && clear_area.h > 0){
+                request_clear_box(state, clear_area);
+            }
+            state->render_flags |= RENDER_FILE_BROWSE;
             break;
-        
+        }
+        case ask_make_file_mode:
+            // 確認枠と入力欄は新しい中央基準で置き直す。下の編集画面ごと描き直す。
+            clear();
+            show_make_file_prompt(ctx->win, state, &state->ask_make_file_box,
+                                  ctx->screen_center_y, ctx->screen_center_pos);
+            state->render_flags |= RENDER_EDIT_SCREEN_BASE;
+            state->render_flags |= RENDER_FILE_DATA;
+            state->render_flags |= RENDER_MAKE_FILE;
+            break;
+        case line_jump_mode:
+            // 入力欄の位置はステータスバー基準で毎回計算されるので描き直すだけでよい
+            clear();
+            state->render_flags |= RENDER_EDIT_SCREEN_BASE;
+            state->render_flags |= RENDER_FILE_DATA;
+            state->render_flags |= RENDER_LINE_JUMP;
+            break;
+        case error_screen:
+            // エラー文言を保持していないため描き直せない。表示位置の基準になる
+            // file_browser_areaだけ新サイズへ合わせ、戻ったときにずれないようにする。
+            resize_file_browser(ctx);
+            break;
+        case start_menu_screen:
+            // start menu pluginが次のループで新しい画面サイズを見て描き直す
+            break;
+        case edit_screen:
+        default: {
+            // 高さが縮むとカーソル行が編集領域の外へ出るため、はみ出したときだけ
+            // 表示開始行を取り直す。収まっているならスクロール位置は動かさない。
+            int cursor_x = getcurx(ctx->win);
+            int cursor_y = state->write_area.y_start +
+                           (state->mouse.now_mouce_line - state->scr.scr_start_num);
 
+            if(cursor_y < state->write_area.y_start || cursor_y >= state->write_area.y_end){
+                //内部でclear()と再描画要求、カーソル移動まで行う
+                move_view_to_line(ctx->win, state, state->mouse.now_mouce_line, cursor_x,
+                                  ctx->line_start_pos, ctx->line_end_pos);
+                break;
+            }
 
-
-
+            clear();
+            state->render_flags |= RENDER_EDIT_SCREEN_BASE;
+            state->render_flags |= RENDER_FILE_DATA;
+            move(cursor_y, editor_cursor_x_on_line(state, state->mouse.now_mouce_line, cursor_x));
+            break;
+        }
     }
 
-
-    refresh();
+    return 1;
 }
