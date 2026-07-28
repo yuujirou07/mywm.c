@@ -551,7 +551,11 @@ static bool handle_start_menu_input(struct editor_input_context *ctx, wint_t ch)
     flushinp();
     *ctx->open_start_menu = false;
 
-    if(start_menu_result == quit){
+    if(start_menu_result == resize_request){
+        handle_resize(win, ctx);
+        return true;
+    }
+    else if(start_menu_result == quit){
         return false;
     }
     else if(start_menu_result == select_folder){
@@ -586,3 +590,4 @@ static bool handle_start_menu_input(struct editor_input_context *ctx, wint_t ch)
     curs_set(1);
     return true;
 }
+

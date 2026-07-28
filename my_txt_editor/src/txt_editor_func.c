@@ -3,17 +3,45 @@
 #include <wctype.h>
 #include "txt_editor.h"
 
-// handle_resize(): 端末サイズ変更後に画面サイズと書き込み領域を更新し、
-// 行番号を描き直してカーソル位置を復元する。
-// 引数: win=操作対象のncursesウィンドウ、state=更新するエディタ状態、start_pos/end_pos=区切り線端点の更新先。
-// 返り値: なし。
 static int limit = 0;
 
-void handle_resize(WINDOW *win, struct editor_state *state,struct pos *start_pos,struct pos *end_pos){
+// handle_resize(): 端末サイズ変更後に画面サイズと書き込み領域を更新し、
+// 新しい区切り線の端点をctx->line_start_pos/line_end_posへ書き戻してカーソル位置を復元する。
+// 引数: win=操作対象のncursesウィンドウ、ctx=更新するエディタ状態と区切り線座標を持つ入力context。
+// 返り値: なし。
+void handle_resize(WINDOW *win, struct editor_input_context *ctx){
+
+    struct editor_state *state = ctx->state;
 
     int cx, cy;
     getyx(win, cy, cx);
     getmaxyx(win, state->scr.scr_size.y, state->scr.scr_size.x);
+
+    // 最小サイズ未満の間は編集画面を組み立てず、警告だけ出して十分な広さになるまで待つ。
+    const char *resize_msg = "Please set the dimensions to at least 60 by 20 cells.";
+    int resize_msg_len = strlen(resize_msg);
+
+    while(state->scr.scr_size.x <= 60 || state->scr.scr_size.y < 25){
+        curs_set(0);
+
+        // 画面幅に収まらない場合は右端で切り詰めてから中央へ寄せる
+        int draw_len = (resize_msg_len < state->scr.scr_size.x)
+            ? resize_msg_len : state->scr.scr_size.x;
+        int msg_x = (state->scr.scr_size.x - draw_len) / 2;
+        int msg_y = state->scr.scr_size.y / 2;
+
+        clear();
+        attron(COLOR_PAIR(3));
+        mvaddnstr(msg_y, msg_x, resize_msg, draw_len);
+        attroff(COLOR_PAIR(3));
+        refresh();
+
+        // リサイズ以外の入力は捨て、サイズが変わるたびに新しい中央へ描き直す
+        if(getch() == KEY_RESIZE){
+            getmaxyx(win, state->scr.scr_size.y, state->scr.scr_size.x);
+        }
+    }
+    curs_set(state->is_cur_show ? 1 : 0);
 
     state->write_area.y_start = 0;
     state->write_area.x_end = state->scr.scr_size.x - 1;
@@ -33,8 +61,8 @@ void handle_resize(WINDOW *win, struct editor_state *state,struct pos *start_pos
     state->write_area.w    = state->write_area.x_end - state->write_area.x_start;
     state->write_area.h    = state->write_area.y_end - state->write_area.y_start;
 
-    *start_pos = (struct pos){state->write_area.x_start-1,state->write_area.y_start};
-    *end_pos = (struct pos){state->write_area.x_start-1,state->write_area.y_end};
+    ctx->line_start_pos = (struct pos){state->write_area.x_start-1,state->write_area.y_start};
+    ctx->line_end_pos   = (struct pos){state->write_area.x_start-1,state->write_area.y_end};
 
     clear();
     move(cy, cx);
@@ -74,10 +102,18 @@ void handle_backspace(WINDOW *win, struct editor_state *state) {
         state->str.wint_line_str_data[line_base + new_len] = 0;
         move(y, x - 1);
 
-    } else if (state->write_area.y_start < y && state->mouse.now_mouce_line > 0) {
-        int n = state->mouse.now_mouce_line - 1;
-        move_view_to_line(win, state, n, state->write_area.x_start, state->ctx->line_start_pos, state->ctx->line_end_pos);
-        move(y - 1, editor_cursor_x_on_line(state, state->mouse.now_mouce_line, state->write_area.x_end));
+        
+    } else if (state->mouse.now_mouce_line > 0) {
+        if(state->write_area.y_start < y){
+            editor_move_cursor_line(state, -1);
+            move(y - 1, editor_cursor_x_on_line(state, state->mouse.now_mouce_line, state->write_area.x_end));
+            state->render_flags |= RENDER_LINE_STATUS;
+        }
+        else{
+            //関数内でmouse.now_mouce_lineの値も変更される
+            editor_screen_move_line(state,win,-1);
+        }
+        state->render_flags |= RENDER_EDIT_SCREEN_BASE;
     }
     state->render_flags |= RENDER_FILE_DATA;
 }
@@ -92,15 +128,21 @@ void handle_newline(WINDOW *win, struct editor_state *state) {
     }
     int y = getcury(win);
     if (y + 1 < state->write_area.y_end){
+        editor_move_cursor_line(state, 1);
         move(y + 1, state->write_area.x_start);
     }
     else{
+        // editor_screen_move_line()がnow_mouce_lineの+1も行うため、ここでは動かさない
+        editor_screen_move_line(state,win,1);
         move(y, state->write_area.x_start);
     }
-    state->mouse.now_mouce_line++;
+
     if(state->mouse.now_mouce_line >= state->file_data.description_line_end){
+        //行カウントは0から始まるので1足す
         state->file_data.description_line_end = state->mouse.now_mouce_line + 1;
     }
+    state->render_flags |= RENDER_EDIT_SCREEN_BASE;
+    state->render_flags |= RENDER_FILE_DATA;
 }
 
 // handle_tab(): INDENT_RANGE個の空白を挿入し、現在行の文字数へ反映する。
@@ -180,9 +222,14 @@ void handle_char_input(WINDOW *win, wchar_t ch, struct editor_state *state){
     }
 
     move(y, x + char_width);
+    //自動で改行する仕様
     if (x >= state->write_area.x_end-1 && state->mouse.now_mouce_line + 1 < editor_line_limit(state)){
         move(y + 1, state->write_area.x_start);
-        state->mouse.now_mouce_line++;
+        editor_move_cursor_line(state, 1);
+        if(state->mouse.now_mouce_line >= state->file_data.description_line_end){
+            //行カウントは0から始まるので1足す
+            state->file_data.description_line_end = state->mouse.now_mouce_line + 1;
+        }
     }
     state->render_flags |= RENDER_FILE_DATA;
 }
@@ -251,7 +298,7 @@ void handle_input_allow(WINDOW *win, wchar_t ch, struct editor_state *state){
     switch(ch){
         case KEY_UP:{
             if (y > state->write_area.y_start && state->mouse.now_mouce_line > 0) {
-                state->mouse.now_mouce_line--;
+                editor_move_cursor_line(state, -1);
                 move(y - 1, editor_cursor_x_on_line(state, state->mouse.now_mouce_line, x));
             }
             else if(state->scr.scr_start_num > 0){
@@ -264,7 +311,7 @@ void handle_input_allow(WINDOW *win, wchar_t ch, struct editor_state *state){
                 break;
             }
             if (y + 1 < state->write_area.y_end) {
-                state->mouse.now_mouce_line++;
+                editor_move_cursor_line(state, 1);
                 move(y + 1, editor_cursor_x_on_line(state, state->mouse.now_mouce_line, x));
             }
             else{
@@ -276,7 +323,7 @@ void handle_input_allow(WINDOW *win, wchar_t ch, struct editor_state *state){
             if (x > state->write_area.x_start)
                 move(y, x - 1);
             else if (y > state->write_area.y_start && state->mouse.now_mouce_line > 0) {
-                state->mouse.now_mouce_line--;
+                editor_move_cursor_line(state, -1);
                 move(y - 1, state->write_area.x_start + editor_line_len(state, state->mouse.now_mouce_line));
             }
 
@@ -291,7 +338,7 @@ void handle_input_allow(WINDOW *win, wchar_t ch, struct editor_state *state){
             if (x < state->write_area.x_start + line_len)
                 move(y, x + 1);
             else if (y + 1 < state->write_area.y_end && state->mouse.now_mouce_line + 1 < line_limit) {
-                state->mouse.now_mouce_line++;
+                editor_move_cursor_line(state, 1);
                 move(y + 1, state->write_area.x_start);
             }
             break;

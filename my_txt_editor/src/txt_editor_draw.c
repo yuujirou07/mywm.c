@@ -361,6 +361,9 @@ void set_file_sellect_line(struct editor_state *state,int line){
 }
 
 // editor_screen_move_line(): 画面をnum行スクロールし、論理カーソル行と表示開始行を同期する。
+// now_mouce_lineとscr_start_numを両方有効な場合だけ同時に更新するため、
+// editor_move_cursor_line()は使わずここで直接書き込む。呼び出し側でnow_mouce_lineを
+// 重ねて動かさないこと(この関数がすでに+num分を反映済み)。
 // 引数: state=カーソル行と表示開始行、win=スクロール対象、num=移動行数。
 // 返り値: なし。
 void editor_screen_move_line(struct editor_state *state,WINDOW *win,int num){

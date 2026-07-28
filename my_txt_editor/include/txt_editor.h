@@ -17,6 +17,7 @@
 #define quit 1
 #define select_folder 3
 #define none 4
+#define resize_request 5
 #define startuptime_log_file_argument_num 1
 #define FDS_N 4
 #define DRAW_BOX_REQUEST_MAX 64
@@ -176,7 +177,6 @@ struct screen_state_log{
 // エディタ全体で共有する実行時状態。
 struct editor_state {
     struct editor_settings    *settings_data; // 設定ファイルとデフォルト値から作った設定。
-    struct editor_input_context *ctx;
     struct scr_data            scr; // 画面サイズ・カーソル・スクロール状態。
     struct str_data            str; // 編集バッファと行長情報。
     struct mouse_data          mouse; // マウス位置と現在の論理行。
@@ -317,6 +317,20 @@ static inline int editor_cursor_x_on_line(struct editor_state *state, int line, 
                             state->write_area.x_start + editor_line_len(state, line));
 }
 
+// editor_move_cursor_line(): 論理カーソル行(now_mouce_line)をdelta分だけ動かす。
+// now_mouce_line への書き込みはこの関数経由に統一し、複数箇所からの多重加算を防ぐ。
+// 引数: state=更新対象のエディタ状態、delta=移動量(負値で上へ)。
+// 返り値: 範囲内で移動できたらtrue、範囲外で何もしなかったらfalse。
+static inline bool editor_move_cursor_line(struct editor_state *state, int delta){
+    int next = state->mouse.now_mouce_line + delta;
+    if(next < 0 || next >= editor_line_limit(state)){
+        return false;
+    }
+    state->mouse.now_mouce_line = next;
+   
+    return true;
+}
+
 enum line_mode {
     all_draw_mode,//書き直し時
     fix_scr_line_damege,//スクロールで線が破損したときなど
@@ -349,7 +363,7 @@ void load_default_editor_settings(struct editor_settings *settings_data);
 void load_custom_editor_settings(struct editor_settings *settings_data);
 
 void handle_input_allow(WINDOW *win, wchar_t ch, struct editor_state *state);
-void handle_resize(WINDOW *win, struct editor_state *state,struct pos *start_pos,struct pos *end_pos);
+void handle_resize(WINDOW *win, struct editor_input_context *ctx);
 void handle_backspace(WINDOW *win, struct editor_state *state);
 void handle_newline(WINDOW *win, struct editor_state *state);
 void handle_tab(struct editor_state *state);
@@ -389,5 +403,7 @@ void request_clear_box(struct editor_state *state, struct box box);
 
 void move_view_to_line(WINDOW *win, struct editor_state *state, long target_line,
                               int x, struct pos line_start_pos, struct pos line_end_pos);
+
+
 
 #endif

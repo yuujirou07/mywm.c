@@ -21,6 +21,8 @@
 
 
 static void end_process(struct editor_state *state);
+static void lsp_poll_events(int *epfd, struct lsp_process *lsp, int timeout_ms);
+static void lsp_handle_message(struct lsp_process *lsp, char *msg);
 
 
 // main(): ncursesを初期化し、エディタ画面・ファイルブラウザ・エラー画面の
@@ -204,8 +206,6 @@ int main(int argc, char *argv[])
     }
     load_dir_table(&state,dir_name_table,dir_name_table_size,path_name);
 
-    struct pos line_start_pos       = (struct pos){state.write_area.x_start-1,state.write_area.y_start};
-    struct pos line_end_pos         = (struct pos){state.write_area.x_start-1,state.write_area.y_end};
     struct pos screen_center_pos    = (struct pos){state.scr.scr_size.x/2,screen_center_y};
     
     bkgd(COLOR_PAIR(1));
@@ -239,9 +239,7 @@ int main(int argc, char *argv[])
     }
 
     
-      /* epoll_waitの結果の格納先 */
-    struct epoll_event events[FDS_N];
-    /* ファイルディスクリプタと紐付けるイベント情報 */
+      /* ファイルディスクリプタと紐付けるイベント情報 */
     struct epoll_event  ev;
     int epfd = -1;
 
@@ -287,12 +285,8 @@ int main(int argc, char *argv[])
         }
         set_lsp_use_language(&lsp,state.settings_data->lsp.lsp_language);
     }
-
-
-    int running = true;
-    while (running) {
-
-        struct editor_input_context input_context = {
+    
+    struct editor_input_context input_context = {
             .win = win,
             .mouse_event = &mouse_event,
             .state = &state,
@@ -300,8 +294,8 @@ int main(int argc, char *argv[])
             .dir_name_table = dir_name_table,
             .dir_name_table_size = dir_name_table_size,
             .path_name = path_name,
-            .line_start_pos = line_start_pos,
-            .line_end_pos = line_end_pos,
+            .line_start_pos = {state.write_area.x_start-1, state.write_area.y_start},
+            .line_end_pos   = {state.write_area.x_start-1, state.write_area.y_end},
             .screen_center_y = screen_center_y,
             .screen_center_pos = screen_center_pos,
             .open_start_menu = &open_start_menu,
@@ -311,58 +305,27 @@ int main(int argc, char *argv[])
             .startup_start_time = startup_timer ? &startup_start_time : NULL,
             .startup_log_path = startup_timer ? startuptime_log_file_path_name : NULL,
             .lsp_data = &lsp,
-        };
-        input_context.state->ctx = &input_context;
+    };
 
+
+    int running = true;
+    while (running) {
+
+        //もしlspを使用する設定だったら
         if(epfd >= 0 && state.settings_data->lsp.lsp_use){
-            int n_events = epoll_wait(epfd, events, FDS_N,
-                settings_data.lsp.lsp_epoll_timeout_ms);
-
-            if(n_events > 0){
-                for(int i = 0; i < n_events; i++){
-                    /* ディスクリプタが不正の場合 */
-                    if(events[i].data.fd < 0){
-                        continue;
-                    }
-
-                    if(events[i].data.fd == lsp.from_server_fd){
-                        char *msg = lsp_read_message(lsp.from_server_fd);
-                     
-                        if(msg == NULL){
-                            //lspとの通信エラーが起きたことを画面に表示する
-                            break;
-                        }
-                        int id = check_id(msg);
-                        if(id == initialize_id_num && !lsp.initialized){
-                            if(lsp_send(lsp.to_server_fd,
-                                "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}") == 0){
-                                lsp.initialized = true;
-                            }
-                        }
-                        else if(lsp_is_publish_diagnostics(msg)){
-                            error_log_write(msg);
-                            error_log_write("\n");
-                        }
-
-                        free(msg);
-                    }
-                }
-            }
-            else if(n_events < 0){
-                error_log_write("lsp epoll_wait error\n");
-                close(epfd);
-                epfd = -1;
-            }
+            lsp_poll_events(&epfd, &lsp, settings_data.lsp.lsp_epoll_timeout_ms);
         }
 
         if(open_start_menu && start_menu != NULL){
             editor_set_screen_state(&state, start_menu_screen);
         }
+
         if(editor_get_screen_state(&state) == start_menu_screen){
             running = editor_handle_screen_input(&input_context, OK, 0);
             if(running == false){break;}
 
         }
+        
         update_screen(&input_context);
         wint_t ch = 0;
         int input_result;
@@ -373,7 +336,7 @@ int main(int argc, char *argv[])
             continue;
 
         if (input_result == KEY_CODE_YES && ch == KEY_RESIZE) {
-            handle_resize(win, &state,&line_start_pos,&line_end_pos);
+            handle_resize(win, &input_context);
             continue;
         }
 
@@ -407,6 +370,63 @@ static void end_process(struct editor_state *state){
 
     close_error_log_file();
     endwin();
+}
+
+// lsp_poll_events(): LSPサーバからの受信をepollで待ち、届いたメッセージを処理する。
+// epoll_waitが失敗した場合はepollインスタンスを閉じ、以降ポーリングしないよう*epfdへ-1を書き戻す。
+// 引数: epfd=epollインスタンスのfd。失敗時に-1へ更新される。
+//       lsp=通信対象のLSPプロセス、timeout_ms=epoll_waitの待ち時間(ミリ秒)。
+// 返り値: なし。
+static void lsp_poll_events(int *epfd, struct lsp_process *lsp, int timeout_ms)
+{
+    /* epoll_waitの結果の格納先 */
+    struct epoll_event events[FDS_N];
+
+    int n_events = epoll_wait(*epfd, events, FDS_N, timeout_ms);
+    if(n_events < 0){
+        error_log_write("lsp epoll_wait error\n");
+        close(*epfd);
+        *epfd = -1;
+        return;
+    }
+
+    for(int i = 0; i < n_events; i++){
+        /* ディスクリプタが不正の場合 */
+        if(events[i].data.fd < 0){
+            continue;
+        }
+        if(events[i].data.fd != lsp->from_server_fd){
+            continue;
+        }
+
+        char *msg = lsp_read_message(lsp->from_server_fd);
+        if(msg == NULL){
+            //lspとの通信エラーが起きたことを画面に表示する
+            break;
+        }
+        lsp_handle_message(lsp, msg);
+        free(msg);
+    }
+}
+
+// lsp_handle_message(): 受信済みのLSPメッセージ1件を種類別に振り分ける。
+// initialize応答にはinitialized通知を返し、診断通知はエラーログへ書き出す。
+// 引数: lsp=送信先fdとinitialized状態を持つLSPプロセス、msg='\0'終端のJSON文字列。
+// 返り値: なし。
+static void lsp_handle_message(struct lsp_process *lsp, char *msg)
+{
+    if(check_id(msg) == initialize_id_num && !lsp->initialized){
+        if(lsp_send(lsp->to_server_fd,
+            "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}") == 0){
+            lsp->initialized = true;
+        }
+        return;
+    }
+
+    if(lsp_is_publish_diagnostics(msg)){
+        error_log_write(msg);
+        error_log_write("\n");
+    }
 }
 void my_mvaddstr(struct pos pos,char * str){
     mvaddstr(pos.y,pos.x,str);

@@ -60,6 +60,9 @@ int draw_start_menu(int screen_max_w,int screen_max_h,struct ascii_data *ascii_d
                 if(input_result == ERR){
                         continue;
                 }
+                if(input_result == KEY_CODE_YES && ch == KEY_RESIZE){
+                        return resize_request;
+                }
 
                 int return_num = 0;
                 // 危険: 初期化済みなのはoption_count件だけで、残りのoption_dataは未初期化。

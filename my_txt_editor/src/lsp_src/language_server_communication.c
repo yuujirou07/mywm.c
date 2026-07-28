@@ -629,3 +629,4 @@ int lsp_send_did_change(int fd, const char *uri, int version, const char *text)
     cJSON_Delete(root);
     return result;
 }
+
