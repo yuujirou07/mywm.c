@@ -23,6 +23,10 @@
 #define box_retention_max 64
 #define resize_request 5
 #define screen_state_log_storage 256
+// 各行へ前もって足しておく余白列数。ここに収まる入力は再配置なしで処理できる。
+#define EDITOR_LINE_COL_SLACK 16
+// 1行が確保できる列数の絶対上限。これを超える伸長要求は拒否する。
+#define EDITOR_LINE_COL_MAX 65536
 
 // update_screen()で再描画する領域を指定するビットフラグ。
 enum render_flags {
@@ -74,6 +78,7 @@ struct file_data{
     long    description_line_end; // 保存対象として扱う論理行数。
     long    file_str_line_end; // 可視文字がある最終行番号。
     int     file_line_n; // 画面に読み込むファイル行の作業用番号。
+    long    file_total_str_size;//ファイル内の合計文字数
     bool    is_open_file; // ファイルを開いて編集しているならtrue。
 };
 
@@ -146,12 +151,17 @@ struct scr_data {
 };
 
 // 編集バッファ本体と、行ごとの文字数・容量情報。
+// wint_line_str_dataは「行数×画面幅」の矩形ではなく、行ごとに必要な分だけを
+// 連続領域へ詰めた可変長レイアウトで持つ。行の先頭位置はline_offsetが持ち、
+// その行に確保済みの列数はline_capが持つ。画面幅とは完全に独立している。
 struct str_data {
     wint_t *wint_line_str_data; // 編集中テキストを保持するワイド文字バッファ。
     char   *chr_file_all_str_data; // ファイル全体をUTF-8文字列化するときの作業バッファ。
-    int    *line; // 各論理行の文字数。
-    int     line_capacity; // wint_line_str_dataで扱える最大行数。
-    int     col_capacity; // 1行あたりの最大列数。
+    int    *line; // 各論理行の表示桁数。
+    long   *line_offset; // 各論理行がwint_line_str_data内で始まるインデックス。
+    int    *line_cap; // 各論理行に確保済みの列数。
+    long    total_capacity; // wint_line_str_data全体の要素数。
+    int     line_capacity; // 扱える最大行数。
 };
 
 // マウス位置と、現在編集対象にしている論理行。
@@ -274,13 +284,49 @@ static inline int editor_line_limit(struct editor_state *state){
     return (limit > 0) ? limit : 0;
 }
 
-// editor_col_limit(): 1行で編集できる最大列数を返す。
-// 引数: state=画面上の書き込み領域と行バッファ列容量を持つエディタ状態。
+// editor_view_cols(): 画面へ描ける桁数を返す。表示上の都合だけで使う値であり、
+// バッファ容量とは無関係。リサイズで変わるのはこちらだけ。
+// 引数: state=書き込み領域を持つエディタ状態。
+// 返り値: 0以上の桁数。
+static inline int editor_view_cols(struct editor_state *state){
+    return (state->write_area.w > 0) ? state->write_area.w : 0;
+}
+
+// editor_line_cap(): 指定行に確保済みの列数を返す。
+// 引数: state=行容量配列を持つエディタ状態、line=調べる論理行番号。
+// 返り値: 確保済み列数。行が不正なら0。
+static inline int editor_line_cap(struct editor_state *state, int line){
+    if(state->str.line_cap == NULL || line < 0 || line >= state->str.line_capacity){
+        return 0;
+    }
+    return (state->str.line_cap[line] > 0) ? state->str.line_cap[line] : 0;
+}
+
+// editor_line_cells(): 指定行のセル配列先頭を返す。
+// line * col_capacityのような矩形前提の添字計算をこの関数へ集約している。
+// 引数: state=編集バッファと行オフセットを持つエディタ状態、line=対象論理行。
+// 返り値: 行先頭へのポインタ。行が不正、または未確保ならNULL。
+static inline wint_t *editor_line_cells(struct editor_state *state, int line){
+    if(state->str.wint_line_str_data == NULL || state->str.line_offset == NULL ||
+       line < 0 || line >= state->str.line_capacity){
+        return NULL;
+    }
+    long offset = state->str.line_offset[line];
+    if(offset < 0 || offset >= state->str.total_capacity){
+        return NULL;
+    }
+    return &state->str.wint_line_str_data[offset];
+}
+
+// editor_col_limit(): 現在行へ実際に書き込める列数を返す。
+// バッファ容量と可視幅の小さい方。横スクロールが無いため可視幅も上限になる。
+// 引数: state=行容量と書き込み領域を持つエディタ状態、line=対象論理行。
 // 返り値: 0以上の有効列数。
-static inline int editor_col_limit(struct editor_state *state){
-    int limit = state->write_area.w;
-    if(state->str.col_capacity < limit){
-        limit = state->str.col_capacity;
+static inline int editor_col_limit(struct editor_state *state, int line){
+    int limit = editor_view_cols(state);
+    int cap   = editor_line_cap(state, line);
+    if(cap < limit){
+        limit = cap;
     }
 
     return (limit > 0) ? limit : 0;
@@ -299,22 +345,30 @@ static inline int editor_clamp_int(int value, int min, int max){
     return value;
 }
 
-// editor_line_len(): 指定行の表示可能な文字数を返す。
-// 引数: state=行長と列上限を持つエディタ状態、line=調べる論理行番号。
-// 返り値: 列上限で丸めた行長。不正な行なら0。
+// editor_line_len(): 指定行が保持している桁数を返す。
+// 画面幅では丸めない。画面外の桁もバッファ上には残っているため、
+// 保存やUTF-8変換はこの長さを使う。
+// 引数: state=行長と行容量を持つエディタ状態、line=調べる論理行番号。
+// 返り値: 行容量で丸めた行長。不正な行なら0。
 static inline int editor_line_len(struct editor_state *state, int line){
     if(line < 0 || line >= editor_line_limit(state)){
         return 0;
     }
-    return editor_clamp_int(state->str.line[line], 0, editor_col_limit(state));
+    return editor_clamp_int(state->str.line[line], 0, editor_line_cap(state, line));
 }
 
 // editor_cursor_x_on_line(): 指定行で有効なカーソルx座標へ丸める。
+// 行が可視幅より長い場合は可視幅で止める(横スクロール未実装のため)。
 // 引数: state=書き込み領域と行長を持つエディタ状態、line=対象行、x=丸めるx座標。
 // 返り値: 行頭から行末までの範囲に収めたx座標。
 static inline int editor_cursor_x_on_line(struct editor_state *state, int line, int x){
+    int len = editor_line_len(state, line);
+    int view = editor_view_cols(state);
+    if(len > view){
+        len = view;
+    }
     return editor_clamp_int(x, state->write_area.x_start,
-                            state->write_area.x_start + editor_line_len(state, line));
+                            state->write_area.x_start + len);
 }
 
 // editor_move_cursor_line(): 論理カーソル行(now_mouce_line)をdelta分だけ動かす。
@@ -366,7 +420,7 @@ void handle_input_allow(WINDOW *win, wchar_t ch, struct editor_state *state);
 void handle_resize(WINDOW *win, struct editor_input_context *ctx);
 void handle_backspace(WINDOW *win, struct editor_state *state);
 void handle_newline(WINDOW *win, struct editor_state *state);
-void handle_tab(struct editor_state *state);
+void handle_tab(WINDOW *win, struct editor_state *state);
 void handle_char_input(WINDOW *win, wchar_t ch, struct editor_state *state);
 void handle_mouse(WINDOW *win, MEVENT *event, struct editor_state *state);
 bool editor_handle_screen_input(struct editor_input_context *ctx, int input_result, wint_t ch);
@@ -377,6 +431,12 @@ void scr_show_line_str_down(WINDOW *win,struct editor_state *state);
 void editor_error_screen(struct editor_state *state,char *error_comment);
 void editor_screen_move_line(struct editor_state *state,WINDOW *win,int num);
 char *editor_buffer_to_utf8(struct editor_state *state);
+
+// 編集バッファ(wint_line_str_data / line / line_offset / line_cap)の確保・解放・伸長。
+bool editor_alloc_text_buffer(struct editor_state *state, int line_count, long total_capacity);
+void editor_free_text_buffer(struct editor_state *state);
+bool editor_ensure_line_cap(struct editor_state *state, int line, int need);
+bool editor_ensure_row_capacity(struct editor_state *state, int need_rows);
 
 
 void set_line_limit(int limit);
@@ -403,6 +463,10 @@ void request_clear_box(struct editor_state *state, struct box box);
 
 void move_view_to_line(WINDOW *win, struct editor_state *state, long target_line,
                               int x, struct pos line_start_pos, struct pos line_end_pos);
+                              
+int remove_line_join_str_data(struct editor_state *state,long remove_line_num);
+int make_new_line_space(struct editor_state *state,long make_space_line_num);
+void resize_file_browser(struct editor_input_context *ctx);
 
 
 

@@ -103,22 +103,22 @@ int main(int argc, char *argv[])
 
     set_line_limit(state.settings_data->default_load_line_size);
     int line_cap = get_line_limit();
-    // 危険: default_load_line_sizeは設定JSONから上限なしで入る。
-    // intの乗算がオーバーフローすると、確保量より後段の行容量が大きくなり範囲外アクセスにつながる。
-    int total_str_buff_size = state.scr.scr_size.x * line_cap;
-    state.str.wint_line_str_data = calloc(total_str_buff_size, sizeof(wint_t));
-    if(state.str.wint_line_str_data == NULL){
+    // ファイルを開くまでは各行へ画面幅分の容量を割り当てておく。
+    // 足りなくなった行はeditor_ensure_line_cap()が伸ばす。
+    int default_line_cols = (state.scr.scr_size.x > 0)
+        ? state.scr.scr_size.x : EDITOR_LINE_COL_SLACK;
+    if(line_cap < 1 || default_line_cols > LONG_MAX / line_cap){
+        printf("line buffer size is too large");
+        return 1;
+    }
+    if(!editor_alloc_text_buffer(&state, line_cap, (long)line_cap * default_line_cols)){
         printf("state.str.wint_line_str_data calloc error");
         return 1;
     }
-    //行に入っている文字数を入れる
-    state.str.line = calloc(line_cap, sizeof(int));
-    if(state.str.line == NULL){
-        free(state.str.wint_line_str_data);
-        return 1;
+    for(int i = 0; i < line_cap; i++){
+        state.str.line_offset[i] = (long)i * default_line_cols;
+        state.str.line_cap[i]    = default_line_cols;
     }
-    state.str.line_capacity = line_cap;
-    state.str.col_capacity = state.scr.scr_size.x;
     state.str.chr_file_all_str_data = NULL;
 
     int screen_center_y =  state.scr.scr_size.y / 2;
@@ -184,8 +184,7 @@ int main(int argc, char *argv[])
     state.file_data.file_line_start_num_counter = 0;
     state.file_data.file_line_start_num = calloc(state.settings_data->default_load_line_size, sizeof(long));
     if(state.file_data.file_line_start_num == NULL){
-        free(state.str.wint_line_str_data);
-        free(state.str.line);
+        editor_free_text_buffer(&state);
         return 1;
     }
 
@@ -200,8 +199,7 @@ int main(int argc, char *argv[])
         free(dir_name_table);
         free(state.file_data.file_str_data);
         free(state.file_data.file_line_start_num);
-        free(state.str.wint_line_str_data);
-        free(state.str.line);
+        editor_free_text_buffer(&state);
         return 1;
     }
     load_dir_table(&state,dir_name_table,dir_name_table_size,path_name);
@@ -323,7 +321,7 @@ int main(int argc, char *argv[])
         if(editor_get_screen_state(&state) == start_menu_screen){
             running = editor_handle_screen_input(&input_context, OK, 0);
             if(running == false){break;}
-
+            continue;
         }
         
         update_screen(&input_context);
@@ -337,6 +335,7 @@ int main(int argc, char *argv[])
 
         if (input_result == KEY_CODE_YES && ch == KEY_RESIZE) {
             handle_resize(win, &input_context);
+            
             continue;
         }
 
@@ -364,9 +363,8 @@ static void end_process(struct editor_state *state){
     }
     free(state->file_data.file_str_data);
     free(state->file_data.file_line_start_num);
-    free(state->str.wint_line_str_data);
     free(state->str.chr_file_all_str_data);
-    free(state->str.line);
+    editor_free_text_buffer(state);
 
     close_error_log_file();
     endwin();

@@ -76,7 +76,8 @@ static void fix_line_damage(struct pos start_pos, int range, int step_x, int ste
 // 引数: state=文字バッファと書き込み領域、line=描画する論理行、screen_y=描画先の画面y座標。
 // 返り値: なし。
 void draw_editor_buffer_line(struct editor_state *state, int line, int screen_y){
-    int col_limit = editor_col_limit(state);
+    //描画に使うのは可視幅だけ。バッファ側の容量とは無関係。
+    int col_limit = editor_view_cols(state);
     if(screen_y < state->write_area.y_start || screen_y >= state->write_area.y_end || col_limit <= 0){
         return;
     }
@@ -88,12 +89,14 @@ void draw_editor_buffer_line(struct editor_state *state, int line, int screen_y)
     // wint_line_str_dataは画面セル位置に合わせて格納している。
     // addwstrで詰めて描くと2桁幅文字の後ろでズレるため、
     // セルごとのx座標へ1文字ずつ描く。
-    int line_base = line * state->str.col_capacity;
-    int max_col = state->str.line[line];
+    wint_t *cells = editor_line_cells(state, line);
+    if(cells == NULL) return;
+
+    int max_col = editor_line_len(state, line);
     if(max_col > col_limit) max_col = col_limit;
 
     for(int col = 0; col < max_col; col++){
-        wint_t cell = state->str.wint_line_str_data[line_base + col];
+        wint_t cell = cells[col];
         if(cell == 0) continue;
 
         wchar_t ch = (wchar_t)cell;
@@ -111,7 +114,7 @@ void draw_line_numbers(struct editor_state *state) {
     struct scr_data *scr_data = &state->scr;
     struct write_possible_area *area = &state->write_area;
     int line_number_space = state->settings_data->line_number_space;
-
+    
     for (int i = 0; i < area->h; i++) {
         char num_str[6];
 

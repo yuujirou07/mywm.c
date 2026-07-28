@@ -103,7 +103,7 @@ static bool handle_edit_screen_input(struct editor_input_context *ctx, int input
         if (ch == KEY_ENTER || ch == '\n' || ch == '\r') {
             handle_newline(win, state);
         } else if (ch == '\t') {
-            handle_tab(state);
+            handle_tab(win, state);
         } else if (ch == KEY_LEFT || ch == KEY_RIGHT || ch == KEY_UP || ch == KEY_DOWN){
             handle_input_allow(win, ch, state);
         } else if (input_result == OK && iswprint((wint_t)ch)) {
@@ -590,4 +590,20 @@ static bool handle_start_menu_input(struct editor_input_context *ctx, wint_t ch)
     curs_set(1);
     return true;
 }
+int update_sccreen_ratio(struct editor_input_context *ctx){
+    enum now_screen_state now_state = editor_get_screen_state(ctx->state);
+    switch(now_state){
+        case file_browse_screen:
+            resize_file_browser(ctx);
+            
+            break;
+        
 
+
+
+
+    }
+
+
+    refresh();
+}
