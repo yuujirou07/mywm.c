@@ -9,14 +9,13 @@
 static int limit = 0;
 
 // resize_file_browser(): 画面サイズに合わせてファイルブラウザの外枠と内側領域を作り直す。
-// 一覧テーブルは「内側の幅×高さ」の固定幅レイアウトなので、幅が変わると既存の内容は
-// 行の区切り位置がずれて無効になる。必要なら確保し直したうえで読み直す。
+// 一覧テーブルは1行DIR_ENTRY_NAME_MAXバイト固定の2次元配列なので、幅が変わっても
+// 既存の内容はそのまま使える。行数が足りなくなったときだけ確保し直して読み直す。
 // 引数: ctx=画面サイズ・ブラウザ枠・一覧テーブルを持つ入力context。
 // 返り値: なし。
 void resize_file_browser(struct editor_input_context *ctx){
     struct editor_state *state = ctx->state;
 
-    int old_w = state->file_browser_area.w;
     int old_h = state->file_browser_area.h;
 
     // main.cの初期化と同じ比率で作り直す
@@ -39,38 +38,38 @@ void resize_file_browser(struct editor_input_context *ctx){
     state->file_browser_area.w     = (box.w - 2 > 0) ? box.w - 2 : 0;
     state->file_browser_area.h     = (box.h - 2 > 0) ? box.h - 2 : 0;
 
-    long need = (long)state->file_browser_area.w * state->file_browser_area.h;
-    if(need > ctx->dir_name_table_size){
-        char *table = realloc(ctx->dir_name_table, (size_t)need);
+    if(state->file_browser_area.h > ctx->dir_name_table_rows){
+        char (*table)[DIR_ENTRY_NAME_MAX] =
+            realloc(ctx->dir_name_table,
+                    (size_t)state->file_browser_area.h * sizeof(*table));
         if(table != NULL){
             ctx->dir_name_table      = table;
-            ctx->dir_name_table_size = (int)need;
+            ctx->dir_name_table_rows = state->file_browser_area.h;
         }
         else{
             // 確保できないときは既存テーブルに収まる行数まで削って範囲外書き込みを防ぐ
-            state->file_browser_area.h = (state->file_browser_area.w > 0)
-                ? ctx->dir_name_table_size / state->file_browser_area.w : 0;
+            state->file_browser_area.h = ctx->dir_name_table_rows;
         }
     }
 
-    // 幅が変われば行の区切り位置が、高さが変われば表示件数が変わるため読み直す。
-    // サイズが同じならディレクトリ走査を省く(ドラッグ中に毎回走らせない)。
-    if(state->file_browser_area.w != old_w || state->file_browser_area.h != old_h){
-        load_dir_table(state, ctx->dir_name_table, ctx->dir_name_table_size,
+    // 幅が変わっても行の内容は有効なままなので、表示件数が変わる高さの変化のときだけ
+    // ディレクトリを走査し直す(ドラッグ中に毎回走らせない)。
+    if(state->file_browser_area.h != old_h){
+        load_dir_table(state, ctx->dir_name_table, ctx->dir_name_table_rows,
                        ctx->path_name);
     }
 }
 
 // handle_resize(): 端末サイズ変更後に画面サイズと書き込み領域を更新し、
-// 新しい区切り線の端点をctx->line_start_pos/line_end_posへ書き戻してカーソル位置を復元する。
+// 新しい区切り線の端点をctx->line_start_pos/line_end_posへ書き戻す。
+// カーソルはstate->cursorが論理位置で持っているため、リサイズで退避・復元する必要はない。
+// 新しい可視幅で桁が溢れる場合だけ丸める。
 // 引数: win=操作対象のncursesウィンドウ、ctx=更新するエディタ状態と区切り線座標を持つ入力context。
 // 返り値: なし。
 void handle_resize(WINDOW *win, struct editor_input_context *ctx){
 
     struct editor_state *state = ctx->state;
 
-    int cx, cy;
-    getyx(win, cy, cx);
     getmaxyx(win, state->scr.scr_size.y, state->scr.scr_size.x);
 
     // 最小サイズ未満の間は編集画面を組み立てず、警告だけ出して十分な広さになるまで待つ。
@@ -120,17 +119,9 @@ void handle_resize(WINDOW *win, struct editor_input_context *ctx){
     ctx->line_start_pos = (struct pos){state->write_area.x_start-1,state->write_area.y_start};
     ctx->line_end_pos   = (struct pos){state->write_area.x_start-1,state->write_area.y_end};
 
-    
-
-    // 縮小や警告表示でカーソルが動いている。update_sccreen_ratio()は現在のx座標を
-    // 見て編集画面のカーソルを置き直すため、先に元の位置(画面内へ丸めた値)へ戻す。
-    if(cy >= state->scr.scr_size.y){
-        cy = state->scr.scr_size.y - 1;
-    }
-    if(cx >= state->scr.scr_size.x){
-        cx = state->scr.scr_size.x - 1;
-    }
-    move(cy, cx);
+    // 幅が縮むと桁が可視範囲外へ出るため、新しい可視幅で丸め直す。
+    // 行番号は変わらないので、行方向はupdate_sccreen_ratio()側の判定に任せる。
+    state->cursor.col = editor_clamp_col(state, state->cursor.line, state->cursor.col);
 
     //各画面の枠やカーソル位置を新しい画面サイズの比率へ合わせ、再描画を要求する
     update_sccreen_ratio(ctx);
@@ -141,20 +132,18 @@ void handle_resize(WINDOW *win, struct editor_input_context *ctx){
 // 引数: win=現在カーソル位置を持つウィンドウ、state=文字バッファと行情報。
 // 返り値: なし。
 void handle_backspace(WINDOW *win, struct editor_state *state) {
-    int x, y;
-    getyx(win, y, x);
-    int line = state->mouse.now_mouce_line;
+    int line = state->cursor.line;
     if(line < 0 || line >= editor_line_limit(state)){
         return;
     }
 
-    if (x > state->write_area.x_start) {
+    if (state->cursor.col > 0) {
         // 行内の1文字削除。列容量が要るのはこちらの経路だけ。
         int col_limit = editor_col_limit(state, line);
         if(col_limit <= 0){
             return;
         }
-        int del_pos   = (x - 1) - state->write_area.x_start;
+        int del_pos = state->cursor.col - 1;
         if(del_pos < 0 || del_pos >= col_limit || del_pos >= state->str.line[line]){
             return;
         }
@@ -173,43 +162,41 @@ void handle_backspace(WINDOW *win, struct editor_state *state) {
                     move_count * sizeof(wint_t));
 
         cells[new_len] = 0;
-        move(y, x - 1);
+        state->cursor.col = del_pos;
 
-        
-    } else if (state->mouse.now_mouce_line > 0) {
+
+    } else if (line > 0) {
         // 結合位置(=上の行の元の長さ)を結合前に控えておく。
         // 結合後はここがカーソル位置になる。上の行が5文字・下の行が3文字なら、
         // 8文字になった行の6文字目(桁5)へ置く。
-        int join_col = editor_line_len(state, state->mouse.now_mouce_line - 1);
+        int join_col = editor_line_len(state, line - 1);
 
-        if(remove_line_join_str_data(state,state->mouse.now_mouce_line) < 0){
+        if(remove_line_join_str_data(state,line) < 0){
             return;
         }
 
-        if(state->write_area.y_start < y){
+        // 移動先の行が画面内に残るなら行だけ動かし、画面先頭より上へ出るならスクロールする。
+        if(line > state->scr.scr_start_num){
             editor_move_cursor_line(state, -1);
-            move(y - 1, editor_cursor_x_on_line(state, state->mouse.now_mouce_line,
-                                                state->write_area.x_start + join_col));
             state->render_flags |= RENDER_LINE_STATUS;
         }
         else{
-            //関数内でmouse.now_mouce_lineの値も変更される
+            //関数内でcursor.lineの値も変更される
             editor_screen_move_line(state,win,-1);
-            //editor_screen_move_line()はx座標を触らないため、ここで結合位置へ寄せる
-            move(y, editor_cursor_x_on_line(state, state->mouse.now_mouce_line,
-                                            state->write_area.x_start + join_col));
         }
+        //どちらの経路も桁は触らないため、ここで結合位置へ寄せる
+        state->cursor.col = editor_clamp_col(state, state->cursor.line, join_col);
         state->render_flags |= RENDER_EDIT_SCREEN_BASE;
     }
     state->render_flags |= RENDER_FILE_DATA;
 }
 
 // handle_newline(): カーソル位置で現在行を分割し、右側の文字列を下の新しい行へ移す。
-// その後、次の画面行の先頭へカーソルを移動し、編集中の論理行番号(now_mouce_line)を1つ進める。
+// その後、カーソルを次の行の行頭(col=0)へ進める。
 // 引数: win=改行操作を反映するウィンドウ、state=カーソル行と書き込み領域。
 // 返り値: なし。
 void handle_newline(WINDOW *win, struct editor_state *state) {
-    int line = state->mouse.now_mouce_line;
+    int line = state->cursor.line;
     if(line < 0 || line >= editor_line_limit(state)){
         return;
     }
@@ -221,21 +208,19 @@ void handle_newline(WINDOW *win, struct editor_state *state) {
         return;
     }
 
-    int y = getcury(win);
-    if (y + 1 < state->write_area.y_end){
+    // 次の行が編集領域の中に収まるならカーソル行だけ進め、下端なら画面をスクロールする。
+    if (line - state->scr.scr_start_num + 1 < state->write_area.h){
         editor_move_cursor_line(state, 1);
-        
-        move(y + 1, state->write_area.x_start);
     }
     else{
-        // editor_screen_move_line()がnow_mouce_lineの+1も行うため、ここでは動かさない
+        // editor_screen_move_line()がcursor.lineの+1も行うため、ここでは動かさない
         editor_screen_move_line(state,win,1);
-        move(y, state->write_area.x_start);
     }
+    state->cursor.col = 0;
 
-    if(state->mouse.now_mouce_line >= state->file_data.description_line_end){
+    if(state->cursor.line >= state->file_data.description_line_end){
         //行カウントは0から始まるので1足す
-        state->file_data.description_line_end = state->mouse.now_mouce_line + 1;
+        state->file_data.description_line_end = state->cursor.line + 1;
     }
     state->render_flags |= RENDER_EDIT_SCREEN_BASE;
     state->render_flags |= RENDER_FILE_DATA;
@@ -248,7 +233,7 @@ void handle_newline(WINDOW *win, struct editor_state *state) {
 // 引数: win=描画先ウィンドウ、state=編集バッファ。
 // 返り値: なし。
 void handle_tab(WINDOW *win, struct editor_state *state) {
-    int line = state->mouse.now_mouce_line;
+    int line = state->cursor.line;
     if(line < 0 || line >= editor_line_limit(state)){
         return;
     }
@@ -263,10 +248,9 @@ void handle_tab(WINDOW *win, struct editor_state *state) {
 // 引数: win=描画先ウィンドウ、ch=挿入するwide文字、state=編集バッファ。
 // 返り値: なし。
 void handle_char_input(WINDOW *win, wchar_t ch, struct editor_state *state){
-    int x, y;
-    getyx(win, y, x);
+    (void)win;
 
-    int line = state->mouse.now_mouce_line;
+    int line = state->cursor.line;
     if(line < 0 || line >= editor_line_limit(state)){
         return;
     }
@@ -280,10 +264,9 @@ void handle_char_input(WINDOW *win, wchar_t ch, struct editor_state *state){
     if(view_cols <= 0){
         return;
     }
-    x = editor_clamp_int(x, state->write_area.x_start, state->write_area.x_start + view_cols - 1);
-    move(y, x);
+    state->cursor.col = editor_clamp_int(state->cursor.col, 0, view_cols - 1);
 
-    int writing_area = x - state->write_area.x_start;
+    int writing_area = state->cursor.col;
     if(writing_area < 0 || writing_area >= view_cols){
         return;
     }
@@ -333,14 +316,14 @@ void handle_char_input(WINDOW *win, wchar_t ch, struct editor_state *state){
         state->file_data.description_line_end = line + 1;
     }
 
-    move(y, x + char_width);
-    //自動で改行する仕様
-    if (x >= state->write_area.x_end-1 && state->mouse.now_mouce_line + 1 < editor_line_limit(state)){
-        move(y + 1, state->write_area.x_start);
+    state->cursor.col = writing_area + char_width;
+    //自動で改行する仕様。判定は挿入前の桁で行う(可視幅の右端に居たかどうか)。
+    if (writing_area >= view_cols - 1 && line + 1 < editor_line_limit(state)){
         editor_move_cursor_line(state, 1);
-        if(state->mouse.now_mouce_line >= state->file_data.description_line_end){
+        state->cursor.col = 0;
+        if(state->cursor.line >= state->file_data.description_line_end){
             //行カウントは0から始まるので1足す
-            state->file_data.description_line_end = state->mouse.now_mouce_line + 1;
+            state->file_data.description_line_end = state->cursor.line + 1;
         }
     }
     state->render_flags |= RENDER_FILE_DATA;
@@ -354,45 +337,21 @@ void handle_mouse(WINDOW *win, MEVENT *event, struct editor_state *state) {
     if (getmouse(event) != OK){
         return;
     }
-
-    int x, y;
-    getyx(win, y, x);
-    y = editor_clamp_int(y, state->write_area.y_start, state->write_area.y_end - 1);
-
-    int line_limit = editor_line_limit(state);
-    bool can_scroll_down = state->scr.scr_start_num + state->write_area.h < line_limit;
-
-    if (event->bstate & BUTTON5_PRESSED && editor_get_screen_state(state) == edit_screen && can_scroll_down) {
-        if (state->scr.scr_start_num < state->mouse.now_mouce_line){
-            move(editor_clamp_int(y - 1, state->write_area.y_start, state->write_area.y_end - 1), x);
+    switch(editor_get_screen_state(state)){
+        case edit_screen:{
+            editor_screen_mouse_event(win,event,state);
+            curs_set(state->is_cur_show ? 1 : 0);
+            state->render_flags |= RENDER_EDIT_SCREEN_BASE;
+            state->render_flags |= RENDER_FILE_DATA;
+            break;
         }
-        else{
-            state->is_cur_show = false;
+        case file_browse_screen:{
+            file_browse_screen_mouse_event(win,event,state);
+            break;
         }
-
-        state->scr.scr_start_num++;
-
-    } else if ((event->bstate & BUTTON4_PRESSED) && state->scr.scr_start_num > 0 &&
-               editor_get_screen_state(state) == edit_screen) {
-        if(state->scr.scr_start_num + state->write_area.y_end >= state->mouse.now_mouce_line){
-            move(editor_clamp_int(y + 1, state->write_area.y_start, state->write_area.y_end - 1), x);
-        }
-        else{
-            state->is_cur_show = false;
-        }
-
-        state->scr.scr_start_num--;
-
-        if(state->scr.scr_start_num <= state->mouse.now_mouce_line){
-            if(state->is_cur_show == false){
-                move(state->write_area.y_start, x);
-                state->is_cur_show = true;
-            }
-        }
+        default:
+            break;
     }
-    curs_set(state->is_cur_show ? 1 : 0);
-    state->render_flags |= RENDER_EDIT_SCREEN_BASE;
-    state->render_flags |= RENDER_FILE_DATA;
 }
 
 // handle_input_allow(): 矢印キー入力を処理し、行長を超えない位置へカーソルを移動する。
@@ -400,18 +359,21 @@ void handle_mouse(WINDOW *win, MEVENT *event, struct editor_state *state) {
 // 引数: win=カーソル移動対象のウィンドウ、ch=KEY_UP/DOWN/LEFT/RIGHT、state=行長と表示位置。
 // 返り値: なし。
 void handle_input_allow(WINDOW *win, wchar_t ch, struct editor_state *state){
-    int x, y;
-    getyx(win, y, x);
     int line_limit = get_line_limit();
     if(line_limit <= 0){
         return;
     }
 
+    // 画面内に留まったまま動けるかどうかの判定。画面座標ではなく
+    // 「カーソル行が表示範囲のどこにいるか」で決める。
+    int line = state->cursor.line;
+    bool can_move_up_in_view   = (line > state->scr.scr_start_num);
+    bool can_move_down_in_view = (line - state->scr.scr_start_num + 1 < state->write_area.h);
+
     switch(ch){
         case KEY_UP:{
-            if (y > state->write_area.y_start && state->mouse.now_mouce_line > 0) {
+            if (can_move_up_in_view && line > 0) {
                 editor_move_cursor_line(state, -1);
-                move(y - 1, editor_cursor_x_on_line(state, state->mouse.now_mouce_line, x));
             }
             else if(state->scr.scr_start_num > 0){
               editor_screen_move_line(state, win,-1);
@@ -419,12 +381,11 @@ void handle_input_allow(WINDOW *win, wchar_t ch, struct editor_state *state){
             break;
         }
         case KEY_DOWN:{
-            if(state->mouse.now_mouce_line + 1 >= line_limit){
+            if(line + 1 >= line_limit){
                 break;
             }
-            if (y + 1 < state->write_area.y_end) {
+            if (can_move_down_in_view) {
                 editor_move_cursor_line(state, 1);
-                move(y + 1, editor_cursor_x_on_line(state, state->mouse.now_mouce_line, x));
             }
             else{
                 editor_screen_move_line(state,win,1);
@@ -432,26 +393,27 @@ void handle_input_allow(WINDOW *win, wchar_t ch, struct editor_state *state){
             break;
         }
         case KEY_LEFT:{
-            if (x > state->write_area.x_start)
-                move(y, x - 1);
-            else if (y > state->write_area.y_start && state->mouse.now_mouce_line > 0) {
+            if (state->cursor.col > 0){
+                state->cursor.col--;
+            }
+            else if (can_move_up_in_view && line > 0) {
                 editor_move_cursor_line(state, -1);
-                move(y - 1, state->write_area.x_start + editor_line_len(state, state->mouse.now_mouce_line));
+                state->cursor.col = editor_clamp_col(state, state->cursor.line,
+                                                     editor_line_len(state, state->cursor.line));
             }
 
             break;
         }
         case KEY_RIGHT:{
-            int line = state->mouse.now_mouce_line;
             if(line < 0 || line >= line_limit){
                 break;
             }
-            int line_len = editor_line_len(state, line);
-            if (x < state->write_area.x_start + line_len)
-                move(y, x + 1);
-            else if (y + 1 < state->write_area.y_end && state->mouse.now_mouce_line + 1 < line_limit) {
+            if (state->cursor.col < editor_clamp_col(state, line, editor_line_len(state, line))){
+                state->cursor.col++;
+            }
+            else if (can_move_down_in_view && line + 1 < line_limit) {
                 editor_move_cursor_line(state, 1);
-                move(y + 1, state->write_area.x_start);
+                state->cursor.col = 0;
             }
             break;
         }
@@ -581,13 +543,9 @@ int make_new_line_space(struct editor_state *state,long make_space_line_num){
     int line    = (int)make_space_line_num;
     int old_len = state->str.line[line];
 
-    // 分割位置はカーソルの現在桁(この関数はwin引数を持たないため、
-    // handle_tab()と同様にstdscr基準で読む)。行長を超えないよう丸める。
-    int x, y;
-    getyx(stdscr, y, x);
-    (void)y;
-    int col = x - state->write_area.x_start;
-    col = editor_clamp_int(col, 0, old_len);
+    // 分割位置はカーソルの現在桁。端末へ問い合わせず、モデルの値をそのまま使う。
+    // 行長を超えないよう丸める。
+    int col = editor_clamp_int(state->cursor.col, 0, old_len);
 
     // 分割後、行make_space_line_num+1が実データとして加わる分だけ、
     // 「実際に使用中の行数」を伸ばす必要がある。
@@ -647,4 +605,53 @@ int make_new_line_space(struct editor_state *state,long make_space_line_num){
     }
 
     return new_len;
+}
+
+
+// editor_screen_mouse_event(): ホイールで表示開始行だけを動かす。
+// スクロールは編集位置を変えないため、cursorは書き換えない。カーソルの画面座標は
+// scr_start_numから自動的にずれるので、表示可否だけを取り直す。
+// 引数: win=未使用、event=getmouse()済みのイベント、state=表示位置とカーソル。
+// 返り値: なし。
+void editor_screen_mouse_event(WINDOW *win, MEVENT *event, struct editor_state *state){
+    (void)win;
+
+    int line_limit = editor_line_limit(state);
+    bool can_scroll_down = state->scr.scr_start_num + state->write_area.h < line_limit;
+
+    //エディター画面下スクロール処理
+    if (event->bstate & BUTTON5_PRESSED && can_scroll_down) {
+        state->scr.scr_start_num++;
+
+    //エディター画面上スクロール処理
+    } else if ((event->bstate & BUTTON4_PRESSED) && state->scr.scr_start_num > 0) {
+        state->scr.scr_start_num--;
+    }
+    else{
+        return;
+    }
+
+    // カーソル行が編集領域から出たら隠す。戻ってきたらまた出す。
+    state->is_cur_show = editor_cursor_is_visible(state);
+}
+
+void file_browse_screen_mouse_event(WINDOW *win, MEVENT *event, struct editor_state *state){
+    //ホイールで選択行を動かすだけなので描画先ウィンドウは使わない
+    (void)win;
+
+    if(state->settings_data->file_select_scene_lighting){
+        if(event->bstate & BUTTON4_PRESSED){
+             // next_lineはハイライトを移す先。端では上下に循環させる。
+            int next_line = (state->file_select_line_data.now_line <= 0) 
+                ? state->dir_num - 1:state->file_select_line_data.now_line - 1;
+            set_file_sellect_line(state, next_line);
+            
+        }  
+        if(event->bstate & BUTTON5_PRESSED){
+            // next_lineはハイライトを移す先。端では上下に循環させる。
+            int next_line = (state->file_select_line_data.now_line  >= state->dir_num - 1)
+                ?0:state->file_select_line_data.now_line + 1;
+            set_file_sellect_line(state, next_line);
+        }      
+    }
 }

@@ -16,14 +16,20 @@
 #include"default_settings.h"
 
 // load_dir_table(): path_name配下のディレクトリエントリを読み込み、
-// ファイルブラウザ表示用の固定幅テーブルへ詰める。
-// 引数: state=ファイルブラウザ領域と件数、table=書き込み先テーブル、table_size=tableのバイト数、path_name=読むディレクトリ。
+// ファイルブラウザ表示用の2次元テーブルへ1行1エントリで詰める。
+// 行幅は画面幅と無関係な固定長なので、ここではエントリ名をそのまま保持する。
+// 表示幅に合わせた切り詰めはdraw_box_inside_dir()が描画時に行う。
+// 引数: state=ファイルブラウザ領域と件数、table=書き込み先テーブル、table_rows=tableの確保済み行数、path_name=読むディレクトリ。
 // 返り値: なし。
-void load_dir_table(struct editor_state *state,char *table,int table_size,char *path_name){
+void load_dir_table(struct editor_state *state,char (*table)[DIR_ENTRY_NAME_MAX],int table_rows,char *path_name){
     state->dir_num = 0;
-    if(state->file_browser_area.w <= 0 || state->file_browser_area.h <= 0 || table_size <= 0){
+    if(table == NULL || table_rows <= 0 || state->file_browser_area.h <= 0){
         return;
     }
+
+    // 読み込む件数はテーブルの行数と表示できる行数の小さい方まで。
+    int row_limit = (state->file_browser_area.h < table_rows)
+        ? state->file_browser_area.h : table_rows;
 
     DIR *dir = opendir(path_name);
     if(!dir){
@@ -32,61 +38,40 @@ void load_dir_table(struct editor_state *state,char *table,int table_size,char *
     }
     struct dirent *ent;
     int draw_dir_name_line_counter = 0;
-    memset(table,0,table_size * sizeof(char));
-    while ((ent = readdir(dir)) && draw_dir_name_line_counter < state->file_browser_area.h) {
-        int idx = state->file_browser_area.w * draw_dir_name_line_counter++;
-        char name[256] = {0};
-
-        strncpy(name, ent->d_name, sizeof(name) - 1);
-        name[sizeof(name) - 1] = '\0';
-
-        int max_len = state->file_browser_area.w - 1;
-        if(max_len <= 0){
-            continue;
-        }
-        if ((int)strlen(name) > max_len && max_len > 3) {
-            strncpy(table + idx, name, max_len - 3);
-            memcpy(table + idx + max_len - 3, "...", 3);
-        } else if ((int)strlen(name) > max_len) {
-            strncpy(table + idx, name, max_len);
-        } else {
-            strncpy(table + idx, name, max_len);
-        }
-
-        state->dir_num = draw_dir_name_line_counter;
+    memset(table,0,(size_t)table_rows * sizeof(*table));
+    while ((ent = readdir(dir)) && draw_dir_name_line_counter < row_limit) {
+        snprintf(table[draw_dir_name_line_counter], DIR_ENTRY_NAME_MAX, "%s", ent->d_name);
+        draw_dir_name_line_counter++;
     }
     closedir(dir);
-    if(state->dir_num <= 0){
-        
-    }
-    else if(state->file_select_line_data.now_line >= state->dir_num){
+    state->dir_num = draw_dir_name_line_counter;
+
+    if(state->dir_num > 0 && state->file_select_line_data.now_line >= state->dir_num){
         file_select_line_update(&state->file_select_line_data,state->dir_num - 1);
     }
 }
 
 // load_file(): ファイルブラウザで選択中の名前を取り出し、Cファイルなら読み込み用に開く。
 // 開けない場合や対象外の拡張子ならエラー画面へ切り替える。
-// 引数: state=選択行とファイル状態、table=固定幅のファイル名一覧、path_name=現在ディレクトリ、select_state=選択結果の書き込み先。
+// 引数: state=選択行とファイル状態、table=1行1エントリのファイル名一覧、path_name=現在ディレクトリ、select_state=選択結果の書き込み先。
 // 返り値: なし。成功時はstate->file_data.now_open_fileにFILE*を保存する。
-void load_file(struct editor_state *state, char *table,char *path_name,struct file_browse_select_state *select_state){
+void load_file(struct editor_state *state, char (*table)[DIR_ENTRY_NAME_MAX],char *path_name,struct file_browse_select_state *select_state){
     select_state->select_name[0] = '\0';
-    if(state->file_select_line_data.now_line < 0 || state->file_select_line_data.now_line  >= state->dir_num){
+    if(table == NULL ||
+       state->file_select_line_data.now_line < 0 || state->file_select_line_data.now_line  >= state->dir_num){
         select_state->select_state = error;
         return;
     }
 
-    int idx = state->file_select_line_data.now_line  *state->file_browser_area.w;
-    char *file_name_start_ptr = table+idx;
-    char *file_name_end_ptr = strchr(file_name_start_ptr,'\0');
+    // 1行がそのままNUL終端のエントリ名。表示用に切り詰めた文字列ではないので、
+    // 長い名前でもここで得られるのは実際のファイル名になる。
+    char *file_name = table[state->file_select_line_data.now_line];
 
-    if(file_name_start_ptr == NULL){
+    if(file_name[0] == '\0'){
         editor_error_screen(state, "can not load file");
+        select_state->select_state = error;
         return;
     }
-    int file_name_size = file_name_end_ptr - file_name_start_ptr;
-    char file_name[file_name_size+1];
-    memcpy(file_name,file_name_start_ptr,file_name_size*sizeof(char));
-    file_name[file_name_size] = '\0';
 
     // file_nameだけでstat/fopenすると起動時のカレントディレクトリ基準になる。
     // file_browseで移動した先を使うため、path_nameと結合した絶対/現在パスで扱う。
@@ -513,6 +498,9 @@ void load_all_lines(struct editor_state *state){
 
 //リサイズなどで表示領域が変わった際の表示文字列を計算する
 int update_visiable_line_str(struct editor_state *state,long line_num,char *str){
+    //切り出し結果の書き込み先。計算部分が未実装のためまだ使っていない
+    (void)str;
+
     if(state == NULL)return -1;
     //バッファは画面幅と独立しているので、可視幅で切り出すだけでよい
     long line_size = editor_line_len(state, (int)line_num);
@@ -590,7 +578,7 @@ char *editor_buffer_to_utf8(struct editor_state *state)
 // 引数: state=現在の論理カーソル行とファイル読み込み状態。
 // 返り値: なし。
 void load_view_from_cursor(struct editor_state *state){
-    load_string_data(state, state->mouse.now_mouce_line, state->settings_data->load_buffer_lines);
+    load_string_data(state, state->cursor.line, state->settings_data->load_buffer_lines);
 }
 
 // save_file(): 現在の編集バッファを開いているファイルパスへ書き戻す。
@@ -652,7 +640,8 @@ void load_screen_size(struct editor_state *state){
     set_line_memory(state);
     load_all_lines(state);
     state->scr.scr_start_num = 0;
-    state->mouse.now_mouce_line = 0;
+    state->cursor.line = 0;
+    state->cursor.col  = 0;
 }
 
 // load_default_editor_settings(): エディタ設定へコンパイル時の既定値を入れる。
@@ -807,6 +796,9 @@ void make_new_file(){
 
 
 void ask_new_file_name(struct pos str_start_pos,int w,int h){
+    //1行だけ描くため高さは使わない
+    (void)h;
+
     char *ask_str = "write a new file name";
     int str_len = strlen(ask_str);
     int ask_str_start_pos_x = str_start_pos.x + ((w - str_len)/2);

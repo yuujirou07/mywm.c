@@ -105,12 +105,11 @@ void draw_editor_buffer_line(struct editor_state *state, int line, int screen_y)
 }
 
 // draw_line_numbers(): 表示開始行(scr_start_num)を基準に、左端へ行番号を描画する。
-// 描画後は元のカーソル位置へ戻す。
+// カーソルの退避・復元は行わない。描画で動いた端末カーソルは、
+// update_screen()の最後にeditor_sync_cursor()がモデルから置き直す。
 // 引数: state=画面サイズ・表示開始行・書き込み領域を持つエディタ状態。
 // 返り値: なし。
 void draw_line_numbers(struct editor_state *state) {
-    struct pos cur_pos;
-    getyx(stdscr, cur_pos.y, cur_pos.x);
     struct scr_data *scr_data = &state->scr;
     struct write_possible_area *area = &state->write_area;
     int line_number_space = state->settings_data->line_number_space;
@@ -126,34 +125,24 @@ void draw_line_numbers(struct editor_state *state) {
         mvhline(area->y_start + i, 0, ' ', line_number_space);
         mvprintw(area->y_start + i, draw_x, "%s", num_str);
     }
-    if (cur_pos.x < area->x_start)
-        cur_pos.x = area->x_start;
-    move(cur_pos.y, cur_pos.x);
 }
 
 // scr_show_line_str(): 上スクロール後に、新しく見えた先頭行の文字列を描き直す。
 // 引数: win=描画先ウィンドウ、state=表示開始行と文字バッファ。
 // 返り値: なし。
 void scr_show_line_str(WINDOW *win,struct editor_state *state){
-    int x;
-    int y;
-
-    getyx(win, y, x);
+    (void)win;
     draw_editor_buffer_line(state, state->scr.scr_start_num, state->write_area.y_start);
-    move(y, x);
 }
 
 // scr_show_line_str_down(): 下スクロール後に、新しく見えた最終行の文字列を描き直す。
 // 引数: win=描画先ウィンドウ、state=表示範囲と文字バッファ。
 // 返り値: なし。
 void scr_show_line_str_down(WINDOW *win, struct editor_state *state){
+    (void)win;
     int last_line = state->scr.scr_start_num + state->write_area.h - 1;
-    int x;
-    int y;
 
-    getyx(win, y, x);
     draw_editor_buffer_line(state, last_line, state->write_area.y_end - 1);
-    move(y, x);
 }
 
 // draw_line(): start_posからend_posまで水平線または垂直線を描く。
@@ -161,17 +150,14 @@ void scr_show_line_str_down(WINDOW *win, struct editor_state *state){
 // 引数: start_pos=開始座標、end_pos=終了座標、win=描画先、mode=全描画か補修か。
 // 返り値: なし。
 void draw_line(struct pos start_pos,struct pos end_pos,WINDOW *win,enum line_mode mode){
+    (void)win;
 
-    int x;
-    int y;
-    getyx(win,y,x);
     int range;
     int step_x;
     int step_y;
     chtype line_ch;
 
     if(!line_draw_info(start_pos, end_pos, &range, &step_x, &step_y, &line_ch)){
-        move(y,x);
         return;
     }
 
@@ -184,7 +170,6 @@ void draw_line(struct pos start_pos,struct pos end_pos,WINDOW *win,enum line_mod
             fix_line_damage(start_pos, range, step_x, step_y, line_ch);
             break;
     }
-    move(y,x);
 }
 
 // draw_box(): 指定された矩形領域の枠線と四隅を描画し、表示中はカーソルを隠す。
@@ -226,10 +211,10 @@ void request_draw_box(struct editor_state *state,struct box box){
 // 引数: win=描画先ウィンドウ、state=現在行・表示開始行・文字バッファ。
 // 返り値: なし。
 void draw_all_line(WINDOW *win,struct editor_state *state){
-    int x = getcurx(win);
+    (void)win;
 
-    int start_draw_line_num = (state->mouse.now_mouce_line > state->settings_data->jmp_set_cur_pos)
-        ? state->mouse.now_mouce_line - state->settings_data->jmp_set_cur_pos : 0;
+    int start_draw_line_num = (state->cursor.line > state->settings_data->jmp_set_cur_pos)
+        ? state->cursor.line - state->settings_data->jmp_set_cur_pos : 0;
 
     state->scr.scr_start_num = start_draw_line_num;
 
@@ -238,8 +223,7 @@ void draw_all_line(WINDOW *win,struct editor_state *state){
         int scr_pos_y = i - start_draw_line_num;
         draw_editor_buffer_line(state, i, state->write_area.y_start + scr_pos_y);
     }
-    int scr_pos_y = state->mouse.now_mouce_line - state->scr.scr_start_num;
-    move(state->write_area.y_start + scr_pos_y, x);
+    // カーソルはscr_start_numから導出されるため、ここで置き直す必要はない。
 }
 
 // draw_now_path_name(): ファイルブラウザ上部に現在ディレクトリのパスを表示する。
@@ -288,11 +272,11 @@ void draw_edit_screen_base(struct editor_state *state,WINDOW *win,struct pos sta
         draw_line(start_pos,end_pos,win,all_draw_mode);
     }
     if(state->settings_data->show_status_bar){
+        // draw_status_bar_path()はステータスバー行を丸ごと塗り直すため、
+        // 行ステータスより先に描かないと"N/M"が消える。
         draw_status_bar_line(state,*state->status_bar,win);
+        draw_status_bar_path(state,win);
         draw_line_status(state,win);
-        if(state->settings_data->show_status_bar){
-            draw_status_bar_path(state,win);
-        }
     }
     draw_line_numbers(state);
 }
@@ -301,16 +285,38 @@ void draw_edit_screen_base(struct editor_state *state,WINDOW *win,struct pos sta
 // ファイルブラウザの内側へ描画する。
 // 引数: state=ファイルブラウザ領域、table=固定幅で詰めたディレクトリエントリ一覧。
 // 返り値: なし。
-void draw_box_inside_dir(struct editor_state *state,char *table){
-    if(state->file_browser_area.w <= 0 || state->file_browser_area.h <= 0){return;}
+void draw_box_inside_dir(struct editor_state *state,char (*table)[DIR_ENTRY_NAME_MAX]){
+    if(table == NULL || state->file_browser_area.w <= 0 || state->file_browser_area.h <= 0){return;}
     char clear[state->file_browser_area.w + 1];
     memset(clear,' ',state->file_browser_area.w * sizeof(char));
     clear[state->file_browser_area.w] = '\0';
+
+    // エントリ名は幅に関係なく丸ごと保持しているため、はみ出す分はここで詰める。
+    // 描き始めがpos.x+1なので、使える幅は内側幅から1引いた分。
+    int max_len = state->file_browser_area.w - 1;
+
     for(int i = 0;i < state->file_browser_area.h;i++){
         mvaddstr(state->file_browser_area.pos.y + i, state->file_browser_area.pos.x,clear);
-        char *entry = table + i * state->file_browser_area.w;
-        if(*entry == '\0') continue;
-        mvaddstr(state->file_browser_area.pos.y + i, state->file_browser_area.pos.x+1,entry);
+        if(max_len <= 0) continue;
+
+        char *entry = table[i];
+        if(entry[0] == '\0') continue;
+
+        int draw_y = state->file_browser_area.pos.y + i;
+        int draw_x = state->file_browser_area.pos.x + 1;
+        int len = (int)strlen(entry);
+
+        if(len <= max_len){
+            mvaddstr(draw_y, draw_x, entry);
+        }
+        else if(max_len > 3){
+            // 末尾を"..."にして省略したことが分かるようにする。
+            mvaddnstr(draw_y, draw_x, entry, max_len - 3);
+            mvaddstr(draw_y, draw_x + max_len - 3, "...");
+        }
+        else{
+            mvaddnstr(draw_y, draw_x, entry, max_len);
+        }
     }
 }
 
@@ -337,7 +343,7 @@ void draw_select_dir_scene_color(struct editor_state *state,int num){
 // show_file_browse(): ファイルブラウザ全体の再描画を要求する。
 // 引数: state=描画要求の保存先、残りは呼び出し互換のため受け取る。
 // 返り値: なし。
-void show_file_browse(struct editor_state *state,struct box file_browse_box,char *dir_name_table,char *path_name,WINDOW *win){
+void show_file_browse(struct editor_state *state,struct box file_browse_box,char (*dir_name_table)[DIR_ENTRY_NAME_MAX],char *path_name,WINDOW *win){
     (void)file_browse_box;
     (void)dir_name_table;
     (void)path_name;
@@ -364,21 +370,23 @@ void set_file_sellect_line(struct editor_state *state,int line){
 }
 
 // editor_screen_move_line(): 画面をnum行スクロールし、論理カーソル行と表示開始行を同期する。
-// now_mouce_lineとscr_start_numを両方有効な場合だけ同時に更新するため、
-// editor_move_cursor_line()は使わずここで直接書き込む。呼び出し側でnow_mouce_lineを
+// cursor.lineとscr_start_numを両方有効な場合だけ同時に更新するため、
+// editor_move_cursor_line()は使わずここで直接書き込む。呼び出し側でcursor.lineを
 // 重ねて動かさないこと(この関数がすでに+num分を反映済み)。
+// 桁は移動先の行長へ丸めるが、呼び出し側が別の桁を指定したい場合は戻ってから上書きする。
 // 引数: state=カーソル行と表示開始行、win=スクロール対象、num=移動行数。
 // 返り値: なし。
 void editor_screen_move_line(struct editor_state *state,WINDOW *win,int num){
     (void)win;
     int line_limit = get_line_limit();
-    int next_mouse_line = state->mouse.now_mouce_line + num;
+    int next_cursor_line = state->cursor.line + num;
     int next_scr_start = state->scr.scr_start_num + num;
-    if(line_limit <= 0 || next_mouse_line < 0 || next_mouse_line >= line_limit || next_scr_start < 0){
+    if(line_limit <= 0 || next_cursor_line < 0 || next_cursor_line >= line_limit || next_scr_start < 0){
         return;
     }
 
-    state->mouse.now_mouce_line = next_mouse_line;
+    state->cursor.line = next_cursor_line;
+    state->cursor.col  = editor_clamp_col(state, next_cursor_line, state->cursor.col);
     state->scr.scr_start_num = next_scr_start;
     state->render_flags |= RENDER_EDIT_SCREEN_BASE;
     state->render_flags |= RENDER_FILE_DATA;
@@ -426,14 +434,9 @@ void draw_file_data(struct editor_state *state){
 // 引数: state=書き込み領域、status_bar=描画するバー領域、win=描画先ウィンドウ。
 // 返り値: なし。
 void draw_status_bar_line(struct editor_state *state,struct box status_bar,WINDOW *win){
-    int y;
-    int x;
-    getyx(win, y, x);
-
     struct pos end_pos = (struct pos){status_bar.pos.x + status_bar.w,status_bar.pos.y};
     draw_line(status_bar.pos,end_pos,win,all_draw_mode);
     mvaddch(status_bar.pos.y,state->write_area.x_start-1,ACS_TTEE);
-    move(y,x);
 }
 
 // draw_status_bar_path(): ステータスバー中央に現在開いているファイル名を描画する。
@@ -443,10 +446,6 @@ void draw_status_bar_path(struct editor_state *state, WINDOW *win){
     if(state->file_data.now_open_path_name[0] == '\0' || !state->settings_data->show_status_bar){
         return;
     }
-
-    int x;
-    int y;
-    getyx(win, y, x);
 
     int status_y = (state->settings_data->bar_side_state == top)
         ? state->status_bar->pos.y - 1 : state->status_bar->pos.y;
@@ -460,7 +459,6 @@ void draw_status_bar_path(struct editor_state *state, WINDOW *win){
     int max_len = state->status_bar->w - 2;
 
     if(max_len <= 0){
-        move(y, x);
         return;
     }
     if(draw_len > max_len){
@@ -476,7 +474,6 @@ void draw_status_bar_path(struct editor_state *state, WINDOW *win){
         draw_status_bar_line(state, *state->status_bar, win);
     }
     mvaddnstr(status_y, draw_x, draw_path, draw_len);
-    move(y, x);
 }
 
 void clear_box(struct clear_box_data *clear_box){
@@ -497,12 +494,10 @@ void draw_line_status(struct editor_state *state,WINDOW *win){
         return;
     }
 
-    int x;
-    int y;
-    getyx(win, y, x);
+    (void)win;
     char line_status_str[32];
     snprintf(line_status_str, sizeof(line_status_str), "%d/%ld",
-             state->mouse.now_mouce_line+1, state->file_data.description_line_end);
+             state->cursor.line+1, state->file_data.description_line_end);
     int total_line_len = strlen(line_status_str);
     struct pos write_start_pos;
     write_start_pos.y = (state->settings_data->bar_side_state == top)
@@ -518,7 +513,6 @@ void draw_line_status(struct editor_state *state,WINDOW *win){
             state->status_bar->pos.x + state->status_bar->w - clear_len,
             ' ', clear_len);
     mvaddnstr(write_start_pos.y, write_start_pos.x, line_status_str, total_line_len);
-    move(y,x);
 }
 
 static void draw_make_file_dialog(struct editor_input_context *ctx){
@@ -545,7 +539,7 @@ static void draw_make_file_dialog(struct editor_input_context *ctx){
         mvaddstr(text_pos.y + 1, text_pos.x + box.w / 2 - (int)strlen("YES[y]") - 2, "YES[y]");
         mvaddstr(text_pos.y + 1, text_pos.x + box.w / 2 + 2, "NO[n]");
         curs_set(0);
-        move(state->scr.cursor_pos.y, state->scr.cursor_pos.x);
+        editor_sync_cursor(state);
         return;
     }
 
@@ -581,10 +575,6 @@ static void draw_make_file_dialog(struct editor_input_context *ctx){
 }
 
 void update_screen(struct editor_input_context *ctx){
-    int x;
-    int y;
-    getyx(ctx->win, y, x);
-    
     unsigned int flags = ctx->state->render_flags;
     struct editor_state *state = ctx->state;
     WINDOW *win = ctx->win;
@@ -596,11 +586,12 @@ void update_screen(struct editor_input_context *ctx){
         if(flags & RENDER_CLEAR_BOX){
             clear_box(&state->clear_box_data);
         }
-        if(flags & RENDER_LINE_STATUS){
-            draw_line_status(state, win);
-        }
         if(flags & RENDER_STATUS_BAR_LINE){
             draw_status_bar_line(state, *state->status_bar, win);
+        }
+
+        if(flags & RENDER_LINE_STATUS){
+            draw_line_status(state, win);
         }
 
         if(flags & RENDER_LINE){
@@ -616,6 +607,9 @@ void update_screen(struct editor_input_context *ctx){
             draw_file_data(state);
         }
         if(flags & RENDER_FILE_BROWSE){
+            //ブラウザ画面を後ろのコードが見えないように消す
+            set_clear_box(&state->clear_box_data,ctx->file_browse_box);
+            clear_box(&ctx->state->clear_box_data);
             draw_box(ctx->file_browse_box, win);
             draw_now_path_name(ctx->file_browse_box, ctx->path_name);
             draw_box_inside_dir(state, ctx->dir_name_table);
@@ -634,7 +628,14 @@ void update_screen(struct editor_input_context *ctx){
             draw_make_file_dialog(ctx);
         }
     }
-    move(y,x);
+
+    // 端末カーソルはモデルの表示結果。描画で動いた分をここで1回だけ置き直す。
+    // move()を呼ぶ場所をこの1点に集約したので、「カーソルがどこにあるか」は
+    // state->cursorだけを見れば分かる。
+    // 注意: ファイル名入力欄やジャンプ入力欄は自前でmove()するが、この行が
+    // 後から上書きするため編集位置に戻る(改修前と同じ挙動)。入力欄側へ
+    // カーソルを渡したくなったら、変更するのはこの1箇所だけでよい。
+    editor_sync_cursor(state);
     ctx->state->render_flags = RENDER_NONE;
     refresh();
 }
@@ -667,4 +668,16 @@ void draw_line_jump(struct editor_state *state){
                 state->jump_mode_data.jump_line_num_counter);
     move(prompt_pos.y, prompt_pos.x + 1 + (int)strlen("JMP_LINE ") +
             state->jump_mode_data.jump_line_num_counter);
+}
+
+int set_clear_box(struct clear_box_data *clear_box_data,struct box box){
+        if(clear_box_data == NULL){
+            return -1;
+        }
+        if((int)(sizeof(clear_box_data->clear_box)/sizeof(struct box)) <= clear_box_data->clear_box_counter){
+            return -1;   
+        }
+
+        clear_box_data->clear_box[clear_box_data->clear_box_counter++] = box;
+        return 0;
 }

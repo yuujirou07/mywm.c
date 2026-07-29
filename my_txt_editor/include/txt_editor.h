@@ -23,6 +23,10 @@
 #define box_retention_max 64
 #define resize_request 5
 #define screen_state_log_storage 256
+// ファイルブラウザ一覧の1行分のバイト数。dir_name_tableは
+// char[行数][DIR_ENTRY_NAME_MAX]の2次元配列として扱う。
+// 行幅を画面幅から切り離すため、NAME_MAX+終端に収まる固定長にする。
+#define DIR_ENTRY_NAME_MAX 256
 // 各行へ前もって足しておく余白列数。ここに収まる入力は再配置なしで処理できる。
 #define EDITOR_LINE_COL_SLACK 16
 // 1行が確保できる列数の絶対上限。これを超える伸長要求は拒否する。
@@ -47,6 +51,11 @@ enum render_flags {
 };
 
 
+// <sys/ttydefaults.h>(sys/epoll.h経由で入る)も同名・同値のCTRLを定義しているため、
+// 先に外してから定義し直す。値は同じなので、どちらが残っても動作は変わらない。
+#ifdef CTRL
+#undef CTRL
+#endif
 #define CTRL(x) ((x) & 0x1f)// 0x1fはCtrl
 
 typedef int (*Start_Menu)(int screen_w, int screen_h, struct ascii_data *ascii_data,
@@ -143,11 +152,20 @@ struct write_possible_area {
     int h; // 入力可能範囲の高さ。
 };
 
-// 画面サイズ・カーソル・スクロール開始行。
+// 画面サイズ・スクロール開始行。
+// カーソル位置はここには持たない(struct cursorが唯一の保持場所)。
 struct scr_data {
-    struct pos cursor_pos; // 保存しておくカーソル座標。
     struct pos scr_size; // 現在の画面サイズ。
     int scr_start_num; // 画面先頭に表示している論理行番号。
+};
+
+// 編集カーソルの論理位置。エディタが持つ唯一のカーソル情報源であり、
+// ncurses側のカーソルはこの値を毎フレーム反映しただけの表示結果として扱う。
+// 画面座標はeditor_cursor_screen_pos()で導出するので、ここには持たない
+// (画面サイズやスクロール位置が変わっても、この構造体は書き換え不要)。
+struct cursor {
+    int line; // 論理行番号(0始まり)。ファイル先頭からの行。
+    int col;  // 行頭からの桁数(0始まり)。画面x座標ではない。
 };
 
 // 編集バッファ本体と、行ごとの文字数・容量情報。
@@ -162,12 +180,6 @@ struct str_data {
     int    *line_cap; // 各論理行に確保済みの列数。
     long    total_capacity; // wint_line_str_data全体の要素数。
     int     line_capacity; // 扱える最大行数。
-};
-
-// マウス位置と、現在編集対象にしている論理行。
-struct mouse_data {
-    int now_mouce_line; // 現在編集・選択対象にしている論理行番号。
-    struct pos scr_abs_now_pos; // 画面上の現在マウス絶対座標。
 };
 
 // 後で消去する矩形領域を一時的に保持する。
@@ -187,9 +199,9 @@ struct screen_state_log{
 // エディタ全体で共有する実行時状態。
 struct editor_state {
     struct editor_settings    *settings_data; // 設定ファイルとデフォルト値から作った設定。
-    struct scr_data            scr; // 画面サイズ・カーソル・スクロール状態。
+    struct scr_data            scr; // 画面サイズ・スクロール状態。
     struct str_data            str; // 編集バッファと行長情報。
-    struct mouse_data          mouse; // マウス位置と現在の論理行。
+    struct cursor              cursor; // 編集カーソルの論理位置。カーソルの唯一の情報源。
     struct write_possible_area write_area; // 編集可能な画面領域。
     struct make_file_mode_status make_file_mode_status; // 新規ファイル作成ダイアログ状態。
     struct box                 file_browser_area; // ファイル一覧を描画する内側領域。
@@ -254,8 +266,8 @@ struct editor_input_context {
     MEVENT *mouse_event;         // KEY_MOUSE時にgetmouse()へ渡すイベント格納先。
     struct editor_state *state;  // 画面状態・カーソル・ファイル情報をまとめた本体状態。
     struct box file_browse_box;  // ファイルブラウザ外枠の位置とサイズ。
-    char *dir_name_table;        // ファイルブラウザに表示する固定幅のディレクトリ一覧。
-    int dir_name_table_size;     // dir_name_tableの確保済みバイト数。
+    char (*dir_name_table)[DIR_ENTRY_NAME_MAX]; // ディレクトリ一覧。1行1エントリの2次元配列。
+    int dir_name_table_rows;     // dir_name_tableの確保済み行数。
     char *path_name;             // ファイルブラウザが現在開いているディレクトリパス。
     struct pos line_start_pos;   // 編集領域左の区切り線の開始座標。
     struct pos line_end_pos;     // 編集領域左の区切り線の終了座標。
@@ -357,31 +369,77 @@ static inline int editor_line_len(struct editor_state *state, int line){
     return editor_clamp_int(state->str.line[line], 0, editor_line_cap(state, line));
 }
 
-// editor_cursor_x_on_line(): 指定行で有効なカーソルx座標へ丸める。
+// editor_clamp_col(): 指定行で有効なカーソル桁へ丸める。
 // 行が可視幅より長い場合は可視幅で止める(横スクロール未実装のため)。
-// 引数: state=書き込み領域と行長を持つエディタ状態、line=対象行、x=丸めるx座標。
-// 返り値: 行頭から行末までの範囲に収めたx座標。
-static inline int editor_cursor_x_on_line(struct editor_state *state, int line, int x){
+// 引数: state=書き込み領域と行長を持つエディタ状態、line=対象行、col=丸める桁数。
+// 返り値: 0から行末までの範囲に収めた桁数。
+static inline int editor_clamp_col(struct editor_state *state, int line, int col){
     int len = editor_line_len(state, line);
     int view = editor_view_cols(state);
     if(len > view){
         len = view;
     }
-    return editor_clamp_int(x, state->write_area.x_start,
-                            state->write_area.x_start + len);
+    return editor_clamp_int(col, 0, len);
 }
 
-// editor_move_cursor_line(): 論理カーソル行(now_mouce_line)をdelta分だけ動かす。
-// now_mouce_line への書き込みはこの関数経由に統一し、複数箇所からの多重加算を防ぐ。
+// editor_cursor_screen_pos(): 論理カーソル位置から画面座標を導出する。
+// 導出専用であり結果は保存しない。画面座標が要るのは描画とncursesへの反映だけで、
+// 編集ロジックはstate->cursorのlineとcolだけで完結させる。
+// 引数: state=カーソル・表示開始行・書き込み領域を持つエディタ状態。
+// 返り値: カーソルを置くべき画面座標。
+static inline struct pos editor_cursor_screen_pos(struct editor_state *state){
+    struct pos pos;
+    pos.x = state->write_area.x_start + state->cursor.col;
+    pos.y = state->write_area.y_start + (state->cursor.line - state->scr.scr_start_num);
+    return pos;
+}
+
+// editor_cursor_is_visible(): カーソル行が現在の表示範囲に入っているかを返す。
+// 引数: state=カーソル行・表示開始行・書き込み領域を持つエディタ状態。
+// 返り値: 編集領域内に見えているならtrue。
+static inline bool editor_cursor_is_visible(struct editor_state *state){
+    struct pos pos = editor_cursor_screen_pos(state);
+    return (pos.y >= state->write_area.y_start && pos.y < state->write_area.y_end);
+}
+
+// editor_sync_cursor(): モデルのカーソル位置をncurses側へ反映する。
+// move()を呼ぶのは原則この関数だけにして、「端末のカーソルはモデルの表示結果」
+// という向きを崩さない。描画が終わったあとに呼ぶ。
+// 引数: state=反映元のエディタ状態。
+// 返り値: なし。
+static inline void editor_sync_cursor(struct editor_state *state){
+    state->cursor.col = editor_clamp_col(state, state->cursor.line, state->cursor.col);
+    struct pos pos = editor_cursor_screen_pos(state);
+    move(pos.y, pos.x);
+}
+
+// editor_set_cursor(): カーソルを指定の論理位置へ置く。行は有効範囲、桁は行長で丸める。
+// 引数: state=更新対象のエディタ状態、line=移動先の論理行、col=移動先の桁。
+// 返り値: なし。
+static inline void editor_set_cursor(struct editor_state *state, int line, int col){
+    int line_limit = editor_line_limit(state);
+    if(line_limit <= 0){
+        state->cursor.line = 0;
+        state->cursor.col  = 0;
+        return;
+    }
+    state->cursor.line = editor_clamp_int(line, 0, line_limit - 1);
+    state->cursor.col  = editor_clamp_col(state, state->cursor.line, col);
+}
+
+// editor_move_cursor_line(): 論理カーソル行をdelta分だけ動かす。桁は新しい行長へ丸める。
+// cursor.lineへの書き込みはこの関数かeditor_set_cursor()経由に統一し、
+// 複数箇所からの多重加算を防ぐ。
 // 引数: state=更新対象のエディタ状態、delta=移動量(負値で上へ)。
 // 返り値: 範囲内で移動できたらtrue、範囲外で何もしなかったらfalse。
 static inline bool editor_move_cursor_line(struct editor_state *state, int delta){
-    int next = state->mouse.now_mouce_line + delta;
+    int next = state->cursor.line + delta;
     if(next < 0 || next >= editor_line_limit(state)){
         return false;
     }
-    state->mouse.now_mouce_line = next;
-   
+    state->cursor.line = next;
+    state->cursor.col  = editor_clamp_col(state, next, state->cursor.col);
+
     return true;
 }
 
@@ -408,7 +466,7 @@ void draw_now_path_name(struct box file_browse_box,char *path_name);
 // 編集画面の区切り線と行番号を描画する。
 void draw_edit_screen_base(struct editor_state *state,WINDOW *win,struct pos start_pos,struct pos end_pos);
 // ファイルブラウザの内側へディレクトリエントリ一覧を描画する。
-void draw_box_inside_dir(struct editor_state *state,char *table);
+void draw_box_inside_dir(struct editor_state *state,char (*table)[DIR_ENTRY_NAME_MAX]);
 // ファイルブラウザの選択行へ指定した色を適用する。
 void draw_select_dir_scene_color(struct editor_state *state,int num);
 // ステータスバーへ現在行と総行数を描画する。
@@ -425,9 +483,9 @@ void draw_line_jump(struct editor_state *state);
 // 現在の論理カーソル行に合わせて表示開始位置を更新する。
 void load_view_from_cursor(struct editor_state *state);
 // 指定ディレクトリの項目をファイルブラウザ用テーブルへ読み込む。
-void load_dir_table(struct editor_state *state,char *table,int table_size,char *path_name);
+void load_dir_table(struct editor_state *state,char (*table)[DIR_ENTRY_NAME_MAX],int table_rows,char *path_name);
 // ファイルブラウザで選択したファイルを開き、選択結果を保存する。
-void load_file(struct editor_state *state,char *table,char *path_name,struct file_browse_select_state *select_state);
+void load_file(struct editor_state *state,char (*table)[DIR_ENTRY_NAME_MAX],char *path_name,struct file_browse_select_state *select_state);
 // ファイル読込後の行情報と編集バッファを初期化する。
 void load_screen_size(struct editor_state *state);
 // 開いているファイル全体を編集用ワイド文字バッファへ読み込む。
@@ -487,7 +545,7 @@ long get_last_visible_file_line(struct editor_state *state);
 void save_file(struct editor_state *state);
 
 // ファイルブラウザ全体の再描画を要求する。
-void show_file_browse(struct editor_state *state,struct box file_browse_box,char *dir_name_table,char *path_name,WINDOW *win);
+void show_file_browse(struct editor_state *state,struct box file_browse_box,char (*dir_name_table)[DIR_ENTRY_NAME_MAX],char *path_name,WINDOW *win);
 // ファイルブラウザの選択行を変更し、再描画を要求する。
 void set_file_sellect_line(struct editor_state *state,int line);
 // ファイルブラウザの現在の選択行と直前の選択行を更新する。
@@ -515,9 +573,8 @@ void update_screen(struct editor_input_context *ctx);
 // 次回のupdate_screen()で消す矩形領域を消去要求へ追加する。
 void request_clear_box(struct editor_state *state, struct box box);
 
-// 指定した論理行が見える位置へ表示範囲とカーソルを移動する。
-void move_view_to_line(WINDOW *win, struct editor_state *state, long target_line,
-                              int x, struct pos line_start_pos, struct pos line_end_pos);
+// 指定した論理行が見える位置へ表示範囲とカーソルを移動する。colは行頭からの桁数。
+void move_view_to_line(struct editor_state *state, long target_line, int col);
 
 // 指定行を前の行へ連結し、不要になった行情報を削除する。
 int remove_line_join_str_data(struct editor_state *state,long remove_line_num);
@@ -527,6 +584,10 @@ int make_new_line_space(struct editor_state *state,long make_space_line_num);
 void resize_file_browser(struct editor_input_context *ctx);
 // 現在の画面状態に合わせて各描画領域の配置を更新する。
 int  update_sccreen_ratio(struct editor_input_context *ctx);
+
+int set_clear_box(struct clear_box_data *clear_box_data,struct box box);
+void editor_screen_mouse_event(WINDOW *win, MEVENT *event, struct editor_state *state);
+void file_browse_screen_mouse_event(WINDOW *win, MEVENT *event, struct editor_state *state);
 
 
 

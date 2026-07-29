@@ -9,10 +9,8 @@
 static void reset_jump_mode(struct editor_state *state);
 static long clamp_editor_target_line(struct editor_state *state, long target_line);
 static int draw_start_line_for_target(struct editor_state *state, long target_line);
-static void redraw_edit_screen(WINDOW *win, struct editor_state *state,
-                               struct pos line_start_pos, struct pos line_end_pos);
-static void restore_edit_screen(WINDOW *win, struct editor_state *state,
-                                struct pos line_start_pos, struct pos line_end_pos);
+static void redraw_edit_screen(struct editor_state *state);
+static void restore_edit_screen(struct editor_state *state);
 static void show_make_file_prompt(WINDOW *win, struct editor_state *state, struct box *file_box,
                                   int screen_center_y, struct pos screen_center_pos);
 static bool handle_edit_screen_input(struct editor_input_context *ctx, int input_result, wint_t ch);
@@ -67,7 +65,6 @@ static bool handle_edit_screen_input(struct editor_input_context *ctx, int input
     else if(ch == CTRL('h')){
         editor_set_screen_state(state, line_jump_mode);
         reset_jump_mode(state);
-        getyx(win, state->mouse.scr_abs_now_pos.y, state->mouse.scr_abs_now_pos.x);
         state->render_flags |= RENDER_LINE_JUMP;
         return true;
     }
@@ -75,12 +72,11 @@ static bool handle_edit_screen_input(struct editor_input_context *ctx, int input
         ctx->state->is_cur_show = false;
         curs_set(0);
         editor_set_screen_state(state, file_browse_screen);
-        getyx(win, state->mouse.scr_abs_now_pos.y, state->mouse.scr_abs_now_pos.x);
         show_file_browse(state, ctx->file_browse_box, ctx->dir_name_table, ctx->path_name, win);
         return true;
     }
     else if(ch == CTRL('s')){
-        getyx(win, state->scr.cursor_pos.y, state->scr.cursor_pos.x);
+        // 編集位置はstate->cursorが持ち続けるため、画面を離れる前の退避は不要。
         save_file(state);
         flushinp();
         if(editor_get_screen_state(state) == ask_make_file_mode){
@@ -92,11 +88,7 @@ static bool handle_edit_screen_input(struct editor_input_context *ctx, int input
     if (ch == KEY_MOUSE) {
         handle_mouse(win, ctx->mouse_event, state);
         state->render_flags |= RENDER_LINE;
-        
-        if(state->settings_data->show_status_bar){
-            state->render_flags |= RENDER_LINE_STATUS;
-            state->render_flags |= RENDER_STATUS_BAR_LINE;
-        }
+
         return true;
     }
     if (state->is_cur_show) {
@@ -118,13 +110,10 @@ static bool handle_edit_screen_input(struct editor_input_context *ctx, int input
     } else {
         if (input_result == OK && iswprint((wint_t)ch)) {
             // カーソル非表示中は、論理行を見える位置へ戻してから入力する。
-            int x = getcurx(win);
-
             if(editor_line_limit(state) == 0){
                 return true;
             }
-            move_view_to_line(win, state, state->mouse.now_mouce_line, x,
-                              ctx->line_start_pos, ctx->line_end_pos);
+            move_view_to_line(state, state->cursor.line, state->cursor.col);
             state->is_cur_show = true;
             curs_set(1);
             handle_char_input(win, (wchar_t)ch, state);
@@ -133,12 +122,11 @@ static bool handle_edit_screen_input(struct editor_input_context *ctx, int input
         }
         if (ch == KEY_LEFT || ch == KEY_RIGHT || ch == KEY_UP || ch == KEY_DOWN){
             // nは現在の論理行。move_view_to_line()がstateを書き換える前に保持する。
-            int n = state->mouse.now_mouce_line;
+            int n = state->cursor.line;
             state->is_cur_show = true;
             curs_set(1);
             clear();
-            move_view_to_line(win, state, n - 1, state->write_area.x_start,
-                              ctx->line_start_pos, ctx->line_end_pos);
+            move_view_to_line(state, n - 1, 0);
         }
     }
     if(ch == 'q') {
@@ -164,41 +152,31 @@ static bool handle_file_browse_screen_input(struct editor_input_context *ctx, wi
         }
         else{
             editor_set_screen_state(state, edit_screen);
-            restore_edit_screen(win, state, ctx->line_start_pos, ctx->line_end_pos);
+            restore_edit_screen(state);
         }
         return true;
     }
     if (ch == CTRL('f')) {
-        restore_edit_screen(win, state, ctx->line_start_pos, ctx->line_end_pos);
+        restore_edit_screen(state);
         return true;
     }
 
     if(state->settings_data->file_select_scene_lighting){
+        if(ch == KEY_MOUSE){
+            handle_mouse(win,ctx->mouse_event,ctx->state);
+        }
         if (ch == KEY_UP || ch == 'k') {
             // next_lineはハイライトを移す先。端では上下に循環させる。
-            int next_line;
-            if (state->file_select_line_data.now_line <= 0){
-                next_line = state->dir_num - 1;
-            }
-            else{
-            next_line = state->file_select_line_data.now_line  - 1;
-            }
-        
+            int next_line = (state->file_select_line_data.now_line <= 0) 
+                ? state->dir_num - 1:state->file_select_line_data.now_line  - 1;
             set_file_sellect_line(state, next_line);
-            
         } else if (ch == KEY_DOWN  || ch == 'j') {
             // next_lineはハイライトを移す先。端では上下に循環させる。
-            int next_line;
-            if (state->file_select_line_data.now_line  >= state->dir_num - 1){
-                next_line = 0;
-            }
-            else{
-
-                next_line = state->file_select_line_data.now_line  + 1;
-            }
+            int next_line = (state->file_select_line_data.now_line  >= state->dir_num - 1)
+                ?0:state->file_select_line_data.now_line  + 1;
             set_file_sellect_line(state, next_line);
-
         }
+        
     } 
     if (ch == KEY_ENTER || ch == '\n' || ch == '\r' || ch == ' ') {
         // select_state.select_nameが空でなければディレクトリ選択、空ならファイル読み込み完了側を見る。
@@ -221,7 +199,7 @@ static bool handle_file_browse_screen_input(struct editor_input_context *ctx, wi
             memcpy(now_path_name + path_len + 1, select_state.select_name, select_name_len + 1);
             memcpy(ctx->path_name, now_path_name, path_len + 1 + select_name_len + 1);
             
-            load_dir_table(state, ctx->dir_name_table, ctx->dir_name_table_size, ctx->path_name);
+            load_dir_table(state, ctx->dir_name_table, ctx->dir_name_table_rows, ctx->path_name);
             show_file_browse(state, ctx->file_browse_box, ctx->dir_name_table, ctx->path_name, win);
         }
         if(state->file_data.now_open_file != NULL && select_state.select_state == file){
@@ -240,8 +218,10 @@ static bool handle_file_browse_screen_input(struct editor_input_context *ctx, wi
                 ctx->lsp_data->update_data.file_update_counter = 1;
             }
 
-            state->mouse.scr_abs_now_pos = (struct pos){state->write_area.x_start, state->write_area.y_start};
-            restore_edit_screen(win, state, ctx->line_start_pos, ctx->line_end_pos);
+            // 読み込み直後は先頭行の行頭から編集を始める。
+            editor_set_cursor(state, 0, 0);
+            restore_edit_screen(state);
+    
         }
     }
     return true;
@@ -253,7 +233,6 @@ static bool handle_file_browse_screen_input(struct editor_input_context *ctx, wi
 static bool handle_line_jump_mode_input(struct editor_input_context *ctx, wint_t ch)
 {
     struct editor_state *state = ctx->state;
-    WINDOW *win = ctx->win;
 
     if(ch >= '0' && ch <= '9' &&
        state->jump_mode_data.jump_line_num_counter < (int)sizeof(state->jump_mode_data.jump_line_num) - 1){
@@ -263,7 +242,7 @@ static bool handle_line_jump_mode_input(struct editor_input_context *ctx, wint_t
     }
     else if(ch == CTRL('h')){
         reset_jump_mode(state);
-        restore_edit_screen(win, state, ctx->line_start_pos, ctx->line_end_pos);
+        restore_edit_screen(state);
     }
     else if(ch == KEY_BACKSPACE && state->jump_mode_data.jump_line_num_counter > 0){
         state->jump_mode_data.jump_line_num_counter--;
@@ -283,8 +262,7 @@ static bool handle_line_jump_mode_input(struct editor_input_context *ctx, wint_t
             n = DEFAULT_LOAD_LINE_SiZE;
         }
 
-        move_view_to_line(win, state, n - 1, state->write_area.x_start,
-                          ctx->line_start_pos, ctx->line_end_pos);
+        move_view_to_line(state, n - 1, 0);
         curs_set(1);
         reset_jump_mode(state);
         editor_set_screen_state(state, edit_screen);
@@ -369,7 +347,7 @@ static bool handle_ask_make_file_mode_input(struct editor_input_context *ctx, in
             clear();
             state->render_flags |= RENDER_EDIT_SCREEN_BASE;
             state->render_flags |= RENDER_FILE_DATA;
-            move(state->scr.cursor_pos.y, state->scr.cursor_pos.x);
+            editor_sync_cursor(state);
         }
     }
     else{
@@ -386,7 +364,7 @@ static bool handle_ask_make_file_mode_input(struct editor_input_context *ctx, in
             state->render_flags |= RENDER_EDIT_SCREEN_BASE;
             state->render_flags |= RENDER_FILE_DATA;
             editor_set_screen_state(state, edit_screen);
-            move(state->scr.cursor_pos.y, state->scr.cursor_pos.x);
+            editor_sync_cursor(state);
             state->is_cur_show = true;
             curs_set(true);
         }
@@ -491,42 +469,39 @@ static int draw_start_line_for_target(struct editor_state *state, long target_li
     return (target_line > 15) ? (target_line - 15) : 0;
 }
 
-// redraw_edit_screen(): 編集画面の固定要素と表示中のファイル内容を再描画する。
-// 引数: win=描画先、state=描画対象の状態、line_start_pos/line_end_pos=区切り線の端点。
+// redraw_edit_screen(): 編集画面の再描画を要求する。
+// 実際に描くのはupdate_screen()で、区切り線の座標もそちらがctxから読む。
+// 引数: state=描画要求を積むエディタ状態。
 // 返り値: なし。
-static void redraw_edit_screen(WINDOW *win, struct editor_state *state,
-                               struct pos line_start_pos, struct pos line_end_pos){
+static void redraw_edit_screen(struct editor_state *state){
     clear();
     state->render_flags |= RENDER_EDIT_SCREEN_BASE;
     state->render_flags |= RENDER_FILE_DATA;
 }
 
 // restore_edit_screen(): ファイルブラウザやジャンプ入力から編集画面へ戻す。
-// 引数: win=描画先、state=復帰させる状態、line_start_pos/line_end_pos=区切り線の端点。
+// 引数: state=復帰させる状態。
 // 返り値: なし。
-static void restore_edit_screen(WINDOW *win, struct editor_state *state,
-                                struct pos line_start_pos, struct pos line_end_pos){
+static void restore_edit_screen(struct editor_state *state){
     editor_set_screen_state(state, edit_screen);
     state->is_cur_show = true;
     curs_set(true);
-    redraw_edit_screen(win, state, line_start_pos, line_end_pos);
-    move(state->mouse.scr_abs_now_pos.y, state->mouse.scr_abs_now_pos.x);
+    redraw_edit_screen(state);
+    // 編集位置はstate->cursorに残っているため、退避しておいた画面座標は要らない。
+    editor_sync_cursor(state);
 }
 
 // move_view_to_line(): 指定行が見える位置へ表示開始行とカーソルを移動する。
-// 引数: win=描画先、state=表示位置とカーソル行、target_line=移動先論理行、x=移動後のx座標、line_start_pos/line_end_pos=区切り線の端点。
+// 引数: state=表示位置とカーソル行、target_line=移動先論理行、col=移動後の桁数。
 // 返り値: なし。
-void move_view_to_line(WINDOW *win, struct editor_state *state, long target_line,
-                              int x, struct pos line_start_pos, struct pos line_end_pos){
+void move_view_to_line(struct editor_state *state, long target_line, int col){
     target_line = clamp_editor_target_line(state, target_line);
     int draw_start_line = draw_start_line_for_target(state,target_line);
-    state->mouse.now_mouce_line = target_line;
     state->scr.scr_start_num = draw_start_line;
-    redraw_edit_screen(win, state, line_start_pos, line_end_pos);
+    editor_set_cursor(state, (int)target_line, col);
+    redraw_edit_screen(state);
 
-    int screen_mouce_pos_y = target_line - draw_start_line;
-    x = editor_cursor_x_on_line(state, target_line, x);
-    move(state->write_area.y_start + screen_mouce_pos_y, x);
+    editor_sync_cursor(state);
 }
 
 
@@ -537,7 +512,7 @@ static bool handle_start_menu_input(struct editor_input_context *ctx, wint_t ch)
     WINDOW *win = ctx->win;
 
     if(ctx->start_menu == NULL){
-        restore_edit_screen(win, state, ctx->line_start_pos, ctx->line_end_pos);
+        restore_edit_screen(state);
         return true;
     }
 
@@ -580,7 +555,9 @@ static bool handle_start_menu_input(struct editor_input_context *ctx, wint_t ch)
         state->is_cur_show = true;
         curs_set(1);
         clear();
-        move(state->write_area.y_start, state->write_area.x_start);
+        state->scr.scr_start_num = 0;
+        editor_set_cursor(state, 0, 0);
+        editor_sync_cursor(state);
         state->render_flags |= RENDER_EDIT_SCREEN_BASE;
         return true;
     }
@@ -696,21 +673,16 @@ int update_sccreen_ratio(struct editor_input_context *ctx){
         default: {
             // 高さが縮むとカーソル行が編集領域の外へ出るため、はみ出したときだけ
             // 表示開始行を取り直す。収まっているならスクロール位置は動かさない。
-            int cursor_x = getcurx(ctx->win);
-            int cursor_y = state->write_area.y_start +
-                           (state->mouse.now_mouce_line - state->scr.scr_start_num);
-
-            if(cursor_y < state->write_area.y_start || cursor_y >= state->write_area.y_end){
+            if(!editor_cursor_is_visible(state)){
                 //内部でclear()と再描画要求、カーソル移動まで行う
-                move_view_to_line(ctx->win, state, state->mouse.now_mouce_line, cursor_x,
-                                  ctx->line_start_pos, ctx->line_end_pos);
+                move_view_to_line(state, state->cursor.line, state->cursor.col);
                 break;
             }
 
             clear();
             state->render_flags |= RENDER_EDIT_SCREEN_BASE;
             state->render_flags |= RENDER_FILE_DATA;
-            move(cursor_y, editor_cursor_x_on_line(state, state->mouse.now_mouce_line, cursor_x));
+            editor_sync_cursor(state);
             break;
         }
     }

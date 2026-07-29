@@ -91,12 +91,12 @@ int main(int argc, char *argv[])
     init_pair(2, COLOR_BLACK, COLOR_WHITE);
     init_pair(3, COLOR_BLACK, COLOR_RED);
 
-    state.scr.cursor_pos.x = 0;
-    state.scr.cursor_pos.y = 0;
     state.scr.scr_start_num = 0;
-    
-    state.mouse.now_mouce_line = 0;
-    state.mouse.scr_abs_now_pos = (struct pos){0,0};
+
+    // 編集カーソルはここが唯一の初期化場所。以降、位置はstate.cursorだけが持ち、
+    // 端末側へはeditor_sync_cursor()で反映する。
+    state.cursor.line = 0;
+    state.cursor.col  = 0;
 
     getmaxyx(win, state.scr.scr_size.y, state.scr.scr_size.x);
     clear();
@@ -191,8 +191,12 @@ int main(int argc, char *argv[])
     state.jump_mode_data.jump_line_num_counter = 0;
 
     editor_set_screen_state(&state, state.settings_data->show_start_menu ? start_menu_screen : edit_screen);
-    int dir_name_table_size         = state.file_browser_area.w * state.file_browser_area.h;
-    char *dir_name_table            = calloc(dir_name_table_size,sizeof(char));
+    // 一覧テーブルは1行DIR_ENTRY_NAME_MAXバイト固定の2次元配列。
+    // 行数は表示できる件数分だけ確保し、幅の変化では作り直さない。
+    int dir_name_table_rows         = (state.file_browser_area.h > 0)
+        ? state.file_browser_area.h : 1;
+    char (*dir_name_table)[DIR_ENTRY_NAME_MAX] =
+        calloc((size_t)dir_name_table_rows,sizeof(*dir_name_table));
     int allocate_total_str_size     = state.settings_data->load_buffer_lines;
     state.file_data.file_str_data   = calloc(allocate_total_str_size,sizeof(char*));
     if(dir_name_table == NULL || state.file_data.file_str_data == NULL){
@@ -202,12 +206,12 @@ int main(int argc, char *argv[])
         editor_free_text_buffer(&state);
         return 1;
     }
-    load_dir_table(&state,dir_name_table,dir_name_table_size,path_name);
+    load_dir_table(&state,dir_name_table,dir_name_table_rows,path_name);
 
     struct pos screen_center_pos    = (struct pos){state.scr.scr_size.x/2,screen_center_y};
     
     bkgd(COLOR_PAIR(1));
-    move(state.write_area.y_start, state.write_area.x_start);
+    editor_sync_cursor(&state);
     refresh();
 
 
@@ -290,7 +294,7 @@ int main(int argc, char *argv[])
             .state = &state,
             .file_browse_box = file_browse_box,
             .dir_name_table = dir_name_table,
-            .dir_name_table_size = dir_name_table_size,
+            .dir_name_table_rows = dir_name_table_rows,
             .path_name = path_name,
             .line_start_pos = {state.write_area.x_start-1, state.write_area.y_start},
             .line_end_pos   = {state.write_area.x_start-1, state.write_area.y_end},
@@ -343,6 +347,8 @@ int main(int argc, char *argv[])
         continue;
 
     }
+    // resize_file_browser()がreallocした場合、最新のポインタはcontext側にある。
+    free(input_context.dir_name_table);
     if(handle != NULL)
         dlclose(handle);
     if(epfd >= 0)

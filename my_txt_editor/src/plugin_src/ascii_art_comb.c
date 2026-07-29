@@ -12,7 +12,7 @@ void get_ascii_data(struct ascii_data *ascii_data,FILE *file,int screen_width){
         char *ascii_art_w = 0;
         while((ascii_art_w = fgets(ascii_data->ascii_data[ascii_data->h],ascii_data_w_max,file)) != NULL){
                 //もしロゴの幅より画面サイズが小さかったら表示しない
-                if(strlen(ascii_art_w) > screen_width){
+                if((int)strlen(ascii_art_w) > screen_width){
                         memset(ascii_data->ascii_data,'\n',sizeof(ascii_data->ascii_data));
                         return;
                 }
