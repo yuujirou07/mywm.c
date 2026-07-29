@@ -598,7 +598,7 @@ void load_view_from_cursor(struct editor_state *state){
 // 引数: state=保存先パスと編集バッファを持つエディタ状態。
 // 返り値: なし。
 void save_file(struct editor_state *state){
-    if(state->file_data.now_open_path_name[0] == '\0'){
+    if(state == NULL || state->file_data.now_open_path_name[0] == '\0'){
         if(state->settings_data->ask_make_file){
             editor_set_screen_state(state, ask_make_file_mode);
             return;
@@ -627,6 +627,8 @@ void save_file(struct editor_state *state){
             continue;
         }
 
+
+        
         for(int col = 0; col < max_col; col++){
             wint_t cell = cells[col];
             if(cell == 0) continue;

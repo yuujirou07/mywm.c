@@ -23,6 +23,7 @@
 #define DEFAULT_LSP_USE true
 
 
+
 struct lsp_settings_data{
     bool lsp_use;
     bool lsp_lanch_startup_editor;

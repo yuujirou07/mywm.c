@@ -391,82 +391,141 @@ enum line_mode {
 };
 
 
+// 編集領域の左側へ、現在の表示開始行に対応する行番号を描画する。
 void draw_line_numbers(struct editor_state *state);
+// 指定した2点の間へ水平線または垂直線を描画する。
 void draw_line(struct pos start_pos,struct pos end_pos,WINDOW *win,enum line_mode mode);
+// 指定した矩形領域へ枠線を描画する。
 void draw_box(struct box box,WINDOW *win);
+// 次回のupdate_screen()で描く枠を描画要求へ追加する。
 void request_draw_box(struct editor_state *state,struct box box);
+// 現在の表示位置を基準に編集領域全体を描き直す。
 void draw_all_line(WINDOW *win,struct editor_state *state);
+// 編集バッファの指定論理行を画面上の指定行へ描画する。
 void draw_editor_buffer_line(struct editor_state *state, int line, int screen_y);
+// ファイルブラウザ上部へ現在のディレクトリパスを描画する。
 void draw_now_path_name(struct box file_browse_box,char *path_name);
+// 編集画面の区切り線と行番号を描画する。
 void draw_edit_screen_base(struct editor_state *state,WINDOW *win,struct pos start_pos,struct pos end_pos);
+// ファイルブラウザの内側へディレクトリエントリ一覧を描画する。
 void draw_box_inside_dir(struct editor_state *state,char *table);
+// ファイルブラウザの選択行へ指定した色を適用する。
 void draw_select_dir_scene_color(struct editor_state *state,int num);
+// ステータスバーへ現在行と総行数を描画する。
 void draw_line_status(struct editor_state *state,WINDOW *win);
+// 編集バッファのうち現在画面に見える範囲を描画する。
 void draw_file_data(struct editor_state *state);
+// ステータスバーの横線と区切り部分を描画する。
 void draw_status_bar_line(struct editor_state *state,struct box status_bar,WINDOW *win);
+// ステータスバーへ現在開いているファイル名を描画する。
 void draw_status_bar_path(struct editor_state *state, WINDOW *win);
+// 行ジャンプモードの入力中の行番号を描画する。
 void draw_line_jump(struct editor_state *state);
 
+// 現在の論理カーソル行に合わせて表示開始位置を更新する。
 void load_view_from_cursor(struct editor_state *state);
+// 指定ディレクトリの項目をファイルブラウザ用テーブルへ読み込む。
 void load_dir_table(struct editor_state *state,char *table,int table_size,char *path_name);
+// ファイルブラウザで選択したファイルを開き、選択結果を保存する。
 void load_file(struct editor_state *state,char *table,char *path_name,struct file_browse_select_state *select_state);
+// ファイル読込後の行情報と編集バッファを初期化する。
 void load_screen_size(struct editor_state *state);
+// 開いているファイル全体を編集用ワイド文字バッファへ読み込む。
 void load_all_lines(struct editor_state *state);
+// 指定した範囲のファイル行をfile_str_dataへ読み込む。
 void load_string_data(struct editor_state *state,long load_start_line,int load_size);
+// エディタ設定へコンパイル時の既定値を設定する。
 void load_default_editor_settings(struct editor_settings *settings_data);
+// 設定JSONを読み込み、既定のエディタ設定を上書きする。
 void load_custom_editor_settings(struct editor_settings *settings_data);
 
+// 矢印キーによるカーソル移動と画面スクロールを処理する。
 void handle_input_allow(WINDOW *win, wchar_t ch, struct editor_state *state);
+// 端末リサイズ後の画面サイズ、描画領域、カーソル位置を更新する。
 void handle_resize(WINDOW *win, struct editor_input_context *ctx);
+// カーソル左の文字を削除し、必要なら前の行と連結する。
 void handle_backspace(WINDOW *win, struct editor_state *state);
+// カーソル位置で現在行を分割し、新しい行を作る。
 void handle_newline(WINDOW *win, struct editor_state *state);
+// インデント幅の空白を編集バッファへ挿入する。
 void handle_tab(WINDOW *win, struct editor_state *state);
+// 入力されたワイド文字をカーソル位置へ挿入する。
 void handle_char_input(WINDOW *win, wchar_t ch, struct editor_state *state);
+// マウスホイールによる上下スクロールを処理する。
 void handle_mouse(WINDOW *win, MEVENT *event, struct editor_state *state);
+// 現在の画面状態に対応する入力処理へ入力を振り分ける。
 bool editor_handle_screen_input(struct editor_input_context *ctx, int input_result, wint_t ch);
 
+// 上スクロールで新しく見えた画面先頭行を描画する。
 void scr_show_line_str(WINDOW *win,struct editor_state *state);
+// 下スクロールで新しく見えた画面末尾行を描画する。
 void scr_show_line_str_down(WINDOW *win,struct editor_state *state);
 
+// エラー画面へ切り替え、指定したエラーメッセージを表示する。
 void editor_error_screen(struct editor_state *state,char *error_comment);
+// 論理カーソル行を移動し、必要なら画面をスクロールする。
 void editor_screen_move_line(struct editor_state *state,WINDOW *win,int num);
+// 編集バッファ全体をUTF-8文字列へ変換する。戻り値は呼び出し側でfree()する。
 char *editor_buffer_to_utf8(struct editor_state *state);
 
-// 編集バッファ(wint_line_str_data / line / line_offset / line_cap)の確保・解放・伸長。
+// 編集バッファと行情報配列を指定容量で確保する。
 bool editor_alloc_text_buffer(struct editor_state *state, int line_count, long total_capacity);
+// 編集バッファと行情報配列をまとめて解放する。
 void editor_free_text_buffer(struct editor_state *state);
+// 指定行が必要な列数を保持できるように容量を伸ばす。
 bool editor_ensure_line_cap(struct editor_state *state, int line, int need);
+// 行情報配列が必要な行数を保持できるように容量を伸ばす。
 bool editor_ensure_row_capacity(struct editor_state *state, int need_rows);
 
-
+// カーソル移動と行ジャンプで使用する行番号上限を設定する。
 void set_line_limit(int limit);
+// ファイル内の各行の開始位置と全体の表示桁数を記録する。
 void set_line_memory(struct editor_state *state);
+// 編集バッファ内で可視文字が存在する最後の行番号を取得する。
 long get_last_visible_file_line(struct editor_state *state);
+// 編集バッファの内容を現在開いているファイルへ保存する。
 void save_file(struct editor_state *state);
 
+// ファイルブラウザ全体の再描画を要求する。
 void show_file_browse(struct editor_state *state,struct box file_browse_box,char *dir_name_table,char *path_name,WINDOW *win);
+// ファイルブラウザの選択行を変更し、再描画を要求する。
 void set_file_sellect_line(struct editor_state *state,int line);
+// ファイルブラウザの現在の選択行と直前の選択行を更新する。
 void file_select_line_update(struct file_select_line *file_select_line,int line);
 
+// 新規ファイル名を求めるメッセージを指定領域の中央へ描画する。
 void ask_new_file_name(struct pos str_start_pos,int w,int h);
+// 消去要求に登録された全領域を空白で消去する。
 void clear_box(struct clear_box_data *clear_box);
 
+// 新規ファイル名を取得するための予約宣言。現在は未実装。
 void get_new_file_name();
+// カーソル移動と行ジャンプで使用する行番号上限を取得する。
 int get_line_limit();
 
+// 符号なし整数を10進文字列へ変換し、呼び出し側のbufへ格納する。
 char *uint_to_str(unsigned int value, char *buf);
 
+// 指定座標へ文字列を描画する。
 void my_mvaddstr(struct pos pos,char * str);
+// 指定座標へ1文字を描画する。
 void my_mvaddch(struct pos pos,char str);
+// render_flagsに登録された描画要求を実行して画面を更新する。
 void update_screen(struct editor_input_context *ctx);
+// 次回のupdate_screen()で消す矩形領域を消去要求へ追加する。
 void request_clear_box(struct editor_state *state, struct box box);
 
+// 指定した論理行が見える位置へ表示範囲とカーソルを移動する。
 void move_view_to_line(WINDOW *win, struct editor_state *state, long target_line,
                               int x, struct pos line_start_pos, struct pos line_end_pos);
-                              
+
+// 指定行を前の行へ連結し、不要になった行情報を削除する。
 int remove_line_join_str_data(struct editor_state *state,long remove_line_num);
+// カーソル位置で行を分割し、新しい行用の領域を作る。
 int make_new_line_space(struct editor_state *state,long make_space_line_num);
+// 端末幅に合わせてファイルブラウザの枠と一覧テーブルを作り直す。
 void resize_file_browser(struct editor_input_context *ctx);
+// 現在の画面状態に合わせて各描画領域の配置を更新する。
 int  update_sccreen_ratio(struct editor_input_context *ctx);
 
 
