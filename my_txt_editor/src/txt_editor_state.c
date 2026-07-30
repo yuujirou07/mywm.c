@@ -169,12 +169,12 @@ static bool handle_file_browse_screen_input(struct editor_input_context *ctx, wi
             // next_lineはハイライトを移す先。端では上下に循環させる。
             int next_line = (state->file_select_line_data.now_line <= 0) 
                 ? state->dir_num - 1:state->file_select_line_data.now_line  - 1;
-            set_file_sellect_line(state, next_line);
+            set_file_select_line(state, next_line);
         } else if (ch == KEY_DOWN  || ch == 'j') {
             // next_lineはハイライトを移す先。端では上下に循環させる。
             int next_line = (state->file_select_line_data.now_line  >= state->dir_num - 1)
                 ?0:state->file_select_line_data.now_line  + 1;
-            set_file_sellect_line(state, next_line);
+            set_file_select_line(state, next_line);
         }
         
     } 
@@ -258,8 +258,8 @@ static bool handle_line_jump_mode_input(struct editor_input_context *ctx, wint_t
         if(n < 1){
             n = 1;
         }
-        else if( n > DEFAULT_LOAD_LINE_SiZE ){
-            n = DEFAULT_LOAD_LINE_SiZE;
+        else if( n > DEFAULT_LOAD_LINE_SIZE ){
+            n = DEFAULT_LOAD_LINE_SIZE;
         }
 
         move_view_to_line(state, n - 1, 0);
@@ -609,12 +609,12 @@ static struct box clamp_box_to_screen(struct editor_state *state, struct box box
     return box;
 }
 
-// update_sccreen_ratio(): 画面サイズが変わったあと、今表示している画面の配置を
+// update_screen_ratio(): 画面サイズが変わったあと、今表示している画面の配置を
 // 新しい画面サイズの比率で作り直し、必要な再描画要求をrender_flagsへ積む。
 // 実際の描画はupdate_screen()が行うため、ここでは配置更新と要求だけを行う。
 // 引数: ctx=画面状態・各領域・中央寄せ基準を持つ入力context。
 // 返り値: 配置を更新したら1、ctxが無効で何もしなかったら0。
-int update_sccreen_ratio(struct editor_input_context *ctx){
+int update_screen_ratio(struct editor_input_context *ctx){
     if(ctx == NULL || ctx->state == NULL)return 0;
 
     struct editor_state *state = ctx->state;

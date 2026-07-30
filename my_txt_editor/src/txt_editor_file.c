@@ -13,6 +13,7 @@
 #include"cjson/cJSON.h"
 #include "txt_editor.h"
 #include "json_read.h"
+#include "path_util.h"
 #include"default_settings.h"
 
 // load_dir_table(): path_name配下のディレクトリエントリを読み込み、
@@ -332,27 +333,6 @@ void set_line_memory(struct editor_state *state){
     return;
 }
 
-// get_last_visible_file_line(): 画面上で文字がある最後の行番号を返す。
-// 引数: state=読み込み済み行の表示幅を持つエディタ状態。
-// 返り値: 1始まりの最終行番号。文字がない、または状態が不正なら0。
-long get_last_visible_file_line(struct editor_state *state){
-    if(state == NULL || state->str.line == NULL){
-        return 0;
-    }
-
-    long line_count = state->file_data.file_line_start_num_counter;
-    if(line_count > state->str.line_capacity){
-        line_count = state->str.line_capacity;
-    }
-
-    for(long i = line_count - 1; i >= 0; i--){
-        if(state->str.line[i] > 0){
-            return i + 1;
-        }
-    }
-    return 0;
-}
-
 // load_string_data(): 保存済みの行開始位置から指定行数分だけ読み込み、
 // file_str_dataへ文字列として格納する。
 // 引数: state=読み込み元FILE*と格納先、load_start_line=開始行、load_size=読み込む行数。
@@ -495,23 +475,6 @@ void load_all_lines(struct editor_state *state){
     }
 }
 
-
-//リサイズなどで表示領域が変わった際の表示文字列を計算する
-int update_visiable_line_str(struct editor_state *state,long line_num,char *str){
-    //切り出し結果の書き込み先。計算部分が未実装のためまだ使っていない
-    (void)str;
-
-    if(state == NULL)return -1;
-    //バッファは画面幅と独立しているので、可視幅で切り出すだけでよい
-    long line_size = editor_line_len(state, (int)line_num);
-    long view_cols = editor_view_cols(state);
-    if(line_size > view_cols){
-        line_size = view_cols;
-    }
-
-    return 0;
-}
-
 char *editor_buffer_to_utf8(struct editor_state *state)
 {
     int line_count;
@@ -572,13 +535,6 @@ char *editor_buffer_to_utf8(struct editor_state *state)
 
     text[pos] = '\0';
     return text;
-}
-
-// load_view_from_cursor(): 現在の論理カーソル行から表示用の行データを読み込む。
-// 引数: state=現在の論理カーソル行とファイル読み込み状態。
-// 返り値: なし。
-void load_view_from_cursor(struct editor_state *state){
-    load_string_data(state, state->cursor.line, state->settings_data->load_buffer_lines);
 }
 
 // save_file(): 現在の編集バッファを開いているファイルパスへ書き戻す。
@@ -648,7 +604,7 @@ void load_screen_size(struct editor_state *state){
 // 引数: settings_data=初期化する設定構造体。
 // 返り値: なし。
 void load_default_editor_settings(struct editor_settings *settings_data){
-    settings_data->default_load_line_size       = DEFAULT_LOAD_LINE_SiZE;
+    settings_data->default_load_line_size       = DEFAULT_LOAD_LINE_SIZE;
     settings_data->load_buffer_lines            = LOAD_BUFFER_LINES;
     settings_data->max_line_size                = MAX_LINE_SIZE;
     settings_data->max_lines                    = MAX_LINES;
@@ -661,24 +617,26 @@ void load_default_editor_settings(struct editor_settings *settings_data){
     settings_data->ask_make_file                = DEFAULT_ASK_MAKE_FILE;
     settings_data->file_select_scene_lighting   = DEFAULT_FILE_SELECT_SCENE_LIGHTING;
     settings_data->show_start_menu              = DEFAULT_SHOW_START_MENU;
-    settings_data->lsp.lsp_lanch_startup_editor = DEFAULT_LSP_PROCESS_LANCH_STARTUP_EDITOR;
+    settings_data->lsp.lsp_launch_startup_editor = DEFAULT_LSP_PROCESS_LAUNCH_STARTUP_EDITOR;
     settings_data->lsp.lsp_epoll_timeout_ms     = DEFAULT_EPOLL_TIME_OUT_MS;
     settings_data->lsp.lsp_use                  = DEFAULT_LSP_USE;
 }
 
 // load_custom_editor_settings(): 設定JSONがあれば読み込み、既定値を上書きする。
+// カレントディレクトリ→実行ファイルの隣、の順で探す。
 // 引数: settings_data=上書き対象の設定構造体。
 // 返り値: なし。設定ファイルが無い、または不正な場合は既定値のまま戻る。
 void load_custom_editor_settings(struct editor_settings *settings_data){
-    const char *settings_path = "my_txt_editor_settings.json";
-    const char *settings_abs_path = "/home/yuujirou07/vscode_proj/mywm_proj/my_txt_editor/my_txt_editor_settings.json";
+    const char *settings_name = "my_txt_editor_settings.json";
+    char exe_dir_path[PATH_MAX];
     const char *path = NULL;
 
-    if(access(settings_path, R_OK) == 0){
-        path = settings_path;
+    if(access(settings_name, R_OK) == 0){
+        path = settings_name;
     }
-    else if(access(settings_abs_path, R_OK) == 0){
-        path = settings_abs_path;
+    else if(editor_path_from_exe_dir(exe_dir_path, sizeof(exe_dir_path), settings_name) != NULL &&
+            access(exe_dir_path, R_OK) == 0){
+        path = exe_dir_path;
     }
     else{
         return;
@@ -766,7 +724,7 @@ void load_custom_editor_settings(struct editor_settings *settings_data){
             cJSON_GetObjectItemCaseSensitive(lsp, "epoll_timeout_ms");
 
         if(cJSON_IsBool(launch_startup_editor)){
-            settings_data->lsp.lsp_lanch_startup_editor =
+            settings_data->lsp.lsp_launch_startup_editor =
                 cJSON_IsTrue(launch_startup_editor);
         }
         if(cJSON_IsNumber(epoll_timeout_ms) && epoll_timeout_ms->valueint >= 0){
@@ -778,7 +736,7 @@ void load_custom_editor_settings(struct editor_settings *settings_data){
         settings_data->max_line_size = MAX_LINE_SIZE;
     }
     if(settings_data->default_load_line_size < 1){
-        settings_data->default_load_line_size = DEFAULT_LOAD_LINE_SiZE;
+        settings_data->default_load_line_size = DEFAULT_LOAD_LINE_SIZE;
     }
     if(settings_data->load_buffer_lines < 1){
         settings_data->load_buffer_lines = LOAD_BUFFER_LINES;
@@ -788,21 +746,6 @@ void load_custom_editor_settings(struct editor_settings *settings_data){
     }
 
     cJSON_Delete(json_data);
-}
-
-void make_new_file(){
-
-}
-
-
-void ask_new_file_name(struct pos str_start_pos,int w,int h){
-    //1行だけ描くため高さは使わない
-    (void)h;
-
-    char *ask_str = "write a new file name";
-    int str_len = strlen(ask_str);
-    int ask_str_start_pos_x = str_start_pos.x + ((w - str_len)/2);
-    mvaddstr(str_start_pos.y,ask_str_start_pos_x,ask_str);
 }
 
 void file_select_line_update(struct file_select_line *file_select_line,int line){

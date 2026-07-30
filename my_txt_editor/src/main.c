@@ -18,6 +18,7 @@
 #include "lsp_src/language_server_communication.h"
 #include "txt_editor.h"
 #include"error_log.h"
+#include"path_util.h"
 
 
 static void end_process(struct editor_state *state);
@@ -221,9 +222,14 @@ int main(int argc, char *argv[])
     Start_Menu start_menu = NULL;
     bool open_start_menu = state.settings_data->show_start_menu;
     if(state.settings_data->show_start_menu){
-        handle = dlopen("so_file/start_menu_plug.so", RTLD_NOW);
+        const char *plugin_name = "so_file/start_menu_plug.so";
+        handle = dlopen(plugin_name, RTLD_NOW);
         if(handle == NULL){
-            handle = dlopen("/home/yuujirou07/vscode_proj/mywm_proj/my_txt_editor/so_file/start_menu_plug.so", RTLD_NOW);
+            // カレントディレクトリから見つからないときは実行ファイルの隣を探す
+            char plugin_path[PATH_MAX];
+            if(editor_path_from_exe_dir(plugin_path, sizeof(plugin_path), plugin_name) != NULL){
+                handle = dlopen(plugin_path, RTLD_NOW);
+            }
         }
         if(handle == NULL){
             error_log_write("sry can not open so file :(\n");
@@ -248,7 +254,7 @@ int main(int argc, char *argv[])
     struct lsp_process lsp;
 
     lsp_process_init(&lsp);
-    if(state.settings_data->lsp.lsp_lanch_startup_editor){
+    if(state.settings_data->lsp.lsp_launch_startup_editor){
         
         char root_uri[(PATH_MAX * 3) + sizeof("file://")];
         char *lsp_argv[] = {"clangd", NULL};
@@ -261,7 +267,7 @@ int main(int argc, char *argv[])
         else if(lsp_start_server(&lsp, "clangd", lsp_argv) == -1){
             error_log_write("cant start lsp server :(");
         }
-        else if(lsp_send_initialize(lsp.to_server_fd,lsp.id_data.used_id_history[lsp.id_data.id_strage_counter++], getpid(), root_uri) == -1){
+        else if(lsp_send_initialize(lsp.to_server_fd,lsp.id_data.used_id_history[lsp.id_data.id_storage_counter++], getpid(), root_uri) == -1){
             error_log_write("cant send lsp initialize :(");
             lsp_close_server(&lsp);
 
@@ -434,7 +440,4 @@ static void lsp_handle_message(struct lsp_process *lsp, char *msg)
 }
 void my_mvaddstr(struct pos pos,char * str){
     mvaddstr(pos.y,pos.x,str);
-}
-void my_mvaddch(struct pos pos,char str){
-    mvaddch(pos.y,pos.x,str);
 }

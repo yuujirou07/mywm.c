@@ -127,26 +127,8 @@ void draw_line_numbers(struct editor_state *state) {
     }
 }
 
-// scr_show_line_str(): 上スクロール後に、新しく見えた先頭行の文字列を描き直す。
-// 引数: win=描画先ウィンドウ、state=表示開始行と文字バッファ。
-// 返り値: なし。
-void scr_show_line_str(WINDOW *win,struct editor_state *state){
-    (void)win;
-    draw_editor_buffer_line(state, state->scr.scr_start_num, state->write_area.y_start);
-}
-
-// scr_show_line_str_down(): 下スクロール後に、新しく見えた最終行の文字列を描き直す。
-// 引数: win=描画先ウィンドウ、state=表示範囲と文字バッファ。
-// 返り値: なし。
-void scr_show_line_str_down(WINDOW *win, struct editor_state *state){
-    (void)win;
-    int last_line = state->scr.scr_start_num + state->write_area.h - 1;
-
-    draw_editor_buffer_line(state, last_line, state->write_area.y_end - 1);
-}
-
 // draw_line(): start_posからend_posまで水平線または垂直線を描く。
-// fix_scr_line_damegeでは壊れた罫線だけを検査して補修する。
+// fix_scr_line_damageでは壊れた罫線だけを検査して補修する。
 // 引数: start_pos=開始座標、end_pos=終了座標、win=描画先、mode=全描画か補修か。
 // 返り値: なし。
 void draw_line(struct pos start_pos,struct pos end_pos,WINDOW *win,enum line_mode mode){
@@ -166,7 +148,7 @@ void draw_line(struct pos start_pos,struct pos end_pos,WINDOW *win,enum line_mod
             draw_full_line(start_pos, range, step_x, step_y, line_ch);
             break;
 
-        case fix_scr_line_damege:
+        case fix_scr_line_damage:
             fix_line_damage(start_pos, range, step_x, step_y, line_ch);
             break;
     }
@@ -205,25 +187,6 @@ void request_draw_box(struct editor_state *state,struct box box){
     }
     state->draw_box_data[state->draw_box_count++] = box;
     state->render_flags |= RENDER_BOX;
-}
-
-// draw_all_line(): 現在行が見える位置を基準に、編集バッファから画面全体を再描画する。
-// 引数: win=描画先ウィンドウ、state=現在行・表示開始行・文字バッファ。
-// 返り値: なし。
-void draw_all_line(WINDOW *win,struct editor_state *state){
-    (void)win;
-
-    int start_draw_line_num = (state->cursor.line > state->settings_data->jmp_set_cur_pos)
-        ? state->cursor.line - state->settings_data->jmp_set_cur_pos : 0;
-
-    state->scr.scr_start_num = start_draw_line_num;
-
-    for(int i = start_draw_line_num;i < (start_draw_line_num + state->write_area.h);i++){
-
-        int scr_pos_y = i - start_draw_line_num;
-        draw_editor_buffer_line(state, i, state->write_area.y_start + scr_pos_y);
-    }
-    // カーソルはscr_start_numから導出されるため、ここで置き直す必要はない。
 }
 
 // draw_now_path_name(): ファイルブラウザ上部に現在ディレクトリのパスを表示する。
@@ -331,8 +294,8 @@ void draw_select_dir_scene_color(struct editor_state *state,int num){
        state->file_select_line_data.now_line < 0 || state->file_select_line_data.now_line >= state->dir_num){
         return;
     }
-    int ligthing_line = state->file_browser_area.pos.y + state->file_select_line_data.now_line;
-    mvchgat(ligthing_line,state->file_browser_area.pos.x,state->file_browser_area.w,A_NORMAL,num,NULL);
+    int lighting_line = state->file_browser_area.pos.y + state->file_select_line_data.now_line;
+    mvchgat(lighting_line,state->file_browser_area.pos.x,state->file_browser_area.w,A_NORMAL,num,NULL);
 
     if(state->file_select_line_data.previous_line != state->file_select_line_data.now_line){
         int previous_line = state->file_browser_area.pos.y + state->file_select_line_data.previous_line;
@@ -351,10 +314,10 @@ void show_file_browse(struct editor_state *state,struct box file_browse_box,char
     state->render_flags |= RENDER_FILE_BROWSE;
 }
 
-// set_file_sellect_line(): 選択行を更新し、選択表示の再描画を要求する。
+// set_file_select_line(): 選択行を更新し、選択表示の再描画を要求する。
 // 引数: state=現在の選択状態、line=新しく選択する行番号。
 // 返り値: なし。
-void set_file_sellect_line(struct editor_state *state,int line){
+void set_file_select_line(struct editor_state *state,int line){
     if(state->dir_num <= 0 || state->settings_data->file_select_scene_lighting == false){
         return;
     }

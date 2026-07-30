@@ -120,11 +120,11 @@ void handle_resize(WINDOW *win, struct editor_input_context *ctx){
     ctx->line_end_pos   = (struct pos){state->write_area.x_start-1,state->write_area.y_end};
 
     // 幅が縮むと桁が可視範囲外へ出るため、新しい可視幅で丸め直す。
-    // 行番号は変わらないので、行方向はupdate_sccreen_ratio()側の判定に任せる。
+    // 行番号は変わらないので、行方向はupdate_screen_ratio()側の判定に任せる。
     state->cursor.col = editor_clamp_col(state, state->cursor.line, state->cursor.col);
 
     //各画面の枠やカーソル位置を新しい画面サイズの比率へ合わせ、再描画を要求する
-    update_sccreen_ratio(ctx);
+    update_screen_ratio(ctx);
 }
 
 // handle_backspace(): カーソル左の1文字を削除し、行バッファを左へ詰める。
@@ -428,31 +428,6 @@ int get_line_limit(){
     return limit;
 }
 
-char *uint_to_str(unsigned int value, char *buf)
-{
-    char tmp[10];
-    int i = 0;
-    int j = 0;
-
-    if (value == 0) {
-        buf[0] = '0';
-        buf[1] = '\0';
-        return buf;
-    }
-
-    while (value > 0) {
-        tmp[i++] = '0' + (value % 10);
-        value /= 10;
-    }
-
-    while (i > 0) {
-        buf[j++] = tmp[--i];
-    }
-
-    buf[j] = '\0';
-
-    return buf;
-}
 
 // remove_line_join_str_data(): remove_line_num行目を削除し、内容を直前の行の末尾へ連結する。
 // 連続レイアウトなので削除行のセルは前の行の直後に隣接している。
@@ -644,14 +619,14 @@ void file_browse_screen_mouse_event(WINDOW *win, MEVENT *event, struct editor_st
              // next_lineはハイライトを移す先。端では上下に循環させる。
             int next_line = (state->file_select_line_data.now_line <= 0) 
                 ? state->dir_num - 1:state->file_select_line_data.now_line - 1;
-            set_file_sellect_line(state, next_line);
+            set_file_select_line(state, next_line);
             
         }  
         if(event->bstate & BUTTON5_PRESSED){
             // next_lineはハイライトを移す先。端では上下に循環させる。
             int next_line = (state->file_select_line_data.now_line  >= state->dir_num - 1)
                 ?0:state->file_select_line_data.now_line + 1;
-            set_file_sellect_line(state, next_line);
+            set_file_select_line(state, next_line);
         }      
     }
 }

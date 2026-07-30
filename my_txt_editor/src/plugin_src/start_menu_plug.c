@@ -6,6 +6,7 @@
 #include"error_log.h"
 #include"ascii_art_comb.h"
 #include"start_menu.h"
+#include"path_util.h"
 #include"txt_editor.h"
 
 
@@ -23,7 +24,7 @@ struct option_data{
 void option_fn(char *key,int *return_numk);
 int draw_option(struct pos screen_max_pos,struct pos *option_start_pos,struct ascii_data ascii_data,struct option_data *option_data,int size);
 void draw_ascii_logo(struct pos screen_max_pos,struct ascii_data *ascii_data);
-void draw_varsion(struct pos screen_mid_pos,struct ascii_data ascii_data);
+void draw_version(struct pos screen_mid_pos,struct ascii_data ascii_data);
 static void write_startup_time_log(const struct timespec *start_time, const char *log_path);
 
 
@@ -39,7 +40,7 @@ int draw_start_menu(int screen_max_w,int screen_max_h,struct ascii_data *ascii_d
 
         draw_ascii_logo(screen_mid_pos,&ascii_data);
         int option_count = draw_option(screen_max_pos,&option_start_pos,ascii_data,option_data,option_list_max);
-        draw_varsion(screen_mid_pos,ascii_data);
+        draw_version(screen_mid_pos,ascii_data);
 
 
         for(int i = 0;i < option_count;i++){
@@ -102,7 +103,15 @@ static void write_startup_time_log(const struct timespec *start_time, const char
 
 void draw_ascii_logo(struct pos screen_mid_pos,struct ascii_data *ascii_data){
 
-        FILE *ascii_file = fopen("/home/yuujirou07/vscode_proj/mywm_proj/my_txt_editor/my_txt_editor_settings_folder/ascii_art_img.txt","r");
+        const char *ascii_name = "my_txt_editor_settings_folder/ascii_art_img.txt";
+        // カレントディレクトリ→実行ファイルの隣、の順で探す
+        FILE *ascii_file = fopen(ascii_name,"r");
+        if(ascii_file == NULL){
+                char ascii_path[PATH_MAX];
+                if(editor_path_from_exe_dir(ascii_path, sizeof(ascii_path), ascii_name) != NULL){
+                        ascii_file = fopen(ascii_path,"r");
+                }
+        }
         if(ascii_file == NULL){
                 error_log_write("can not open ascii art file\n");
                 return;
@@ -180,7 +189,7 @@ int draw_option(struct pos screen_max_pos,struct pos *option_start_pos,struct as
         return option_list_counter;
 }
 
-void draw_varsion(struct pos screen_mid_pos,struct ascii_data ascii_data){
+void draw_version(struct pos screen_mid_pos,struct ascii_data ascii_data){
         char var[16];
         snprintf(var,16,"Var%.1f",my_txt_editor_var);
         int len = strlen(var);

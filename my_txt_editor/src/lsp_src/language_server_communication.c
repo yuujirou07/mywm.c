@@ -479,7 +479,7 @@ void initialize_id(struct lsp_send_receve_id_data *id_data){
     for(int i = 0; i < arry_size ;i++){
         id_data->used_id_history[i] = i + 1;
     }
-    id_data->id_strage_counter = 0;
+    id_data->id_storage_counter = 0;
 }
 
 int check_id(char *msg){

@@ -14,7 +14,7 @@
 
 struct lsp_send_receve_id_data{
     int used_id_history[MAX_ID_STRAGE_SIZE];
-    int id_strage_counter;
+    int id_storage_counter;
 };
 
 struct txt_update_data{

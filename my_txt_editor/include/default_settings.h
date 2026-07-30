@@ -8,7 +8,7 @@
 #define LINE_NUMBER_SPACE 4 
 #define INDENT_RANGE 8      //インデントの幅
 #define JMP_SET_CUR_POS 10  
-#define DEFAULT_LOAD_LINE_SiZE 9999//行制限
+#define DEFAULT_LOAD_LINE_SIZE 9999//行制限
 #define LOAD_BUFFER_LINES 100//行の最大文字
 #define SHOW_STATUS_BAR true //ステータスバーの表示
 #define DEFAULT_DRAW_SPLIT_LINE 1//行と書き込み領域の間を線で区切るか
@@ -18,7 +18,7 @@
 #define DEFAULT_PATH_NAME_MAX_SIZE PATH_MAX
 #define DEFAULT_FILE_SELECT_SCENE_LIGHTING true
 #define DEFAULT_SHOW_START_MENU true
-#define DEFAULT_LSP_PROCESS_LANCH_STARTUP_EDITOR true
+#define DEFAULT_LSP_PROCESS_LAUNCH_STARTUP_EDITOR true
 #define DEFAULT_EPOLL_TIME_OUT_MS 16
 #define DEFAULT_LSP_USE true
 
@@ -26,7 +26,7 @@
 
 struct lsp_settings_data{
     bool lsp_use;
-    bool lsp_lanch_startup_editor;
+    bool lsp_launch_startup_editor;
     int lsp_epoll_timeout_ms;
     char lsp_language[32];
 };
