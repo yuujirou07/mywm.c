@@ -1,0 +1,15 @@
+-DWLR_USE_UNSTABLE
+-I/usr/include/pipewire-0.3
+-I/usr/include/spa-0.2
+-I/usr/include/wlroots-0.19
+-I/home/yuujirou07/vscode_proj/raw_file_viewer
+-I/home/yuujirou07/vscode_proj/mywm_proj/mybar_proj
+-I/home/yuujirou07/vscode_proj/mywm_proj/mywm
+-I/home/yuujirou07/vscode_proj/mywm_proj/mywm/input/mouce
+-I/home/yuujirou07/vscode_proj/mywm_proj
+-I/home/yuujirou07/vscode_proj/mywm_proj/build
+-I/usr/include/pixman-1
+-I/usr/include/glib-2.0
+-I/usr/lib/glib-2.0/include
+-I/usr/include/gdk-pixbuf-2.0
+-I/usr/include/libdrm

@@ -99,10 +99,24 @@ executable(
 )
 
 # --- mywm ---
+mywm_inc = include_directories('mywm')
 executable(
     'mywm',
-    ['mywm.c', xdg_shell_c, xdg_shell_h, layer_shell_server_h],
-    include_directories: [xdg_shell_inc, mybar_inc],
+    [
+        'mywm/mywm.c',
+        'mywm/core/server.c',
+        'mywm/input/new_input.c',
+        'mywm/input/keybord/h_key.c',
+        'mywm/input/keybord/modifire_key.c',
+        'mywm/input/mouce/mouce_func.c',
+        'mywm/output/monitor/new_output.c',
+        'mywm/layer/layer_shell.c',
+        'mywm/view/view.c',
+        xdg_shell_c,
+        xdg_shell_h,
+        layer_shell_server_h,
+    ],
+    include_directories: [xdg_shell_inc, mybar_inc, mywm_inc],
     dependencies: [
         wlroots,
         wayland_server,
