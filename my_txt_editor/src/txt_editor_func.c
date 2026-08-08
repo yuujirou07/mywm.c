@@ -30,7 +30,12 @@ void resize_file_browser(struct editor_input_context *ctx){
     if(state->file_browser_box != NULL){
         *state->file_browser_box = box;
     }
-    ctx->file_browse_box = box;
+    ctx->file_browse_screen.box = box;
+    ctx->file_browse_screen.search_box = (struct box){
+        .pos = {box.pos.x, box.pos.y + box.h - 1},
+        .w = box.w,
+        .h = 3,
+    };
 
     //内側は枠の分だけ1セット内へ寄せる
     state->file_browser_area.pos.x = box.pos.x + 1;
@@ -38,30 +43,31 @@ void resize_file_browser(struct editor_input_context *ctx){
     state->file_browser_area.w     = (box.w - 2 > 0) ? box.w - 2 : 0;
     state->file_browser_area.h     = (box.h - 2 > 0) ? box.h - 2 : 0;
 
-    if(state->file_browser_area.h > ctx->dir_name_table_rows){
+    if(state->file_browser_area.h > ctx->file_browse_screen.dir_name_table_rows){
         char (*table)[DIR_ENTRY_NAME_MAX] =
-            realloc(ctx->dir_name_table,
+            realloc(ctx->file_browse_screen.dir_name_table,
                     (size_t)state->file_browser_area.h * sizeof(*table));
         if(table != NULL){
-            ctx->dir_name_table      = table;
-            ctx->dir_name_table_rows = state->file_browser_area.h;
+            ctx->file_browse_screen.dir_name_table      = table;
+            ctx->file_browse_screen.dir_name_table_rows = state->file_browser_area.h;
         }
         else{
             // 確保できないときは既存テーブルに収まる行数まで削って範囲外書き込みを防ぐ
-            state->file_browser_area.h = ctx->dir_name_table_rows;
+            state->file_browser_area.h = ctx->file_browse_screen.dir_name_table_rows;
         }
     }
 
     // 幅が変わっても行の内容は有効なままなので、表示件数が変わる高さの変化のときだけ
     // ディレクトリを走査し直す(ドラッグ中に毎回走らせない)。
     if(state->file_browser_area.h != old_h){
-        load_dir_table(state, ctx->dir_name_table, ctx->dir_name_table_rows,
-                       ctx->path_name);
+        load_dir_table(state, ctx->file_browse_screen.dir_name_table,
+                       ctx->file_browse_screen.dir_name_table_rows,
+                       ctx->file_browse_screen.path_name);
     }
 }
 
 // handle_resize(): 端末サイズ変更後に画面サイズと書き込み領域を更新し、
-// 新しい区切り線の端点をctx->line_start_pos/line_end_posへ書き戻す。
+// 新しい区切り線の端点をctx->edit_screenへ書き戻す。
 // カーソルはstate->cursorが論理位置で持っているため、リサイズで退避・復元する必要はない。
 // 新しい可視幅で桁が溢れる場合だけ丸める。
 // 引数: win=操作対象のncursesウィンドウ、ctx=更新するエディタ状態と区切り線座標を持つ入力context。
@@ -116,8 +122,12 @@ void handle_resize(WINDOW *win, struct editor_input_context *ctx){
     state->write_area.w    = state->write_area.x_end - state->write_area.x_start;
     state->write_area.h    = state->write_area.y_end - state->write_area.y_start;
 
-    ctx->line_start_pos = (struct pos){state->write_area.x_start-1,state->write_area.y_start};
-    ctx->line_end_pos   = (struct pos){state->write_area.x_start-1,state->write_area.y_end};
+    ctx->edit_screen.line_start_pos = (struct pos){
+        state->write_area.x_start-1,state->write_area.y_start
+    };
+    ctx->edit_screen.line_end_pos = (struct pos){
+        state->write_area.x_start-1,state->write_area.y_end
+    };
 
     // 幅が縮むと桁が可視範囲外へ出るため、新しい可視幅で丸め直す。
     // 行番号は変わらないので、行方向はupdate_screen_ratio()側の判定に任せる。

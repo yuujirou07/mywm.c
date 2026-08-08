@@ -138,8 +138,8 @@ struct file_select_line {
 // 画面上の矩形領域。
 struct box {
     struct pos pos; // 左上座標。
-    int w; // 幅。
-    int h; // 高さ。
+    int w; // 枠線を含む幅。
+    int h; // 枠線を含む高さ。
 };
 
 // 文字入力・描画が許可される編集領域。
@@ -261,25 +261,42 @@ static inline void editor_set_screen_state(struct editor_state *state,
 
 
 
+struct edit_screen_context {
+    struct pos line_start_pos;
+    struct pos line_end_pos;
+};
+
+struct file_browse_screen_context {
+    struct box box;
+    struct box search_box;
+    char (*dir_name_table)[DIR_ENTRY_NAME_MAX];
+    int dir_name_table_rows;
+    char *path_name;
+};
+
+struct ask_make_file_mode_context {
+    int screen_center_y;
+    struct pos screen_center_pos;
+};
+
+struct start_menu_screen_context {
+    bool *open;
+    bool has_plugin;
+    Start_Menu plugin;
+    struct ascii_data *ascii_data;
+    const struct timespec *startup_start_time;
+    const char *startup_log_path;
+};
+
 struct editor_input_context {
-    WINDOW *win;                 // 入力処理と描画で使うncursesウィンドウ。
-    MEVENT *mouse_event;         // KEY_MOUSE時にgetmouse()へ渡すイベント格納先。
-    struct editor_state *state;  // 画面状態・カーソル・ファイル情報をまとめた本体状態。
-    struct box file_browse_box;  // ファイルブラウザ外枠の位置とサイズ。
-    char (*dir_name_table)[DIR_ENTRY_NAME_MAX]; // ディレクトリ一覧。1行1エントリの2次元配列。
-    int dir_name_table_rows;     // dir_name_tableの確保済み行数。
-    char *path_name;             // ファイルブラウザが現在開いているディレクトリパス。
-    struct pos line_start_pos;   // 編集領域左の区切り線の開始座標。
-    struct pos line_end_pos;     // 編集領域左の区切り線の終了座標。
-    int screen_center_y;         // 確認ダイアログを縦方向中央寄せするときの基準。
-    struct pos screen_center_pos;// 確認ダイアログを中央寄せするときの基準座標。
-    bool *open_start_menu;       // file browserからstart menuへ戻る要求を書き込む先。
-    bool has_start_menu;         // start menu pluginがロード済みならtrue。
-    Start_Menu start_menu;       // start menu pluginの関数ポインタ。
-    struct ascii_data *ascii_data; // start menuへ渡すASCIIアートデータ。
-    const struct timespec *startup_start_time; // 起動時間計測の開始時刻。
-    const char *startup_log_path; // 起動時間ログの出力先。不要ならNULL。
-    struct lsp_process *lsp_data; // LSPプロセスと通信状態。
+    WINDOW *win;
+    MEVENT *mouse_event;
+    struct editor_state *state;
+    struct lsp_process *lsp_data;
+    struct edit_screen_context edit_screen;
+    struct file_browse_screen_context file_browse_screen;
+    struct ask_make_file_mode_context ask_make_file_mode;
+    struct start_menu_screen_context start_menu_screen;
 };
 
 

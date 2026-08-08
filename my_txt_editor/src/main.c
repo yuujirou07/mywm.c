@@ -298,21 +298,35 @@ int main(int argc, char *argv[])
             .win = win,
             .mouse_event = &mouse_event,
             .state = &state,
-            .file_browse_box = file_browse_box,
-            .dir_name_table = dir_name_table,
-            .dir_name_table_rows = dir_name_table_rows,
-            .path_name = path_name,
-            .line_start_pos = {state.write_area.x_start-1, state.write_area.y_start},
-            .line_end_pos   = {state.write_area.x_start-1, state.write_area.y_end},
-            .screen_center_y = screen_center_y,
-            .screen_center_pos = screen_center_pos,
-            .open_start_menu = &open_start_menu,
-            .has_start_menu = (start_menu != NULL),
-            .start_menu = start_menu,
-            .ascii_data = &ascii_data,
-            .startup_start_time = startup_timer ? &startup_start_time : NULL,
-            .startup_log_path = startup_timer ? startuptime_log_file_path_name : NULL,
             .lsp_data = &lsp,
+            .edit_screen = {
+                .line_start_pos = {state.write_area.x_start-1, state.write_area.y_start},
+                .line_end_pos   = {state.write_area.x_start-1, state.write_area.y_end},
+            },
+            .file_browse_screen = {
+                .box = file_browse_box,
+                .search_box = {
+                    .pos = {file_browse_box.pos.x,
+                            file_browse_box.pos.y + file_browse_box.h - 1},
+                    .w = file_browse_box.w,
+                    .h = 3,
+                },
+                .dir_name_table = dir_name_table,
+                .dir_name_table_rows = dir_name_table_rows,
+                .path_name = path_name,
+            },
+            .ask_make_file_mode = {
+                .screen_center_y = screen_center_y,
+                .screen_center_pos = screen_center_pos,
+            },
+            .start_menu_screen = {
+                .open = &open_start_menu,
+                .has_plugin = (start_menu != NULL),
+                .plugin = start_menu,
+                .ascii_data = &ascii_data,
+                .startup_start_time = startup_timer ? &startup_start_time : NULL,
+                .startup_log_path = startup_timer ? startuptime_log_file_path_name : NULL,
+            },
     };
 
 
@@ -354,7 +368,7 @@ int main(int argc, char *argv[])
 
     }
     // resize_file_browser()がreallocした場合、最新のポインタはcontext側にある。
-    free(input_context.dir_name_table);
+    free(input_context.file_browse_screen.dir_name_table);
     if(handle != NULL)
         dlclose(handle);
     if(epfd >= 0)

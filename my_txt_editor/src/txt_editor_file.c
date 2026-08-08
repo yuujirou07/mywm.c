@@ -77,7 +77,9 @@ void load_file(struct editor_state *state, char (*table)[DIR_ENTRY_NAME_MAX],cha
     // file_nameだけでstat/fopenすると起動時のカレントディレクトリ基準になる。
     // file_browseで移動した先を使うため、path_nameと結合した絶対/現在パスで扱う。
     char path_name_buff[PATH_MAX];
-    int path_len = snprintf(path_name_buff, sizeof(path_name_buff), "%s/%s", path_name, file_name);
+    const char *separator = strcmp(path_name, "/") == 0 ? "" : "/";
+    int path_len = snprintf(path_name_buff, sizeof(path_name_buff), "%s%s%s",
+                            path_name, separator, file_name);
     if(path_len < 0 || (size_t)path_len >= sizeof(path_name_buff)){
         editor_error_screen(state, "path too long");
         select_state->select_state = error;
@@ -112,6 +114,7 @@ void load_file(struct editor_state *state, char (*table)[DIR_ENTRY_NAME_MAX],cha
     state->file_data.now_open_file = file;
     snprintf(state->file_data.now_open_path_name,
          sizeof(state->file_data.now_open_path_name), "%s",path_name_buff);
+
     return;
 }
 

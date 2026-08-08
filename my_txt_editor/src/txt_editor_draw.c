@@ -8,6 +8,9 @@
 #define container_of(ptr, type, member) \
     ((type *)((char *)(ptr) - offsetof(type, member)))
 
+
+static void draw_search_box(struct box search_box,WINDOW *win);
+
 // line_draw_info(): 線の向きから描画範囲・移動量・罫線文字を決める。
 // 引数: start_pos/end_pos=線の端点、range/step_x/step_y/line_ch=計算結果の書き込み先。
 // 返り値: 縦線または横線ならtrue、斜め線ならfalse。
@@ -164,20 +167,24 @@ void draw_box(struct box box, WINDOW *win){
     int w = box.w;
     int h = box.h;
 
+    if(w <= 0 || h <= 0){
+        return;
+    }
+
     struct pos top_left     = {x,     y};
-    struct pos top_right    = {x + w, y};
-    struct pos bottom_left  = {x,     y + h};
-    struct pos bottom_right = {x + w, y + h};
+    struct pos top_right    = {x + w - 1, y};
+    struct pos bottom_left  = {x,         y + h - 1};
+    struct pos bottom_right = {x + w - 1, y + h - 1};
 
     draw_line(top_left,    bottom_left,  win, all_draw_mode);
     draw_line(top_right,   bottom_right, win, all_draw_mode);
     draw_line(top_left,    top_right,    win, all_draw_mode);
     draw_line(bottom_left, bottom_right, win, all_draw_mode);
 
-    mvaddch(y,     x,     ACS_ULCORNER);
-    mvaddch(y,     x + w, ACS_URCORNER);
-    mvaddch(y + h, x,     ACS_LLCORNER);
-    mvaddch(y + h, x + w, ACS_LRCORNER);
+    mvaddch(y,         x,         ACS_ULCORNER);
+    mvaddch(y,         x + w - 1, ACS_URCORNER);
+    mvaddch(y + h - 1, x,         ACS_LLCORNER);
+    mvaddch(y + h - 1, x + w - 1, ACS_LRCORNER);
 
 }
 
@@ -201,12 +208,12 @@ void draw_now_path_name(struct box file_browse_box,char *path_name){
     }
 
     mvaddch(y - 2, x, ACS_ULCORNER);
-    for (int i = 1; i < w; i++)
+    for (int i = 1; i < w - 1; i++)
         mvaddch(y - 2, x + i, ACS_HLINE);
-    mvaddch(y - 2, x + w, ACS_URCORNER);
+    mvaddch(y - 2, x + w - 1, ACS_URCORNER);
 
     mvaddch(y - 1, x, ACS_VLINE);
-    int inner_w = w - 1;
+    int inner_w = w - 2;
     int len = (int)strlen(path_name);
     if (len > inner_w && inner_w > 3) {
         addstr("...");
@@ -222,9 +229,9 @@ void draw_now_path_name(struct box file_browse_box,char *path_name){
     } else {
         mvprintw(y - 1, x + 1, "%-*s", inner_w, path_name);
     }
-    mvaddch(y - 1, x + w, ACS_VLINE);
+    mvaddch(y - 1, x + w - 1, ACS_VLINE);
     mvaddch(y, x, ACS_LTEE);
-    mvaddch(y, x + w, ACS_RTEE);
+    mvaddch(y, x + w - 1, ACS_RTEE);
 }
 
 // draw_edit_screen_base(): 編集画面の固定要素である区切り線と行番号を描画する。
@@ -397,7 +404,7 @@ void draw_file_data(struct editor_state *state){
 // 引数: state=書き込み領域、status_bar=描画するバー領域、win=描画先ウィンドウ。
 // 返り値: なし。
 void draw_status_bar_line(struct editor_state *state,struct box status_bar,WINDOW *win){
-    struct pos end_pos = (struct pos){status_bar.pos.x + status_bar.w,status_bar.pos.y};
+    struct pos end_pos = (struct pos){status_bar.pos.x + status_bar.w - 1,status_bar.pos.y};
     draw_line(status_bar.pos,end_pos,win,all_draw_mode);
     mvaddch(status_bar.pos.y,state->write_area.x_start-1,ACS_TTEE);
 }
@@ -489,8 +496,9 @@ static void draw_make_file_dialog(struct editor_input_context *ctx){
         int box_w = (state->scr.scr_size.x > comment_len + 2)
             ? comment_len + 2 : state->scr.scr_size.x;
         struct box box = {
-            .pos = {ctx->screen_center_pos.x - comment_len / 2,
-                    ctx->screen_center_y - ctx->screen_center_y / 2},
+            .pos = {ctx->ask_make_file_mode.screen_center_pos.x - comment_len / 2,
+                    ctx->ask_make_file_mode.screen_center_y -
+                    ctx->ask_make_file_mode.screen_center_y / 2},
             .w = box_w,
             .h = box_h,
         };
@@ -514,7 +522,7 @@ static void draw_make_file_dialog(struct editor_input_context *ctx){
     struct box input_box = {
         .pos = {write_box.pos.x + 1, write_box.pos.y + write_box.h - 3},
         .w = write_box.w - 2,
-        .h = 2,
+        .h = 3,
     };
     char *label = "write a new file name";
     int label_x = write_box.pos.x + (write_box.w - (int)strlen(label)) / 2;
@@ -558,25 +566,29 @@ void update_screen(struct editor_input_context *ctx){
         }
 
         if(flags & RENDER_LINE){
-            draw_line(ctx->line_start_pos, ctx->line_end_pos, win, all_draw_mode);
+            draw_line(ctx->edit_screen.line_start_pos,
+                      ctx->edit_screen.line_end_pos, win, all_draw_mode);
         }
         if(flags & RENDER_SELECT_DIR_SCENE_COLOR){
             draw_select_dir_scene_color(state,2);
         }
         if(flags & RENDER_EDIT_SCREEN_BASE){
-            draw_edit_screen_base(state, win, ctx->line_start_pos, ctx->line_end_pos);
+            draw_edit_screen_base(state, win, ctx->edit_screen.line_start_pos,
+                                  ctx->edit_screen.line_end_pos);
         }
         if(flags & RENDER_FILE_DATA){
             draw_file_data(state);
         }
         if(flags & RENDER_FILE_BROWSE){
             //ブラウザ画面を後ろのコードが見えないように消す
-            set_clear_box(&state->clear_box_data,ctx->file_browse_box);
+            set_clear_box(&state->clear_box_data,ctx->file_browse_screen.box);
             clear_box(&ctx->state->clear_box_data);
-            draw_box(ctx->file_browse_box, win);
-            draw_now_path_name(ctx->file_browse_box, ctx->path_name);
-            draw_box_inside_dir(state, ctx->dir_name_table);
+            draw_box(ctx->file_browse_screen.box, win);
+            draw_now_path_name(ctx->file_browse_screen.box,
+                               ctx->file_browse_screen.path_name);
+            draw_box_inside_dir(state, ctx->file_browse_screen.dir_name_table);
             draw_select_dir_scene_color(state, 2);
+            draw_search_box(ctx->file_browse_screen.search_box,ctx->win);
         }
         if(flags & RENDER_BOX){
             for(int i = 0; i < state->draw_box_count; i++){
@@ -643,4 +655,11 @@ int set_clear_box(struct clear_box_data *clear_box_data,struct box box){
 
         clear_box_data->clear_box[clear_box_data->clear_box_counter++] = box;
         return 0;
+}
+
+static void draw_search_box(struct box search_box,WINDOW *win){
+    if(win == NULL)return;
+    draw_box(search_box,win);
+    mvaddch(search_box.pos.y,search_box.pos.x,ACS_LTEE);
+    mvaddch(search_box.pos.y,search_box.pos.x + search_box.w -1,ACS_RTEE);
 }

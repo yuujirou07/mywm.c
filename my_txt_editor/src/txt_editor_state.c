@@ -69,10 +69,8 @@ static bool handle_edit_screen_input(struct editor_input_context *ctx, int input
         return true;
     }
     if (ch == CTRL('f')) {
-        ctx->state->is_cur_show = false;
-        curs_set(0);
         editor_set_screen_state(state, file_browse_screen);
-        show_file_browse(state, ctx->file_browse_box, ctx->dir_name_table, ctx->path_name, win);
+        state->render_flags |= RENDER_FILE_BROWSE;
         return true;
     }
     else if(ch == CTRL('s')){
@@ -81,7 +79,8 @@ static bool handle_edit_screen_input(struct editor_input_context *ctx, int input
         flushinp();
         if(editor_get_screen_state(state) == ask_make_file_mode){
             show_make_file_prompt(win, state, &state->ask_make_file_box,
-                                  ctx->screen_center_y, ctx->screen_center_pos);
+                                  ctx->ask_make_file_mode.screen_center_y,
+                                  ctx->ask_make_file_mode.screen_center_pos);
         }
         return true;
     }
@@ -145,10 +144,10 @@ static bool handle_file_browse_screen_input(struct editor_input_context *ctx, wi
 
 
 
-    if (ch == 'q') {
+    if (ch == '\t') {
         if(editor_get_screen_state(state) == start_menu_file_browse_screen){
             editor_set_screen_state(state, start_menu_screen);
-            *ctx->open_start_menu = true;
+            *ctx->start_menu_screen.open = true;
         }
         else{
             editor_set_screen_state(state, edit_screen);
@@ -160,6 +159,8 @@ static bool handle_file_browse_screen_input(struct editor_input_context *ctx, wi
         restore_edit_screen(state);
         return true;
     }
+
+
 
     if(state->settings_data->file_select_scene_lighting){
         if(ch == KEY_MOUSE){
@@ -176,31 +177,52 @@ static bool handle_file_browse_screen_input(struct editor_input_context *ctx, wi
                 ?0:state->file_select_line_data.now_line  + 1;
             set_file_select_line(state, next_line);
         }
+
+        //親ディレクトリに戻る
+        if(ch == 'h'){
+
+            char *child_dir = NULL;
+            if((child_dir = strrchr(ctx->file_browse_screen.path_name,'/'))==NULL){
+                return 1;
+            }
+            if(strchr(ctx->file_browse_screen.path_name,'/') == child_dir){
+                *(child_dir+1) = '\0';
+            }
+            else{
+                *(child_dir) = '\0';
+            }
+
+            load_dir_table(state, ctx->file_browse_screen.dir_name_table,
+                           ctx->file_browse_screen.dir_name_table_rows,
+                           ctx->file_browse_screen.path_name);
+            state->render_flags |= RENDER_FILE_BROWSE;
+        }
         
     } 
-    if (ch == KEY_ENTER || ch == '\n' || ch == '\r' || ch == ' ') {
+    if (ch == KEY_ENTER || ch == '\n' || ch == '\r' || ch == ' ' || ch == 'l') {
         // select_state.select_nameが空でなければディレクトリ選択、空ならファイル読み込み完了側を見る。
         struct file_browse_select_state select_state;
-        load_file(state, ctx->dir_name_table, ctx->path_name, &select_state);
+        load_file(state, ctx->file_browse_screen.dir_name_table,
+                  ctx->file_browse_screen.path_name, &select_state);
 
-        if(select_state.select_name[0] != '\0'){
-            
+        if(select_state.select_name[0] != '\0' && select_state.select_state == folder){
             char now_path_name[PATH_MAX] = {0};
-            size_t path_len = strlen(ctx->path_name);
-            size_t select_name_len = strlen(select_state.select_name);
-
-            if (path_len + 1 + select_name_len + 1 > sizeof(now_path_name)) {
+            const char *path_name = ctx->file_browse_screen.path_name;
+            const char *separator = strcmp(path_name, "/") == 0 ? "" : "/";
+            int path_len = snprintf(now_path_name, sizeof(now_path_name), "%s%s%s",
+                                    path_name, separator, select_state.select_name);
+            if(path_len < 0 || (size_t)path_len >= sizeof(now_path_name)){
                 editor_error_screen(state, "path too long");
                 return true;
             }
-
-            memcpy(now_path_name, ctx->path_name, path_len);
-            now_path_name[path_len] = '/';
-            memcpy(now_path_name + path_len + 1, select_state.select_name, select_name_len + 1);
-            memcpy(ctx->path_name, now_path_name, path_len + 1 + select_name_len + 1);
+            memcpy(ctx->file_browse_screen.path_name, now_path_name, (size_t)path_len + 1);
             
-            load_dir_table(state, ctx->dir_name_table, ctx->dir_name_table_rows, ctx->path_name);
-            show_file_browse(state, ctx->file_browse_box, ctx->dir_name_table, ctx->path_name, win);
+            load_dir_table(state, ctx->file_browse_screen.dir_name_table,
+                           ctx->file_browse_screen.dir_name_table_rows,
+                           ctx->file_browse_screen.path_name);
+            show_file_browse(state, ctx->file_browse_screen.box,
+                             ctx->file_browse_screen.dir_name_table,
+                             ctx->file_browse_screen.path_name, win);
         }
         if(state->file_data.now_open_file != NULL && select_state.select_state == file){
             load_screen_size(state);
@@ -511,7 +533,7 @@ static bool handle_start_menu_input(struct editor_input_context *ctx, wint_t ch)
     struct editor_state *state = ctx->state;
     WINDOW *win = ctx->win;
 
-    if(ctx->start_menu == NULL){
+    if(ctx->start_menu_screen.plugin == NULL){
         restore_edit_screen(state);
         return true;
     }
@@ -519,12 +541,13 @@ static bool handle_start_menu_input(struct editor_input_context *ctx, wint_t ch)
     state->is_cur_show = false;
     curs_set(0);
     clear();
-    int start_menu_result = ctx->start_menu(state->scr.scr_size.x,state->scr.scr_size.y,
-                                            ctx->ascii_data,
-                                            ctx->startup_start_time,
-                                            ctx->startup_log_path);
+    int start_menu_result = ctx->start_menu_screen.plugin(
+                                            state->scr.scr_size.x,state->scr.scr_size.y,
+                                            ctx->start_menu_screen.ascii_data,
+                                            ctx->start_menu_screen.startup_start_time,
+                                            ctx->start_menu_screen.startup_log_path);
     flushinp();
-    *ctx->open_start_menu = false;
+    *ctx->start_menu_screen.open = false;
 
     if(start_menu_result == resize_request){
         handle_resize(win, ctx);
@@ -539,13 +562,16 @@ static bool handle_start_menu_input(struct editor_input_context *ctx, wint_t ch)
         curs_set(0);
 
         struct box clear_area;
-        int logo_h = ctx->ascii_data != NULL ? ctx->ascii_data->h : 0;
+        int logo_h = ctx->start_menu_screen.ascii_data != NULL
+            ? ctx->start_menu_screen.ascii_data->h : 0;
         clear_area.pos = (struct pos){0,logo_h};
         clear_area.w = state->scr.scr_size.x - 1;
         clear_area.h = state->scr.scr_size.y - logo_h;
 
         request_clear_box(state,clear_area);
-        show_file_browse(state,ctx->file_browse_box,ctx->dir_name_table,ctx->path_name,win);
+        show_file_browse(state, ctx->file_browse_screen.box,
+                         ctx->file_browse_screen.dir_name_table,
+                         ctx->file_browse_screen.path_name, win);
         refresh();
         return true;
     }
@@ -568,15 +594,14 @@ static bool handle_start_menu_input(struct editor_input_context *ctx, wint_t ch)
     return true;
 }
 // browser_clear_area(): ファイルブラウザが実際に塗っていた範囲を返す。
-// 枠の右端(w+1桁目)と、枠の上に出るパス表示2行分を含める。
+// 枠線を含む外枠と、枠の上に出るパス表示2行分を含める。
 // 引数: browse_box=消去したいファイルブラウザ外枠。
 // 返り値: 消去対象の矩形。
 static struct box browser_clear_area(struct box browse_box){
     struct box area = browse_box;
 
     area.pos.y = (browse_box.pos.y >= 2) ? browse_box.pos.y - 2 : 0;
-    area.h     = browse_box.h + (browse_box.pos.y - area.pos.y) + 1;
-    area.w     = browse_box.w + 1;
+    area.h     = browse_box.h + (browse_box.pos.y - area.pos.y);
     return area;
 }
 
@@ -620,8 +645,11 @@ int update_screen_ratio(struct editor_input_context *ctx){
     struct editor_state *state = ctx->state;
 
     // 中央寄せ基準はどの画面でも使うため先に更新する
-    ctx->screen_center_y   = state->scr.scr_size.y / 2;
-    ctx->screen_center_pos = (struct pos){state->scr.scr_size.x / 2, ctx->screen_center_y};
+    ctx->ask_make_file_mode.screen_center_y = state->scr.scr_size.y / 2;
+    ctx->ask_make_file_mode.screen_center_pos = (struct pos){
+        state->scr.scr_size.x / 2,
+        ctx->ask_make_file_mode.screen_center_y
+    };
 
     enum now_screen_state now_state = editor_get_screen_state(ctx->state);
     switch(now_state){
@@ -629,15 +657,15 @@ int update_screen_ratio(struct editor_input_context *ctx){
         case start_menu_file_browse_screen: {
             // 枠を作り直すと縮小時に古い枠が残る。start menu側のロゴを消さないよう、
             // clear()ではなく「前の枠+上のパス表示2行」の範囲だけを消去予約する。
-            struct box old_box = ctx->file_browse_box;
+            struct box old_box = ctx->file_browse_screen.box;
 
             resize_file_browser(ctx);
 
             struct box clear_area = clamp_box_to_screen(state, browser_clear_area(old_box));
-            bool is_box_moved = (old_box.pos.x != ctx->file_browse_box.pos.x ||
-                                 old_box.pos.y != ctx->file_browse_box.pos.y ||
-                                 old_box.w     != ctx->file_browse_box.w ||
-                                 old_box.h     != ctx->file_browse_box.h);
+            bool is_box_moved = (old_box.pos.x != ctx->file_browse_screen.box.pos.x ||
+                                 old_box.pos.y != ctx->file_browse_screen.box.pos.y ||
+                                 old_box.w     != ctx->file_browse_screen.box.w ||
+                                 old_box.h     != ctx->file_browse_screen.box.h);
 
             if(is_box_moved && clear_area.w > 0 && clear_area.h > 0){
                 request_clear_box(state, clear_area);
@@ -649,7 +677,8 @@ int update_screen_ratio(struct editor_input_context *ctx){
             // 確認枠と入力欄は新しい中央基準で置き直す。下の編集画面ごと描き直す。
             clear();
             show_make_file_prompt(ctx->win, state, &state->ask_make_file_box,
-                                  ctx->screen_center_y, ctx->screen_center_pos);
+                                  ctx->ask_make_file_mode.screen_center_y,
+                                  ctx->ask_make_file_mode.screen_center_pos);
             state->render_flags |= RENDER_EDIT_SCREEN_BASE;
             state->render_flags |= RENDER_FILE_DATA;
             state->render_flags |= RENDER_MAKE_FILE;
