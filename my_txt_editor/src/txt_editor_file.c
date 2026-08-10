@@ -10,6 +10,7 @@
 #include <unistd.h>
 #include <wchar.h>
 #include <sys/stat.h>
+#include<dirent.h>
 #include"cjson/cJSON.h"
 #include "txt_editor.h"
 #include "json_read.h"
@@ -55,66 +56,84 @@ void load_dir_table(struct editor_state *state,char (*table)[DIR_ENTRY_NAME_MAX]
 // load_file(): ファイルブラウザで選択中の名前を取り出し、Cファイルなら読み込み用に開く。
 // 開けない場合や対象外の拡張子ならエラー画面へ切り替える。
 // 引数: state=選択行とファイル状態、table=1行1エントリのファイル名一覧、path_name=現在ディレクトリ、select_state=選択結果の書き込み先。
+// tableがNULLの場合はpath_nameを完成済みのパスとして直接読み込む。
 // 返り値: なし。成功時はstate->file_data.now_open_fileにFILE*を保存する。
 void load_file(struct editor_state *state, char (*table)[DIR_ENTRY_NAME_MAX],char *path_name,struct file_browse_select_state *select_state){
     select_state->select_name[0] = '\0';
-    if(table == NULL ||
-       state->file_select_line_data.now_line < 0 || state->file_select_line_data.now_line  >= state->dir_num){
-        select_state->select_state = error;
+    select_state->select_state = error;
+    if(path_name == NULL || path_name[0] == '\0'){
         return;
     }
 
-    // 1行がそのままNUL終端のエントリ名。表示用に切り詰めた文字列ではないので、
-    // 長い名前でもここで得られるのは実際のファイル名になる。
-    char *file_name = table[state->file_select_line_data.now_line];
-
-    if(file_name[0] == '\0'){
-        editor_error_screen(state, "can not load file");
-        select_state->select_state = error;
-        return;
-    }
-
-    // file_nameだけでstat/fopenすると起動時のカレントディレクトリ基準になる。
-    // file_browseで移動した先を使うため、path_nameと結合した絶対/現在パスで扱う。
     char path_name_buff[PATH_MAX];
-    const char *separator = strcmp(path_name, "/") == 0 ? "" : "/";
-    int path_len = snprintf(path_name_buff, sizeof(path_name_buff), "%s%s%s",
-                            path_name, separator, file_name);
-    if(path_len < 0 || (size_t)path_len >= sizeof(path_name_buff)){
-        editor_error_screen(state, "path too long");
-        select_state->select_state = error;
-        return;
-    }
-
-    char *ptr = strchr(file_name,'.');
-    if(ptr == NULL){
-        //ディレクトリ判定
-        struct stat st;
-        if (stat(path_name_buff, &st) != 0) {
-            editor_error_screen(state,"is this file ? i think this is not file maybe");
+    char *file_name;
+    if(table == NULL){
+        int path_len = snprintf(path_name_buff,sizeof(path_name_buff),"%s",path_name);
+        if(path_len < 0 || (size_t)path_len >= sizeof(path_name_buff)){
+            editor_error_screen(state,"path too long");
             select_state->select_state = error;
             return;
         }
-        if(S_ISDIR(st.st_mode)){
-            select_state->select_state =  folder;
-            snprintf(select_state->select_name, sizeof(select_state->select_name), "%s", file_name);
+        file_name = strrchr(path_name_buff,'/');
+        file_name = (file_name != NULL) ? file_name + 1 : path_name_buff;
+    }
+    else{
+        if(state->file_select_line_data.now_line < 0 ||
+           state->file_select_line_data.now_line >= state->dir_num){
+            select_state->select_state = error;
             return;
         }
-        editor_error_screen(state,"is this file ? i think this is not file maybe");
+
+        // 1行がそのままNUL終端のエントリ名。表示用に切り詰めた文字列ではないので、
+        // 長い名前でもここで得られるのは実際のファイル名になる。
+        file_name = table[state->file_select_line_data.now_line];
+
+        const char *separator = strcmp(path_name, "/") == 0 ? "" : "/";
+        int path_len = snprintf(path_name_buff, sizeof(path_name_buff), "%s%s%s",
+                                path_name, separator, file_name);
+        if(path_len < 0 || (size_t)path_len >= sizeof(path_name_buff)){
+            editor_error_screen(state, "path too long");
+            select_state->select_state = error;
+            return;
+        }
+    }
+    
+    struct stat st;
+    if(stat(path_name_buff,&st) != 0){
+        editor_error_screen(state,"can not find file");
         return;
     }
-    select_state->select_state = file;
-    // 危険: 既にnow_open_fileがある場合も閉じずに上書きするため、
-    // ファイルを開き直すたびにFILEとファイルディスクリプタが残る。
-    FILE *file = fopen(path_name_buff,"r");
-    if(file == NULL){
+    if(S_ISDIR(st.st_mode)){
+        size_t file_name_size = strlen(file_name);
+        if(file_name_size >= sizeof(select_state->select_name)){
+            editor_error_screen(state,"file name too long");
+            return;
+        }
+        select_state->select_state = folder;
+        memcpy(select_state->select_name,file_name,file_name_size + 1);
+        return;
+    }
+    if(!S_ISREG(st.st_mode)){
+        editor_error_screen(state,"is not regular file");
+        return;
+    }
+
+    FILE *now_file = fopen(path_name_buff,"r");
+    if(now_file == NULL){
         editor_error_screen(state,"can not open file");
         return;
     }
-    state->file_data.now_open_file = file;
+    select_state->select_state = file;
+    //初回はNULLなので除外する
+    if(state->file_data.now_open_file != NULL){
+        fclose(state->file_data.now_open_file);
+    }
+
+    state->file_data.now_open_file = now_file;
     snprintf(state->file_data.now_open_path_name,
          sizeof(state->file_data.now_open_path_name), "%s",path_name_buff);
-
+    
+    
     return;
 }
 
@@ -754,4 +773,130 @@ void load_custom_editor_settings(struct editor_settings *settings_data){
 void file_select_line_update(struct file_select_line *file_select_line,int line){
     file_select_line->previous_line = file_select_line->now_line;
     file_select_line->now_line = line;
+}
+
+
+void input_mode_tmp_path(char *path,enum flags flags){
+    if(path == NULL)return;
+    static char *tmp_path = NULL;
+
+    if(flags == set){
+        tmp_path = path;
+    }
+    else if(flags == get){
+        path = tmp_path;
+    }
+}
+
+
+const wchar_t *now_open_path_name(struct dir_table *path,enum flags flags){
+    if((path == NULL || path->path_name == NULL) && flags == set)return NULL;
+
+    static struct dir_table now_open_path;
+    static wchar_t wide_path[PATH_MAX];
+    if(flags == set){
+        size_t path_size = strlen(path->path_name);
+        const char *name_end = path->path_name + path_size;
+        while(name_end > path->path_name + 1 && name_end[-1] == '/'){
+            name_end--;
+        }
+        const char *name_start = name_end;
+        while(name_start > path->path_name && name_start[-1] != '/'){
+            name_start--;
+        }
+        size_t name_size = (size_t)(name_end - name_start);
+        if(name_size == 0 && path->path_name[0] == '/'){
+            name_start = path->path_name;
+            name_size = 1;
+        }
+
+        char *saved_path = malloc(path_size + 1);
+        char *saved_name = malloc(name_size + 1);
+        if(saved_path == NULL || saved_name == NULL){
+            free(saved_path);
+            free(saved_name);
+            return NULL;
+        }
+        memcpy(saved_path,path->path_name,path_size + 1);
+        memcpy(saved_name,name_start,name_size);
+        saved_name[name_size] = '\0';
+
+        free(now_open_path.path_name);
+        free(now_open_path.d_name);
+        now_open_path.path_name = saved_path;
+        now_open_path.d_name = saved_name;
+        now_open_path.d_type = DT_UNKNOWN;
+
+        struct stat st;
+        if(stat(now_open_path.path_name,&st) == 0){
+            if(S_ISDIR(st.st_mode)){
+                now_open_path.d_type = DT_DIR;
+            }
+            else if(S_ISREG(st.st_mode)){
+                now_open_path.d_type = DT_REG;
+            }
+        }
+    }
+    else if(flags == get && path != NULL){
+        path->path_name = now_open_path.path_name;
+        path->d_name = now_open_path.d_name;
+        path->d_type = now_open_path.d_type;
+    }
+
+    const char *path_name = (now_open_path.path_name != NULL)
+        ? now_open_path.path_name : "";
+    size_t converted = mbstowcs(wide_path,path_name,PATH_MAX - 1);
+    if(converted == (size_t)-1){
+        wide_path[0] = L'\0';
+        return NULL;
+    }
+    wide_path[converted] = L'\0';
+    return wide_path;
+}
+
+int check_dir_mem(struct dir_table *dir_table,int size){
+    if(dir_table == NULL || size <= 0)return -1;
+    memset(dir_table,0,(size_t)size * sizeof(*dir_table));
+
+    const wchar_t *path = now_open_path_name(NULL,get);
+    char char_path[PATH_MAX];
+    size_t converted = wcstombs(char_path,path,sizeof(char_path) - 1);
+    if(converted == (size_t)-1)return -1;
+    char_path[converted] = '\0';
+
+    char dir_name[PATH_MAX] = ".";
+    const char *now_dir_mem_name = char_path;
+    char *last_slash = strrchr(char_path,'/');
+    if(last_slash != NULL){
+        now_dir_mem_name = last_slash + 1;
+        if(last_slash == char_path){
+            dir_name[0] = '/';
+            dir_name[1] = '\0';
+        }
+        else{
+            size_t dir_name_size = (size_t)(last_slash - char_path);
+            memcpy(dir_name,char_path,dir_name_size);
+            dir_name[dir_name_size] = '\0';
+        }
+    }
+
+    DIR *dir = opendir(dir_name);
+    if(dir == NULL)return -1;
+    struct dirent *dirent_dir = NULL;
+    
+    int dir_mem_counter = 0;
+    while((dirent_dir = readdir(dir)) != NULL){
+        if(dir_mem_counter >= size)break;
+        size_t dirent_name_size = strlen(dirent_dir->d_name);
+        if(strstr(dirent_dir->d_name,now_dir_mem_name) != NULL){
+            char *name = malloc(dirent_name_size + 1);
+            if(name == NULL)break;
+            memcpy(name,dirent_dir->d_name,dirent_name_size + 1);
+            dir_table[dir_mem_counter].d_name = name;
+            dir_table[dir_mem_counter].d_type = dirent_dir->d_type;
+            dir_mem_counter++;
+        }
+    }
+    closedir(dir);
+    return dir_mem_counter;
 }

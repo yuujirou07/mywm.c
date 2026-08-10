@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
 #include <wctype.h>
 #include "txt_editor.h"
 
@@ -639,4 +640,21 @@ void file_browse_screen_mouse_event(WINDOW *win, MEVENT *event, struct editor_st
             set_file_select_line(state, next_line);
         }      
     }
+}
+
+
+void set_file_browse_path_input_mode(struct file_browse_screen_context *file_browser_screen_context,bool flag){
+    if(file_browser_screen_context == NULL)return;
+    file_browser_screen_context->path_input_mode = flag;
+}
+
+bool get_file_browse_path_input_mode(struct file_browse_screen_context *file_browser_screen_context){
+    if(file_browser_screen_context == NULL)return 0;
+    return file_browser_screen_context->path_input_mode;
+}
+
+void my_cur_set(struct editor_state *state,bool set){
+    if(state == NULL)return;
+    state->is_cur_show = set;
+    curs_set(set);
 }

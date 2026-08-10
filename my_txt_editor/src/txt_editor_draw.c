@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stddef.h>
+#include <wchar.h>
 #include "txt_editor.h"
 
 #define container_of(ptr, type, member) \
@@ -256,6 +257,7 @@ void draw_edit_screen_base(struct editor_state *state,WINDOW *win,struct pos sta
 // 引数: state=ファイルブラウザ領域、table=固定幅で詰めたディレクトリエントリ一覧。
 // 返り値: なし。
 void draw_box_inside_dir(struct editor_state *state,char (*table)[DIR_ENTRY_NAME_MAX]){
+    
     if(table == NULL || state->file_browser_area.w <= 0 || state->file_browser_area.h <= 0){return;}
     char clear[state->file_browser_area.w + 1];
     memset(clear,' ',state->file_browser_area.w * sizeof(char));
@@ -294,6 +296,9 @@ void draw_box_inside_dir(struct editor_state *state,char (*table)[DIR_ENTRY_NAME
 // 引数: state=選択行と表示領域、num=適用するncursesカラーペア番号。
 // 返り値: なし。
 void draw_select_dir_scene_color(struct editor_state *state,int num){
+    int cur_x;
+    int cur_y;
+    getyx(stdscr,cur_y,cur_x);
     if(state->settings_data->file_select_scene_lighting == false)
         return;
 
@@ -308,6 +313,7 @@ void draw_select_dir_scene_color(struct editor_state *state,int num){
         int previous_line = state->file_browser_area.pos.y + state->file_select_line_data.previous_line;
         mvchgat(previous_line,state->file_browser_area.pos.x,state->file_browser_area.w,A_NORMAL,1,NULL);
     }
+    move(cur_y,cur_x);
 }
 
 // show_file_browse(): ファイルブラウザ全体の再描画を要求する。
@@ -334,7 +340,7 @@ void set_file_select_line(struct editor_state *state,int line){
     if(line >= state->dir_num){
         line = state->dir_num - 1;
     }
-
+    
     file_select_line_update(&state->file_select_line_data, line);
     state->render_flags |= RENDER_SELECT_DIR_SCENE_COLOR;
 }
@@ -588,7 +594,35 @@ void update_screen(struct editor_input_context *ctx){
                                ctx->file_browse_screen.path_name);
             draw_box_inside_dir(state, ctx->file_browse_screen.dir_name_table);
             draw_select_dir_scene_color(state, 2);
-            draw_search_box(ctx->file_browse_screen.search_box,ctx->win);
+
+            //サーチボックスの描画とサーチボックス内のパス描画
+            if(get_file_browse_path_input_mode(&ctx->file_browse_screen)){
+                my_cur_set(state,true);
+
+                struct box search_box = ctx->file_browse_screen.search_box;
+                draw_search_box(search_box,ctx->win);
+
+                int cur_line = search_box.pos.y + 1;
+                int col = search_box.pos.x + 1;
+
+                const wchar_t *path = now_open_path_name(NULL,get);
+                size_t path_len = wcslen(path);
+
+                //マウスカーソル分を確保するため両サイド合わせて-3する
+                size_t show_path_size = search_box.w - 3;
+                const wchar_t *str_start_ptr = path;
+                if(path_len > show_path_size){
+                    str_start_ptr = &path[path_len - show_path_size];
+                }
+                else{
+                    char clear_area[show_path_size - path_len+1];
+                    memset(clear_area,' ',sizeof(char)*(show_path_size - path_len));
+                    clear_area[show_path_size - path_len] = '\0';
+                    mvaddnstr(cur_line,col + path_len,clear_area,show_path_size);
+                }
+                
+                mvaddwstr(cur_line,col,str_start_ptr);
+            }
         }
         if(flags & RENDER_BOX){
             for(int i = 0; i < state->draw_box_count; i++){
@@ -610,7 +644,9 @@ void update_screen(struct editor_input_context *ctx){
     // 注意: ファイル名入力欄やジャンプ入力欄は自前でmove()するが、この行が
     // 後から上書きするため編集位置に戻る(改修前と同じ挙動)。入力欄側へ
     // カーソルを渡したくなったら、変更するのはこの1箇所だけでよい。
-    editor_sync_cursor(state);
+    if(editor_get_screen_state(state) == edit_screen)
+        editor_sync_cursor(state);
+
     ctx->state->render_flags = RENDER_NONE;
     refresh();
 }
@@ -624,7 +660,6 @@ void request_clear_box(struct editor_state *state, struct box box){
     state->clear_box_data.clear_box[(*counter)++] = box; 
     state->render_flags |= RENDER_CLEAR_BOX;
 }
-
 
 
 void draw_line_jump(struct editor_state *state){

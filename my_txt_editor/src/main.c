@@ -8,6 +8,7 @@
 #include <dirent.h>
 #include<dlfcn.h>
 #include<time.h>
+#include <wchar.h>
 #include <wctype.h>
 #include<dirent.h>
 #include <libgen.h>
@@ -137,10 +138,13 @@ int main(int argc, char *argv[])
     mousemask(ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION, NULL);  
     
     char path_name[PATH_MAX];
+
     if(getcwd(path_name, sizeof(path_name)) == NULL) {
         perror("getcwd");
         return 1;
     }
+    struct dir_table now_path = {.path_name = path_name};
+    if(now_open_path_name(&now_path,set) == NULL)return 0;
     state.file_data.description_line_end = 0;
     state.write_area.x_start = state.settings_data->line_number_space + 1;
     state.write_area.y_start = 0;
@@ -314,6 +318,7 @@ int main(int argc, char *argv[])
                 .dir_name_table = dir_name_table,
                 .dir_name_table_rows = dir_name_table_rows,
                 .path_name = path_name,
+                .path_input_mode = false,
             },
             .ask_make_file_mode = {
                 .screen_center_y = screen_center_y,
@@ -351,7 +356,6 @@ int main(int argc, char *argv[])
         update_screen(&input_context);
         wint_t ch = 0;
         int input_result;
-
         input_result = get_wch(&ch);
 
         if (input_result == ERR)
