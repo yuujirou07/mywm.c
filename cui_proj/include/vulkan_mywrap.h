@@ -17,93 +17,93 @@ struct term_context;
 
 struct windata
 {
-    bool *dirty;
-    int master_fd;
-    int *nfds;
-    struct term_context *ctx;
+	bool *dirty;
+	int master_fd;
+	int *nfds;
+	struct term_context *ctx;
 
-    struct
-    {
-        struct
-        {
-            int start_idx;
-            int end_idx;
-            bool start_idx_block;
-        }copy_cell_idx_data;
-        
-        int copy_cell_counter;
+	struct
+	{
+		struct
+		{
+			int start_idx;
+			int end_idx;
+			bool start_idx_block;
+		}copy_cell_idx_data;
 
-        struct term_cell **copy_cell; 
+		int copy_cell_counter;
 
-        Color *copy_cell_orig_bg;   
-        Color *copy_cell_orig_fg;  
+		struct term_cell **copy_cell;
 
-        bool start_copy;
-        
+		Color *copy_cell_orig_bg;
+		Color *copy_cell_orig_fg;
 
-    }copy_data;
+		bool start_copy;
 
-    struct 
-    {
-        bool write_buff_overflow;
-        struct epoll_event *epoll;
-        struct epoll_event *master_fd_ev_poll;
-        const char *clip_bord_chr;
-        int *epoll_fd_list;
-        int cftl_c_sig_counter;
-    } kbd_data;
 
-    struct
-    {
-        bool mouce_button_left_down;
+	}copy_data;
 
-    }mouce_data;
+	struct
+	{
+		bool write_buff_overflow;
+		struct epoll_event *epoll;
+		struct epoll_event *master_fd_ev_poll;
+		const char *clip_bord_chr;
+		int *epoll_fd_list;
+		int cftl_c_sig_counter;
+	} kbd_data;
 
-    GLFWwindow* window;
-    VkInstance instance;
-    VkPhysicalDevice* devices;
-    VkDevice device;
-    VkQueue graphicsQueue;
-    VkSurfaceKHR surface;
-    VkExtent2D chosenExtent;
-    VkExtent2D renderExtent;
+	struct
+	{
+		bool mouce_button_left_down;
 
-    VkSwapchainKHR swapchain;
-    uint32_t swapchainImageCount;
-    VkImage* swapchainImages;
-    VkImageView* swapchainImageViews;
+	}mouce_data;
 
-    VkCommandPool commandPool;
-    VkCommandBuffer* commandBuffers;
+	GLFWwindow* window;
+	VkInstance instance;
+	VkPhysicalDevice* devices;
+	VkDevice device;
+	VkQueue graphicsQueue;
+	VkSurfaceKHR surface;
+	VkExtent2D chosenExtent;
+	VkExtent2D renderExtent;
 
-    VkSemaphore imageAvailableSemaphore;
-    VkSemaphore renderFinishedSemaphore;
-    VkFence inFlightFence;
+	VkSwapchainKHR swapchain;
+	uint32_t swapchainImageCount;
+	VkImage* swapchainImages;
+	VkImageView* swapchainImageViews;
 
-    // CPU→GPU 転送用ステージングバッファ（スクリーン全体のBGRA画像）
-    VkBuffer stagingBuffer;
-    VkDeviceMemory stagingMemory;
-    void *stagingMapped;
-    uint32_t stagingSize;
-    VkPhysicalDeviceMemoryProperties memProps;
-    VkFormat swapchainImageFormat;
+	VkCommandPool commandPool;
+	VkCommandBuffer* commandBuffers;
 
-    // フォント情報（レンダリングに使用）
-    struct glyph_data glyphs[128];
-    int font_ascender;
+	VkSemaphore imageAvailableSemaphore;
+	VkSemaphore renderFinishedSemaphore;
+	VkFence inFlightFence;
 
-    // フォントサイズが変更され、term_sizeの再計算が必要なことを示すフラグ
-    bool font_size_changed;
+	// CPU→GPU 転送用ステージングバッファ（スクリーン全体のBGRA画像）
+	VkBuffer stagingBuffer;
+	VkDeviceMemory stagingMemory;
+	void *stagingMapped;
+	uint32_t stagingSize;
+	VkPhysicalDeviceMemoryProperties memProps;
+	VkFormat swapchainImageFormat;
 
-    // 差分描画用：直前フレームのセル内容・カーソル位置・画面構成
-    struct term_cell *prev_term_cell;
-    struct pos prev_term_size;
-    int prev_cur_col;
-    int prev_cur_row;
-    int prev_cell_w;
-    int prev_cell_h;
-    int prev_sw;
-    int prev_sh;
+	// フォント情報（レンダリングに使用）
+	struct glyph_data glyphs[128];
+	int font_ascender;
+
+	// フォントサイズが変更され、term_sizeの再計算が必要なことを示すフラグ
+	bool font_size_changed;
+
+	// 差分描画用：直前フレームのセル内容・カーソル位置・画面構成
+	struct term_cell *prev_term_cell;
+	struct pos prev_term_size;
+	int prev_cur_col;
+	int prev_cur_row;
+	int prev_cell_w;
+	int prev_cell_h;
+	int prev_sw;
+	int prev_sh;
 };
 
 

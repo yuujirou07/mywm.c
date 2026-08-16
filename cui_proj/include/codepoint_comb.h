@@ -19,7 +19,7 @@ bool is_box_codepoint(int cp);
 // is_box_codepoint(cp) が true のコードポイントのみ処理し、描画したら true を返す。
 // buf は BGRA32 のスクリーン全体バッファ、(base_x,base_y) はセル左上のピクセル座標。
 bool draw_box_codepoint(uint8_t *buf, int sw, int sh,
-                        int base_x, int base_y, int cell_w, int cell_h,
-                        int cp, Color fg);
+						int base_x, int base_y, int cell_w, int cell_h,
+						int cp, Color fg);
 
 #endif
