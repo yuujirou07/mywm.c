@@ -172,6 +172,7 @@ struct term_context {
 	struct pos term_size;
 	struct pos temp_cur_pos;
 	struct pos home_pos;
+	pid_t bash_pid;
 
 	//DECSTBM - DEC Set Top and Bottom Margins
 	// コマンドで使う構造体

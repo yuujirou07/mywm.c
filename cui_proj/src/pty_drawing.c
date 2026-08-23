@@ -1,3 +1,4 @@
+#include <sys/wait.h>
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 #include <GL/gl.h>
@@ -405,9 +406,12 @@ int window_init(struct windata* wd) {
 	VkFenceCreateInfo fenceInfo = {0};
 	fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
 	fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-	vkCreateSemaphore(wd->device, &semInfo, NULL, &wd->imageAvailableSemaphore);
-	vkCreateSemaphore(wd->device, &semInfo, NULL, &wd->renderFinishedSemaphore);
-	vkCreateFence(wd->device, &fenceInfo, NULL, &wd->inFlightFence);
+	if (vkCreateSemaphore(wd->device, &semInfo, NULL, &wd->imageAvailableSemaphore) != VK_SUCCESS ||
+		vkCreateSemaphore(wd->device, &semInfo, NULL, &wd->renderFinishedSemaphore) != VK_SUCCESS ||
+		vkCreateFence(wd->device, &fenceInfo, NULL, &wd->inFlightFence) != VK_SUCCESS) {
+		fprintf(stderr, "同期オブジェクトの作成に失敗しました。\n");
+		return -1;
+	}
 
 	// StagingBufferはCPUとGPUの受け渡し場所。
 	// 1ピクセル4バイト(B、G、R、A)で画面全体を保持する。
@@ -448,8 +452,14 @@ int window_init(struct windata* wd) {
 	}
 	// 確保した保存領域をBufferへ結び付け、CPUアドレスへmapする。
 	// 以後stagingMappedへ通常の配列のように書くと、GPU転送元の内容が変わる。
-	vkBindBufferMemory(wd->device, wd->stagingBuffer, wd->stagingMemory, 0);
-	vkMapMemory(wd->device, wd->stagingMemory, 0, wd->stagingSize, 0, &wd->stagingMapped);
+	if (vkBindBufferMemory(wd->device, wd->stagingBuffer, wd->stagingMemory, 0) != VK_SUCCESS) {
+		fprintf(stderr, "ステージングバッファのバインドに失敗しました。\n");
+		return -1;
+	}
+	if (vkMapMemory(wd->device, wd->stagingMemory, 0, wd->stagingSize, 0, &wd->stagingMapped) != VK_SUCCESS) {
+		fprintf(stderr, "ステージングメモリのmapに失敗しました。\n");
+		return -1;
+	}
 	printf("ステージングバッファの作成に成功しました! (%u bytes)\n", wd->stagingSize);
 
 	return 0;
@@ -507,28 +517,57 @@ int recreate_swapchain(struct windata *wd)
 		vkUnmapMemory(wd->device, wd->stagingMemory);
 		vkDestroyBuffer(wd->device, wd->stagingBuffer, NULL);
 		vkFreeMemory(wd->device, wd->stagingMemory, NULL);
+		// 失敗時はこの関数がそれ以降の処理を諦めて-1を返す前提で、
+		// 呼び出し側(render_cells_to_bufferやフレーム描画)がstagingMapped==NULLを見て
+		// 無効なハンドルを使わずに済むよう、失敗しうる区間は常にNULL/VK_NULL_HANDLEにしておく。
+		wd->stagingBuffer = VK_NULL_HANDLE;
+		wd->stagingMemory = VK_NULL_HANDLE;
 		wd->stagingMapped = NULL;
+		wd->stagingSize = 0;
 
-		wd->stagingSize = newStagingSize;
 		VkBufferCreateInfo bufInfo = {0};
 		bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-		bufInfo.size  = wd->stagingSize;
+		bufInfo.size  = newStagingSize;
 		bufInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 		bufInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-		vkCreateBuffer(wd->device, &bufInfo, NULL, &wd->stagingBuffer);
+		if (vkCreateBuffer(wd->device, &bufInfo, NULL, &wd->stagingBuffer) != VK_SUCCESS) {
+			fprintf(stderr, "ステージングバッファの再作成に失敗しました。\n");
+			wd->stagingBuffer = VK_NULL_HANDLE;
+			return -1;
+		}
 
 		VkMemoryRequirements memReq;
 		vkGetBufferMemoryRequirements(wd->device, wd->stagingBuffer, &memReq);
 		uint32_t memTypeIdx = find_memory_type(&wd->memProps, memReq.memoryTypeBits,
 			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+		if (memTypeIdx == UINT32_MAX) {
+			fprintf(stderr, "適切なメモリタイプが見つかりませんでした。\n");
+			vkDestroyBuffer(wd->device, wd->stagingBuffer, NULL);
+			wd->stagingBuffer = VK_NULL_HANDLE;
+			return -1;
+		}
 
 		VkMemoryAllocateInfo memAllocInfo = {0};
 		memAllocInfo.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
 		memAllocInfo.allocationSize  = memReq.size;
 		memAllocInfo.memoryTypeIndex = memTypeIdx;
-		vkAllocateMemory(wd->device, &memAllocInfo, NULL, &wd->stagingMemory);
-		vkBindBufferMemory(wd->device, wd->stagingBuffer, wd->stagingMemory, 0);
-		vkMapMemory(wd->device, wd->stagingMemory, 0, wd->stagingSize, 0, &wd->stagingMapped);
+		if (vkAllocateMemory(wd->device, &memAllocInfo, NULL, &wd->stagingMemory) != VK_SUCCESS) {
+			fprintf(stderr, "ステージングメモリの再確保に失敗しました。\n");
+			vkDestroyBuffer(wd->device, wd->stagingBuffer, NULL);
+			wd->stagingBuffer = VK_NULL_HANDLE;
+			return -1;
+		}
+		if (vkBindBufferMemory(wd->device, wd->stagingBuffer, wd->stagingMemory, 0) != VK_SUCCESS ||
+			vkMapMemory(wd->device, wd->stagingMemory, 0, newStagingSize, 0, &wd->stagingMapped) != VK_SUCCESS) {
+			fprintf(stderr, "ステージングバッファのバインド/mapに失敗しました。\n");
+			vkDestroyBuffer(wd->device, wd->stagingBuffer, NULL);
+			vkFreeMemory(wd->device, wd->stagingMemory, NULL);
+			wd->stagingBuffer = VK_NULL_HANDLE;
+			wd->stagingMemory = VK_NULL_HANDLE;
+			wd->stagingMapped = NULL;
+			return -1;
+		}
+		wd->stagingSize = newStagingSize;
 	}
 
 	// ここから下はwindow_init()と同じ要領で、新サイズのswapchainと
@@ -654,7 +693,12 @@ void destroy_data(struct windata* wd)
 	glfwDestroyWindow(wd->window);
 	glfwTerminate();
 	free(wd->devices);
-
+	int status = 0;
+	pid_t result = 
+		waitpid(wd->ctx->bash_pid,&status,WUNTRACED);
+	if(result > 0){
+        printf("子プロセス %d が終了しました。\n", result);
+    }
 	exit(1);
 }
 

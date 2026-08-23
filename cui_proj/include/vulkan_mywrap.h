@@ -95,6 +95,12 @@ struct windata
 	// フォントサイズが変更され、term_sizeの再計算が必要なことを示すフラグ
 	bool font_size_changed;
 
+	// window_size_callback()から設定される、ウィンドウサイズ変更通知。
+	// メインループは毎フレームglfwGetFramebufferSize()で問い合わせる代わりに
+	// このフラグを見るだけで済む(イベント駆動)。
+	bool resize_event_pending;
+	double resize_event_time;
+
 	// 差分描画用：直前フレームのセル内容・カーソル位置・画面構成
 	struct term_cell *prev_term_cell;
 	struct pos prev_term_size;
@@ -113,5 +119,6 @@ void destroy_data(struct windata* wd);
 void set_window(struct windata* wd);
 void render_cells_to_buffer(struct windata *wd);
 void change_font_size(struct windata *wd, int delta);
+void window_size_callback(GLFWwindow* window, int width, int height);
 
 #endif

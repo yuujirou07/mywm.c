@@ -80,6 +80,7 @@ int main(void) {
 	}
 	glfwSetWindowUserPointer(wd.window,&wd);
 	set_kbd_callback(&wd);
+	glfwSetWindowSizeCallback(wd.window, window_size_callback);
 
 	init_mouse(&wd);
 
@@ -119,6 +120,7 @@ int main(void) {
 	}
 
 	pid_t pid_id = fork();
+	
 	if (pid_id == -1) {
 		error_log_write("fork faild code 186");
 		exit(EXIT_FAILURE);
@@ -307,10 +309,6 @@ int main(void) {
 		}
 	}
 
-	int old_width = 0;
-	int old_height = 0;
-
-	glfwGetFramebufferSize(wd.window, &old_width, &old_height);
 	// glfwGetWindowMonitor()はフルスクリーン時しかモニタを返さず、ウィンドウモードでは
 	// 必ずNULLになるためプライマリモニタから取得する。
 	// リフレッシュレートが取れない環境(Wayland等でrefreshRate=0)でも起動は続行し、
@@ -327,55 +325,46 @@ int main(void) {
 	// ===== メインループ =====
 	// 1フレームごとに「入力イベント処理」→「PTY出力の読み取り・パース」→
 	// 「カーソル点滅/リサイズ処理」→「必要なら再描画」を行う。
-	while (!glfwWindowShouldClose(wd.window))
-	{
-		glfwPollEvents();
+	while (!glfwWindowShouldClose(wd.window)){
+		glfwWaitEventsTimeout(wait_time_ms / 1000.0);
 
 		// master_fd(bashの出力)が読めるかどうかを最大1msだけ待って確認する
 		nfds = epoll_wait(epoll_fd_list,epoll_list,EVENT_WAIT_MAX,wait_time_ms);
 
-		if(nfds>0)
-		{
-			for(int i=0;i<nfds;i++)
-			{
+		while(nfds>0){
+			for(int i=0;i<nfds;i++){
 				//もしfdがmaster_fdだったら
 				if(((struct clientinfo *)epoll_list[i].data.ptr)->fd!=master_fd)
 					continue;
-
 				if((epoll_list[i].events & EPOLLIN)==false)
 					break;
 
 				// 読めるデータがなくなる(EAGAIN)まで読み続け、その都度パースする
-				while (1)
-				{
+				while (1){
 					buf_size = read(master_fd, read_buf, term_cell_alloc_size - 1);
-					if (buf_size > 0)
-					{
+					if (buf_size > 0){
 						// bashからの出力(プレーンテキスト+ANSIエスケープシーケンス)を
 						// 解析し、term_cell配列(画面の文字セル)とカーソル状態を更新する
 						bash_str_parse(read_buf, buf_size, &ctx);
 						dirty = true;
 					}
-					else if(buf_size==0)
-						break;
-
-					else if (buf_size == -1)
-					{
+					else if(buf_size==0)break;
+					else if (buf_size == -1){
 						// -1 の場合は errno を確認する
-						if (errno == EAGAIN || errno == EWOULDBLOCK)
-						{
+						if (errno == EAGAIN || errno == EWOULDBLOCK){
 							// 受信バッファが空になったので、正常に読み取りループを抜ける
 							break;
-						} else
-						{
+						}
+						else{
 							// それ以外の本当のエラー
 							error_log_write("read error");
 							return 1;
 						}
 					}
 				}
-				break;
 			}
+			// 直後に追加された出力があれば同じフレームで処理する
+			nfds = epoll_wait(epoll_fd_list,epoll_list,EVENT_WAIT_MAX,wait_time_ms);
 		}
 
 		////マウスカーソル点滅再開処理//////
@@ -400,15 +389,16 @@ int main(void) {
 		CUR_RIGTHING_END_POINT:{};
 
 
-		int current_width;
-		int current_height;
-		glfwGetFramebufferSize(wd.window, &current_width, &current_height);
 
-		if (current_width != old_width || current_height != old_height || wd.font_size_changed) {
+		// リサイズ検知はwindow_size_callback()からのイベント通知(resize_event_pending)に
+		// 一本化し、毎フレームのglfwGetFramebufferSize()による問い合わせ(ポーリング)は行わない。
+		if (wd.resize_event_pending || wd.font_size_changed) {
+			wd.resize_event_pending = false;
 			last_resize_time = glfwGetTime();
-			old_width = current_width;
-			old_height = current_height;
 			wd.font_size_changed = false;
+
+			int current_width, current_height;
+			glfwGetFramebufferSize(wd.window, &current_width, &current_height);
 
 			// ドラッグ中も滑らかに追従させるため、軽い処理だけ毎フレーム行う:
 			// スワップチェーンを即再作成してrenderExtentを新サイズへ合わせ、再描画フラグを立てる。
@@ -426,6 +416,8 @@ int main(void) {
 		// 処理内容: ① スワップチェーン再作成 → ② 新しいterm_size計算 →
 		// ③ pty(TIOCSWINSZ)とbashプロセス(SIGWINCH)へサイズ変更を通知 →
 		// ④ 必要ならセルバッファを拡張 → ⑤ reflow_terminal_textで表示内容を再配置
+
+
 		if(last_resize_time > 0 && glfwGetTime() - last_resize_time > 0.1){
 			old_term_cell_size = term_size;
 
@@ -533,6 +525,13 @@ int main(void) {
 		// term_cell配列の内容をCPU側でピクセル(BGRA)に変換してステージング
 		// バッファへ書き込み、それをスワップチェーン画像にコピーして提示する。
 		if(dirty){
+			// recreate_swapchain()がステージングバッファの再確保に失敗していると
+			// stagingMappedがNULLのままになり、commandBuffersも解放済みで無効。
+			// 次のリサイズで再作成が成功するまで、このフレームの描画は諦めて待つ。
+			if (wd.stagingMapped == NULL) {
+				goto FRAME_END;
+			}
+
 			// 前のフレームが完全に終わるのをCPU側で待つ
 				// 第2引数の TRUE は「フェンスがシグナル状態になるまで待つ」という意味
 				// 最後の引数はタイムアウト時間（UINT64_MAX = 無限に待つ）
@@ -669,7 +668,7 @@ int main(void) {
 
 
 	free_otf_glyphs(wd.glyphs);
-
+	
 	// ctxのクリーンアップ
 	if (ctx.term_cell) free(ctx.term_cell);
 	if (ctx.alt_term_cell) free(ctx.alt_term_cell);
@@ -685,6 +684,7 @@ int main(void) {
 	free(master_fd_ev_poll.data.ptr);
 	close(master_fd);
 	glfwDestroyWindow(wd.window);
+	destroy_data(&wd);
 	glfwTerminate();
 	close(epoll_fd_list);
 }
@@ -1033,5 +1033,21 @@ void cur_allow_write(enum cur_allow_mode mode, int master_fd, int key_code) {
 	write(master_fd, seq, strlen(seq));
 }
 
+
+
+// window_size_callback(): GLFWがウィンドウサイズ変更を検知した時に呼ばれる。
+// メインループ側は毎フレームglfwGetFramebufferSize()を問い合わせる代わりに
+// wd->resize_event_pendingを見るだけで済むようにする(ポーリング→イベント駆動)。
+// 実際のピクセルサイズ(HiDPI考慮)はイベント発生時にメインループ側で
+// glfwGetFramebufferSize()を使って取得するため、ここではwidth/heightは使わない。
+void window_size_callback(GLFWwindow* window, int width, int height){
+	(void)width;
+	(void)height;
+	struct windata *wd = (struct windata *)glfwGetWindowUserPointer(window);
+	if (wd == NULL) return;
+
+	wd->resize_event_pending = true;
+	wd->resize_event_time = glfwGetTime();
+}
 
 
