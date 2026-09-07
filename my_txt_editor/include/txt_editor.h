@@ -23,9 +23,7 @@
 #define box_retention_max 64
 #define resize_request 5
 #define screen_state_log_storage 256
-// ファイルブラウザ一覧の1行分のバイト数。dir_name_tableは
-// char[行数][DIR_ENTRY_NAME_MAX]の2次元配列として扱う。
-// 行幅を画面幅から切り離すため、NAME_MAX+終端に収まる固定長にする。
+// ファイルブラウザ一覧に保持する名前の最大長。
 #define DIR_ENTRY_NAME_MAX 256
 // 各行へ前もって足しておく余白列数。ここに収まる入力は再配置なしで処理できる。
 #define EDITOR_LINE_COL_SLACK 16
@@ -132,6 +130,11 @@ struct dir_table{
     unsigned char d_type;
 };
 
+struct dir_entry {
+    char name[DIR_ENTRY_NAME_MAX];
+    unsigned char d_type;
+};
+
 // ncurses画面上の座標。
 struct pos {
     int x; // 横方向の座標。
@@ -140,15 +143,16 @@ struct pos {
 
 // ファイルブラウザで反転表示する行の現在値と直前値。
 struct file_select_line {
-    int now_line; // 現在選択中の行。
+    int now_line; // 表示領域の先頭から数えた選択行。
     int previous_line; // 前回選択していた行。
+    int now_logical_line; // dir_name_tableの表示開始添字。
 };
 
 // 画面上の矩形領域。
 struct box {
     struct pos pos; // 左上座標。
-    int w; // 枠線を含む幅。
-    int h; // 枠線を含む高さ。
+    int w; 
+    int h; 
 };
 
 // 文字入力・描画が許可される編集領域。
@@ -227,7 +231,6 @@ struct editor_state {
     struct file_select_line    file_select_line_data; // ファイルブラウザの選択行状態。
     struct clear_box_data      clear_box_data; // 次回消去する矩形領域。
     struct screen_state_log    screen_log; // 現在状態を末尾に持つ画面遷移履歴。
-    int                        dir_num; // ファイルブラウザに表示中の項目数。
     int                        render_flags; // update_screen()へ渡す再描画要求。
     int                        draw_box_count; // draw_box_dataに積まれている数。
     bool                       is_cur_show; // カーソル表示中ならtrue。
@@ -281,9 +284,11 @@ struct edit_screen_context {
 struct file_browse_screen_context {
     struct box box;
     struct box search_box;
-    char (*dir_name_table)[DIR_ENTRY_NAME_MAX];
-    int dir_name_table_rows;
-    char *path_name;
+    struct dir_entry *dir_name_table;
+    int dir_name_table_rows; // dir_name_tableの確保済み行数。
+    int dir_num; // ディレクトリ内の全エントリ数。
+    int dir_name_table_num; // 現在の表示範囲にある有効な行数。
+    char *path_name; // ファイルブラウザが現在表示しているディレクトリ。
     bool path_input_mode;
 };
 
@@ -494,13 +499,13 @@ void draw_now_path_name(struct box file_browse_box,char *path_name);
 // 編集画面の区切り線と行番号を描画する。
 void draw_edit_screen_base(struct editor_state *state,WINDOW *win,struct pos start_pos,struct pos end_pos);
 // ファイルブラウザの内側へディレクトリエントリ一覧を描画する。
-void draw_box_inside_dir(struct editor_state *state,char (*table)[DIR_ENTRY_NAME_MAX]);
+void draw_box_inside_dir(struct editor_state *state,struct dir_entry *table);
 // ファイルブラウザの選択行へ指定した色を適用する。
-void draw_select_dir_scene_color(struct editor_state *state,int num);
+void draw_select_dir_scene_color(struct editor_state *state,int dir_num,int num);
 // ファイルブラウザ全体の再描画を要求する。
-void show_file_browse(struct editor_state *state,struct box file_browse_box,char (*dir_name_table)[DIR_ENTRY_NAME_MAX],char *path_name,WINDOW *win);
+void show_file_browse(struct editor_state *state,struct box file_browse_box,struct dir_entry *dir_name_table,char *path_name,WINDOW *win);
 // ファイルブラウザの選択行を変更し、再描画を要求する。
-void set_file_select_line(struct editor_state *state,int line);
+void set_file_select_line(struct editor_state *state,int dir_num,int line);
 // 論理カーソル行を移動し、必要なら画面をスクロールする。
 void editor_screen_move_line(struct editor_state *state,WINDOW *win,int num);
 // エラー画面へ切り替え、指定したエラーメッセージを表示する。
@@ -526,9 +531,9 @@ int set_clear_box(struct clear_box_data *clear_box_data,struct box box);
 
 // txt_editor_file.c
 // 指定ディレクトリの項目をファイルブラウザ用テーブルへ読み込む。
-void load_dir_table(struct editor_state *state,char (*table)[DIR_ENTRY_NAME_MAX],int table_rows,char *path_name);
+int load_dir_table(struct editor_state *state,struct dir_entry **table,int *table_rows,char *path_name,int start_num,int *dir_num,int *table_num);
 // ファイルブラウザで選択したファイルを開き、選択結果を保存する。
-void load_file(struct editor_state *state,char (*table)[DIR_ENTRY_NAME_MAX],char *path_name,struct file_browse_select_state *select_state);
+void load_file(struct editor_state *state,struct dir_entry *table,int table_num,char *path_name,struct file_browse_select_state *select_state);
 // 編集バッファと行情報配列を指定容量で確保する。
 bool editor_alloc_text_buffer(struct editor_state *state, int line_count, long total_capacity);
 // 編集バッファと行情報配列をまとめて解放する。
@@ -574,7 +579,7 @@ void handle_tab(WINDOW *win, struct editor_state *state);
 // 入力されたワイド文字をカーソル位置へ挿入する。
 void handle_char_input(WINDOW *win, wchar_t ch, struct editor_state *state);
 // マウスホイールによる上下スクロールを処理する。
-void handle_mouse(WINDOW *win, MEVENT *event, struct editor_state *state);
+void handle_mouse(WINDOW *win, MEVENT *event, struct editor_state *state,int dir_num);
 // 矢印キーによるカーソル移動と画面スクロールを処理する。
 void handle_input_allow(WINDOW *win, wchar_t ch, struct editor_state *state);
 // カーソル移動と行ジャンプで使用する行番号上限を設定する。
@@ -588,7 +593,7 @@ int make_new_line_space(struct editor_state *state,long make_space_line_num);
 // 編集画面でのマウス操作を処理する。
 void editor_screen_mouse_event(WINDOW *win, MEVENT *event, struct editor_state *state);
 // ファイルブラウザでのマウス操作を処理する。
-void file_browse_screen_mouse_event(WINDOW *win, MEVENT *event, struct editor_state *state);
+void file_browse_screen_mouse_event(WINDOW *win, MEVENT *event, struct editor_state *state,int dir_num);
 // ファイルブラウザのパス入力モードを設定する。
 void set_file_browse_path_input_mode(struct file_browse_screen_context *file_browser_screen_context,bool flag);
 // ファイルブラウザがパス入力モードかを返す。
@@ -612,5 +617,10 @@ void my_mvaddstr(struct pos pos,char *str);
 enum select_state get_path_state(const char *path);
 int now_input_path_open(struct editor_state *state,struct editor_input_context *ctx);
 void restore_edit_screen(struct editor_state *state);
+
+int file_browser_show_mem_start_num(int start_num,enum flags flags);
+
+int get_icon(struct editor_state *state,struct dir_entry entry,wchar_t *icon);
+
 
 #endif

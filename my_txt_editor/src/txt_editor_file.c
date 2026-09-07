@@ -21,48 +21,68 @@
 #include"default_settings.h"
 
 // load_dir_table(): path_name配下のディレクトリエントリを読み込み、
-// ファイルブラウザ表示用の2次元テーブルへ1行1エントリで詰める。
-// 行幅は画面幅と無関係な固定長なので、ここではエントリ名をそのまま保持する。
+// ファイルブラウザ表示用テーブルへ全エントリの名前と種別を保持する。
 // 表示幅に合わせた切り詰めはdraw_box_inside_dir()が描画時に行う。
-// 引数: state=ファイルブラウザ領域と件数、table=書き込み先テーブル、table_rows=tableの確保済み行数、path_name=読むディレクトリ。
-// 返り値: なし。無効なテーブル・行数は何もせず、opendir()失敗時はプロセスを終了する。
-void load_dir_table(struct editor_state *state,char (*table)[DIR_ENTRY_NAME_MAX],int table_rows,char *path_name){
-    state->dir_num = 0;
-    if(table == NULL || table_rows <= 0 || state->file_browser_area.h <= 0){
-        return;
+// tableは必要ならrealloc()で拡張し、更新後のポインタと行数を呼び出し元へ書き戻す。
+// start_numは表示開始添字で、dir_numには全件数、table_numには画面に表示できる件数を返す。
+// 返り値: 成功時は0。引数不正、ディレクトリを開けない、再確保失敗時は-1。
+int load_dir_table(struct editor_state *state,struct dir_entry **table,int *table_rows,char *path_name,int start_num,int *dir_num,int *table_num){
+    if(table == NULL || table_rows == NULL || dir_num == NULL || table_num == NULL)return -1;
+    *dir_num = 0;
+    *table_num = 0;
+    if(*table == NULL || *table_rows <= 0 || state->file_browser_area.h <= 0){
+        return -1;
     }
+    if(start_num < 0)start_num = 0;
 
     // 読み込む件数はテーブルの行数と表示できる行数の小さい方まで。
-    int row_limit = (state->file_browser_area.h < table_rows)
-        ? state->file_browser_area.h : table_rows;
-
     DIR *dir = opendir(path_name);
     if(!dir){
         perror("/");
-        exit(EXIT_FAILURE);
+        return -1;
     }
     struct dirent *ent;
-    int draw_dir_name_line_counter = 0;
-    memset(table,0,(size_t)table_rows * sizeof(*table));
-    while ((ent = readdir(dir)) && draw_dir_name_line_counter < row_limit) {
-        snprintf(table[draw_dir_name_line_counter], DIR_ENTRY_NAME_MAX, "%s", ent->d_name);
-        draw_dir_name_line_counter++;
+    int entry_num = 0;
+    while(readdir(dir) != NULL){
+        entry_num++;
+    }
+    if(entry_num > *table_rows){
+        struct dir_entry *new_table = realloc(*table,
+            (size_t)entry_num * sizeof(*new_table));
+        if(new_table == NULL){
+            closedir(dir);
+            return -1;
+        }
+        *table = new_table;
+        *table_rows = entry_num;
+    }
+    rewinddir(dir);
+    memset(*table,0,(size_t)*table_rows * sizeof(**table));
+    entry_num = 0;
+    while ((ent = readdir(dir))) {
+        snprintf((*table)[entry_num].name,
+                 sizeof((*table)[entry_num].name), "%s", ent->d_name);
+        (*table)[entry_num].d_type = ent->d_type;
+        entry_num++;
     }
     closedir(dir);
-    state->dir_num = draw_dir_name_line_counter;
+    *dir_num = entry_num;
+    *table_num = (start_num < entry_num) ? entry_num - start_num : 0;
+    if(*table_num > state->file_browser_area.h)*table_num = state->file_browser_area.h;
 
-    if(state->dir_num > 0 && state->file_select_line_data.now_line >= state->dir_num){
-        file_select_line_update(&state->file_select_line_data,state->dir_num - 1);
+    if(*table_num > 0 && state->file_select_line_data.now_line >= *table_num){
+        file_select_line_update(&state->file_select_line_data,*table_num - 1);
     }
+    return 0;
 }
 
 // load_file(): ファイルブラウザで選択中の名前を取り出し、通常ファイルなら読み込み用に開く。
 // 開けない場合や対象外の拡張子ならエラー画面へ切り替える。
-// 引数: state=選択行とファイル状態、table=1行1エントリのファイル名一覧、path_name=現在ディレクトリ、select_state=選択結果の書き込み先。
+// 引数: state=選択行とファイル状態、table=ディレクトリエントリ一覧、path_name=現在ディレクトリ、select_state=選択結果の書き込み先。
 // tableがNULLの場合はpath_nameを完成済みのパスとして直接読み込む。
 // 返り値: なし。結果はselect_stateに格納する。
 // 所有権: ファイル選択成功時は先に開いていたFILE*を閉じ、新しいFILE*をstateが保持する。
-void load_file(struct editor_state *state, char (*table)[DIR_ENTRY_NAME_MAX],char *path_name,struct file_browse_select_state *select_state){
+void load_file(struct editor_state *state,struct dir_entry *table,int table_num,char *path_name,struct file_browse_select_state *select_state){
     select_state->select_name[0] = '\0';
     select_state->select_state = error;
     if(path_name == NULL || path_name[0] == '\0'){
@@ -83,14 +103,14 @@ void load_file(struct editor_state *state, char (*table)[DIR_ENTRY_NAME_MAX],cha
     }
     else{
         if(state->file_select_line_data.now_line < 0 ||
-           state->file_select_line_data.now_line >= state->dir_num){
+           state->file_select_line_data.now_line >= table_num){
             select_state->select_state = error;
             return;
         }
 
-        // 1行がそのままNUL終端のエントリ名。表示用に切り詰めた文字列ではないので、
-        // 長い名前でもここで得られるのは実際のファイル名になる。
-        file_name = table[state->file_select_line_data.now_line];
+        int entry_index = state->file_select_line_data.now_logical_line +
+            state->file_select_line_data.now_line;
+        file_name = table[entry_index].name;
 
         const char *separator = strcmp(path_name, "/") == 0 ? "" : "/";
         int path_len = snprintf(path_name_buff, sizeof(path_name_buff), "%s%s%s",
@@ -654,6 +674,7 @@ void load_default_editor_settings(struct editor_settings *settings_data){
     settings_data->lsp.lsp_launch_startup_editor = DEFAULT_LSP_PROCESS_LAUNCH_STARTUP_EDITOR;
     settings_data->lsp.lsp_epoll_timeout_ms     = DEFAULT_EPOLL_TIME_OUT_MS;
     settings_data->lsp.lsp_use                  = DEFAULT_LSP_USE;
+    settings_data->use_icon                     = DEFAULT_USE_ICON;
 }
 
 // load_custom_editor_settings(): 設定JSONがあれば読み込み、既定値を上書きする。
@@ -748,6 +769,11 @@ void load_custom_editor_settings(struct editor_settings *settings_data){
     cJSON *show_start_menu = cJSON_GetObjectItemCaseSensitive(json_data, "show_start_menu");
     if(cJSON_IsBool(show_start_menu)){
         settings_data->show_start_menu = cJSON_IsTrue(show_start_menu);
+    }
+
+    cJSON *use_icon = cJSON_GetObjectItemCaseSensitive(json_data, "use_icon");
+    if(cJSON_IsBool(use_icon)){
+        settings_data->use_icon = cJSON_IsTrue(use_icon);
     }
 
     cJSON *lsp = cJSON_GetObjectItemCaseSensitive(json_data, "lsp");
@@ -957,7 +983,30 @@ int now_input_path_open(struct editor_state *state,struct editor_input_context *
     if(dir_info.path_name == NULL)return true;
 
     struct file_browse_select_state select_state;
-    load_file(state,NULL,dir_info.path_name,&select_state);
+    load_file(state,NULL,0,dir_info.path_name,&select_state);
+    if(select_state.select_state == unkown || select_state.select_state == error)return -1;
+    if(select_state.select_state == folder){
+        char *last_slash_ptr = strrchr(dir_info.path_name,'/');
+        if(last_slash_ptr == NULL){
+
+        }
+        else{
+            *(last_slash_ptr + 1) = '\0';
+            load_dir_table(
+                state,
+                &ctx->file_browse_screen.dir_name_table,
+                &ctx->file_browse_screen.dir_name_table_rows,
+                dir_info.path_name,
+                0,
+                &ctx->file_browse_screen.dir_num,
+                &ctx->file_browse_screen.dir_name_table_num
+            );
+            memcpy(
+                ctx->file_browse_screen.path_name,
+                dir_info.path_name,
+                sizeof(char) * ((last_slash_ptr+2) - &dir_info.path_name[0]));
+        }
+    }
 
     if(select_state.select_state == file){
         load_screen_size(state);
@@ -965,6 +1014,59 @@ int now_input_path_open(struct editor_state *state,struct editor_input_context *
         restore_edit_screen(state);
         set_file_browse_path_input_mode(&ctx->file_browse_screen,false);
         
+    }
+    return 0;
+}
+
+
+int file_browser_show_mem_start_num(int start_num,enum flags flags){
+    static int static_start_num = 0;
+    if(flags == get)return static_start_num;
+    else if(flags == set)static_start_num = start_num;
+    return -1;
+}
+
+int get_icon(struct editor_state *state,struct dir_entry entry,wchar_t *icon){
+    if(state == NULL || icon == NULL)return -1;
+
+    if(entry.d_type == DT_DIR){
+        memcpy(icon,L"\U0001F4C2",sizeof(L"\U0001F4C2"));
+    }
+    else if(entry.d_type == DT_REG){
+        memcpy(icon,L"\U0001F5CE",sizeof(L"\U0001F5CE"));
+
+        size_t dir_mem_len = strlen(entry.name);
+
+        if(dir_mem_len <= 0)return -1;
+        if(state->settings_data->use_icon){
+            if(strcmp(&entry.name[dir_mem_len - 2],".c") == 0){
+                memcpy(icon,L"\ue61e",sizeof(L"\ue61e"));
+            }
+            else if(strcmp(&entry.name[dir_mem_len - 3],".py") == 0){
+                memcpy(icon,L"\ue606",sizeof(L"\ue606"));
+            }
+            else if(strcmp(&entry.name[dir_mem_len - 4],".cpp") == 0 ||
+                strcmp(&entry.name[dir_mem_len - 3],".cc") == 0 ||
+                strcmp(&entry.name[dir_mem_len - 3],".cp") == 0 ||
+                strcmp(&entry.name[dir_mem_len - 4],".cxx") == 0){
+                memcpy(icon,L"\ue61D",sizeof(L"\ue61D"));
+            }
+            else if(strcmp(&entry.name[dir_mem_len - 3],".js") == 0){
+                memcpy(icon,L"\uf2ee",sizeof(L"\uf2ee"));
+            }
+            else if(strcmp(&entry.name[dir_mem_len - 5],".json") == 0){
+                memcpy(icon,L"\ueb0f",sizeof(L"\ueb0f"));
+            }
+            else if(strcmp(&entry.name[dir_mem_len - 5],".lisp") == 0){
+                memcpy(icon,L"\ue6b0",sizeof(L"\ue6b0"));
+            }
+            else if(strcmp(&entry.name[dir_mem_len - 3],".ts") == 0){
+                memcpy(icon,L"\ue8ca",sizeof(L"\ue8ca"));
+            }
+            else if(strcmp(&entry.name[dir_mem_len - 5],".html") == 0){
+                memcpy(icon,L"\ue736",sizeof(L"\ue736"));
+            }
+        } 
     }
     return 0;
 }

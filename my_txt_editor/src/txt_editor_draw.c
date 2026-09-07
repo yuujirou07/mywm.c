@@ -1,3 +1,4 @@
+#include <dirent.h>
 #include <ncurses.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -254,9 +255,9 @@ void draw_edit_screen_base(struct editor_state *state,WINDOW *win,struct pos sta
 
 // draw_box_inside_dir(): load_dir_table()が作ったディレクトリエントリ一覧を
 // ファイルブラウザの内側へ描画する。
-// 引数: state=ファイルブラウザ領域、table=固定幅で詰めたディレクトリエントリ一覧。
+// 引数: state=ファイルブラウザ領域、table=名前と種別を持つディレクトリエントリ一覧。
 // 返り値: なし。
-void draw_box_inside_dir(struct editor_state *state,char (*table)[DIR_ENTRY_NAME_MAX]){
+void draw_box_inside_dir(struct editor_state *state,struct dir_entry *table){
     
     if(table == NULL || state->file_browser_area.w <= 0 || state->file_browser_area.h <= 0){return;}
     char clear[state->file_browser_area.w + 1];
@@ -265,29 +266,33 @@ void draw_box_inside_dir(struct editor_state *state,char (*table)[DIR_ENTRY_NAME
 
     // エントリ名は幅に関係なく丸ごと保持しているため、はみ出す分はここで詰める。
     // 描き始めがpos.x+1なので、使える幅は内側幅から1引いた分。
-    int max_len = state->file_browser_area.w - 1;
+    int max_len = state->file_browser_area.w - 3;
 
+    // now_logical_line以降の全件テーブルを、i番目の画面行へ対応付ける。
     for(int i = 0;i < state->file_browser_area.h;i++){
         mvaddstr(state->file_browser_area.pos.y + i, state->file_browser_area.pos.x,clear);
         if(max_len <= 0) continue;
 
-        char *entry = table[i];
-        if(entry[0] == '\0') continue;
+        struct dir_entry *entry = &table[state->file_select_line_data.now_logical_line + i];
+        if(entry->name[0] == '\0') continue;
 
         int draw_y = state->file_browser_area.pos.y + i;
-        int draw_x = state->file_browser_area.pos.x + 1;
-        int len = (int)strlen(entry);
+        int draw_x = state->file_browser_area.pos.x + 3;
+        int len = (int)strlen(entry->name);
 
+        wchar_t icon_code[2];
+        get_icon(state,*entry,&icon_code[0]);
+        mvaddwstr(draw_y,draw_x - 2,icon_code);
         if(len <= max_len){
-            mvaddstr(draw_y, draw_x, entry);
+            mvaddstr(draw_y, draw_x, entry->name);
         }
         else if(max_len > 3){
             // 末尾を"..."にして省略したことが分かるようにする。
-            mvaddnstr(draw_y, draw_x, entry, max_len - 3);
+            mvaddnstr(draw_y, draw_x, entry->name, max_len - 3);
             mvaddstr(draw_y, draw_x + max_len - 3, "...");
         }
         else{
-            mvaddnstr(draw_y, draw_x, entry, max_len);
+            mvaddnstr(draw_y, draw_x, entry->name, max_len);
         }
     }
 }
@@ -295,15 +300,15 @@ void draw_box_inside_dir(struct editor_state *state,char (*table)[DIR_ENTRY_NAME
 // draw_select_dir_scene_color(): ファイルブラウザの選択行に指定カラーペアを適用する。
 // 引数: state=選択行と表示領域、num=適用するncursesカラーペア番号。
 // 返り値: なし。
-void draw_select_dir_scene_color(struct editor_state *state,int num){
+void draw_select_dir_scene_color(struct editor_state *state,int dir_num,int num){
     int cur_x;
     int cur_y;
     getyx(stdscr,cur_y,cur_x);
     if(state->settings_data->file_select_scene_lighting == false)
         return;
 
-    if(state->file_browser_area.w <= 0 || state->dir_num <= 0 ||
-       state->file_select_line_data.now_line < 0 || state->file_select_line_data.now_line >= state->dir_num){
+    if(state->file_browser_area.w <= 0 || dir_num <= 0 ||
+       state->file_select_line_data.now_line < 0 || state->file_select_line_data.now_line >= dir_num){
         return;
     }
     int lighting_line = state->file_browser_area.pos.y + state->file_select_line_data.now_line;
@@ -319,7 +324,7 @@ void draw_select_dir_scene_color(struct editor_state *state,int num){
 // show_file_browse(): ファイルブラウザ全体の再描画を要求する。
 // 引数: state=描画要求の保存先、残りは呼び出し互換のため受け取る。
 // 返り値: なし。
-void show_file_browse(struct editor_state *state,struct box file_browse_box,char (*dir_name_table)[DIR_ENTRY_NAME_MAX],char *path_name,WINDOW *win){
+void show_file_browse(struct editor_state *state,struct box file_browse_box,struct dir_entry *dir_name_table,char *path_name,WINDOW *win){
     (void)file_browse_box;
     (void)dir_name_table;
     (void)path_name;
@@ -330,15 +335,15 @@ void show_file_browse(struct editor_state *state,struct box file_browse_box,char
 // set_file_select_line(): 選択行を更新し、選択表示の再描画を要求する。
 // 引数: state=現在の選択状態、line=新しく選択する行番号。
 // 返り値: なし。
-void set_file_select_line(struct editor_state *state,int line){
-    if(state->dir_num <= 0 || state->settings_data->file_select_scene_lighting == false){
+void set_file_select_line(struct editor_state *state,int dir_num,int line){
+    if(dir_num <= 0 || state->settings_data->file_select_scene_lighting == false){
         return;
     }
     if(line < 0){
         line = 0;
     }
-    if(line >= state->dir_num){
-        line = state->dir_num - 1;
+    if(line >= dir_num){
+        line = dir_num - 1;
     }
     
     file_select_line_update(&state->file_select_line_data, line);
@@ -576,7 +581,7 @@ void update_screen(struct editor_input_context *ctx){
                       ctx->edit_screen.line_end_pos, win, all_draw_mode);
         }
         if(flags & RENDER_SELECT_DIR_SCENE_COLOR){
-            draw_select_dir_scene_color(state,2);
+            draw_select_dir_scene_color(state,ctx->file_browse_screen.dir_name_table_num,2);
         }
         if(flags & RENDER_EDIT_SCREEN_BASE){
             draw_edit_screen_base(state, win, ctx->edit_screen.line_start_pos,
@@ -593,7 +598,7 @@ void update_screen(struct editor_input_context *ctx){
             draw_now_path_name(ctx->file_browse_screen.box,
                                ctx->file_browse_screen.path_name);
             draw_box_inside_dir(state, ctx->file_browse_screen.dir_name_table);
-            draw_select_dir_scene_color(state, 2);
+            draw_select_dir_scene_color(state,ctx->file_browse_screen.dir_name_table_num,2);
 
             //サーチボックスの描画とサーチボックス内のパス描画
             if(get_file_browse_path_input_mode(&ctx->file_browse_screen)){

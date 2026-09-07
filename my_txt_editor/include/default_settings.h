@@ -21,7 +21,7 @@
 #define DEFAULT_LSP_PROCESS_LAUNCH_STARTUP_EDITOR true
 #define DEFAULT_EPOLL_TIME_OUT_MS 16
 #define DEFAULT_LSP_USE true
-
+#define DEFAULT_USE_ICON false
 
 
 struct lsp_settings_data{
@@ -45,6 +45,8 @@ struct editor_settings{
     bool ask_make_file;//ファイル変更時に何もファイルを開いていなかった場合ファイルを作るか聞く
     bool show_start_menu;
     bool file_select_scene_lighting;
+    bool use_icon;
     struct lsp_settings_data lsp;
+
 };
 #endif 

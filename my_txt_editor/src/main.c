@@ -175,8 +175,8 @@ int main(int argc, char *argv[])
 
     state.file_browser_area.pos.x = file_browse_box.pos.x + 1;
     state.file_browser_area.pos.y = file_browse_box.pos.y + 1;
-    state.file_browser_area.h = file_browse_box.h - 2; //底辺から1引く
-    state.file_browser_area.w = file_browse_box.w - 2;//同上 
+    state.file_browser_area.h = file_browse_box.h - 2; // 上下の枠線を除く。
+    state.file_browser_area.w = file_browse_box.w - 2; // 左右の枠線を除く。
 
     state.make_file_mode_status.is_input_scene        = false;
     state.make_file_mode_status.new_file_name_counter = 0;
@@ -189,7 +189,7 @@ int main(int argc, char *argv[])
 
     state.file_select_line_data.now_line = 0;
     state.file_select_line_data.previous_line = 0;
-    state.dir_num = 0;
+    state.file_select_line_data.now_logical_line = 0;
     state.file_data.now_open_file = NULL;
     state.file_data.is_open_file = 0;
     state.file_data.file_line_start_num_counter = 0;
@@ -202,11 +202,11 @@ int main(int argc, char *argv[])
     state.jump_mode_data.jump_line_num_counter = 0;
 
     editor_set_screen_state(&state, state.settings_data->show_start_menu ? start_menu_screen : edit_screen);
-    // 一覧テーブルは1行DIR_ENTRY_NAME_MAXバイト固定の2次元配列。
+    // 一覧テーブルは各エントリの名前と種別を保持する。
     // 行数は表示できる件数分だけ確保し、幅の変化では作り直さない。
     int dir_name_table_rows         = (state.file_browser_area.h > 0)
         ? state.file_browser_area.h : 1;
-    char (*dir_name_table)[DIR_ENTRY_NAME_MAX] =
+    struct dir_entry *dir_name_table =
         calloc((size_t)dir_name_table_rows,sizeof(*dir_name_table));
     int allocate_total_str_size     = state.settings_data->load_buffer_lines;
     state.file_data.file_str_data   = calloc(allocate_total_str_size,sizeof(char*));
@@ -217,7 +217,10 @@ int main(int argc, char *argv[])
         editor_free_text_buffer(&state);
         return 1;
     }
-    load_dir_table(&state,dir_name_table,dir_name_table_rows,path_name);
+    int dir_num = 0;
+    int dir_name_table_num = 0;
+    load_dir_table(&state,&dir_name_table,&dir_name_table_rows,path_name,0,
+                   &dir_num,&dir_name_table_num);
 
     struct pos screen_center_pos    = (struct pos){state.scr.scr_size.x/2,screen_center_y};
     
@@ -323,6 +326,8 @@ int main(int argc, char *argv[])
                 },
                 .dir_name_table = dir_name_table,
                 .dir_name_table_rows = dir_name_table_rows,
+                .dir_num = dir_num,
+                .dir_name_table_num = dir_name_table_num,
                 .path_name = path_name,
                 .path_input_mode = false,
             },

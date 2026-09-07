@@ -4,5 +4,6 @@
   "lsp": {
     "launch_startup_editor": true,
     "epoll_timeout_ms": 16
-  }
+  },
+  "use_icon":false
 }

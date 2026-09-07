@@ -1,4 +1,5 @@
 #include <dirent.h>
+#include <linux/input-event-codes.h>
 #include <linux/limits.h>
 #include <ncurses.h>
 #include <stddef.h>
@@ -95,7 +96,7 @@ static bool handle_edit_screen_input(struct editor_input_context *ctx, int input
        lsp_send_completion(ctx->lsp_data->to_server_fd,state); 
     }
     if (ch == KEY_MOUSE) {
-        handle_mouse(win, ctx->mouse_event, state);
+        handle_mouse(win, ctx->mouse_event, state, 0);
         state->render_flags |= RENDER_LINE;
 
         return true;
@@ -171,6 +172,7 @@ static bool handle_file_browse_screen_input(struct editor_input_context *ctx, in
             file_browse_screen,
             true
             );
+        state->file_select_line_data.now_logical_line = 0;
 
         
         size_t now_open_path_len = strlen(ctx->file_browse_screen.path_name);
@@ -181,9 +183,12 @@ static bool handle_file_browse_screen_input(struct editor_input_context *ctx, in
         struct dir_table now_path = {.path_name = tmp_now_open_path};
         now_open_path_name(&now_path,set);
         load_dir_table(
-            state,ctx->file_browse_screen.dir_name_table,
-            ctx->file_browse_screen.dir_name_table_rows,
-            ctx->file_browse_screen.path_name
+            state,&ctx->file_browse_screen.dir_name_table,
+            &ctx->file_browse_screen.dir_name_table_rows,
+            ctx->file_browse_screen.path_name,
+            0,
+            &ctx->file_browse_screen.dir_num,
+            &ctx->file_browse_screen.dir_name_table_num
         );
         state->render_flags |= RENDER_FILE_BROWSE;
        
@@ -212,7 +217,8 @@ static bool handle_file_browse_screen_input(struct editor_input_context *ctx, in
             }
 
             if(ch == KEY_MOUSE){
-                handle_mouse(win,ctx->mouse_event,ctx->state);
+                handle_mouse(win,ctx->mouse_event,ctx->state,
+                    ctx->file_browse_screen.dir_name_table_num);
             }
 
 
@@ -230,18 +236,23 @@ static bool handle_file_browse_screen_input(struct editor_input_context *ctx, in
                     *(child_dir) = '\0';
                 }
 
-                load_dir_table(state, ctx->file_browse_screen.dir_name_table,
-                    ctx->file_browse_screen.dir_name_table_rows,
-                    ctx->file_browse_screen.path_name);
+                state->file_select_line_data.now_logical_line = 0;
+                load_dir_table(state, &ctx->file_browse_screen.dir_name_table,
+                    &ctx->file_browse_screen.dir_name_table_rows,
+                    ctx->file_browse_screen.path_name,
+                    0,
+                    &ctx->file_browse_screen.dir_num,
+                    &ctx->file_browse_screen.dir_name_table_num);
                 state->render_flags |= RENDER_FILE_BROWSE;
             }
             
         } 
         if(ch == KEY_ENTER || ch == '\n' || ch == '\r' || ch == ' ' || (ch == 'l' && input_mode)) {
         // select_state.select_nameが空でなければディレクトリ選択、空ならファイル読み込み完了側を見る。
-        struct file_browse_select_state select_state;
-        load_file(state, ctx->file_browse_screen.dir_name_table,
-                  ctx->file_browse_screen.path_name, &select_state);
+            struct file_browse_select_state select_state;
+            load_file(state, ctx->file_browse_screen.dir_name_table,
+                    ctx->file_browse_screen.dir_name_table_num,
+                    ctx->file_browse_screen.path_name, &select_state);
 
             if(select_state.select_name[0] != '\0' && select_state.select_state == folder){
                 struct dir_table now_path = {
@@ -258,10 +269,13 @@ static bool handle_file_browse_screen_input(struct editor_input_context *ctx, in
                     return true;
                 }
                 memcpy(ctx->file_browse_screen.path_name, now_path_name, (size_t)path_len + 1);
-                
-                load_dir_table(state, ctx->file_browse_screen.dir_name_table,
-                    ctx->file_browse_screen.dir_name_table_rows,
-                        ctx->file_browse_screen.path_name);
+                state->file_select_line_data.now_logical_line = 0;
+                load_dir_table(state, &ctx->file_browse_screen.dir_name_table,
+                    &ctx->file_browse_screen.dir_name_table_rows,
+                        ctx->file_browse_screen.path_name,
+                        0,
+                        &ctx->file_browse_screen.dir_num,
+                        &ctx->file_browse_screen.dir_name_table_num);
 
                 state->render_flags |= RENDER_FILE_BROWSE;
                 ctx->file_browse_screen.path_input_mode = false;
@@ -271,17 +285,19 @@ static bool handle_file_browse_screen_input(struct editor_input_context *ctx, in
                 char uri[(PATH_MAX * 3) + sizeof("file://")];
 
                 if(state->settings_data->lsp.lsp_use && ctx->lsp_data != NULL &&
-                ctx->lsp_data->initialized && ctx->lsp_data->to_server_fd >= 0 &&
-                lsp_path_to_file_uri(uri, sizeof(uri), state->file_data.now_open_path_name) == 0 &&
-                lsp_send_did_open(ctx->lsp_data->to_server_fd, uri,
+                    ctx->lsp_data->initialized && ctx->lsp_data->to_server_fd >= 0 &&
+                    lsp_path_to_file_uri(uri, sizeof(uri), state->file_data.now_open_path_name) == 0 &&
+                    lsp_send_did_open(ctx->lsp_data->to_server_fd, uri,
                         ctx->lsp_data->lsp_language_id,
                             state->str.chr_file_all_str_data) == 0){
+
                     snprintf(ctx->lsp_data->update_data.path_name,
                             sizeof(ctx->lsp_data->update_data.path_name), "%s",
                             state->file_data.now_open_path_name);
                     ctx->lsp_data->update_data.file_update_counter = 1;
                 }
-
+                //ここでディレクトリ移動
+                chdir(ctx->file_browse_screen.path_name);
                 // 読み込み直後は先頭行の行頭から編集を始める。
                 editor_set_cursor(state, 0, 0);
                 restore_edit_screen(state);
@@ -319,7 +335,7 @@ static bool handle_file_browse_screen_input(struct editor_input_context *ctx, in
                 state->render_flags |= RENDER_FILE_BROWSE;
             }
         }
-        if(ch == '\t'){
+        if(ch == '\t' || ch == '\0' || ch == '\r' || ch == '\n' || ch == KEY_ENTER){
         
             const wchar_t *path = now_open_path_name(NULL,get);
             if(path == NULL)return true;
@@ -333,7 +349,7 @@ static bool handle_file_browse_screen_input(struct editor_input_context *ctx, in
             }
 
             int selected_line = state->file_select_line_data.now_line;
-            if(selected_line < 0 || selected_line >= state->dir_num)return true;
+            if(selected_line < 0 || selected_line >= ctx->file_browse_screen.dir_name_table_num)return true;
 
             int candidate_rows = selected_line + 1;
             struct dir_table candidates[candidate_rows];
@@ -375,32 +391,35 @@ static bool handle_file_browse_screen_input(struct editor_input_context *ctx, in
                 return true;
             }
         }
-        if(ch == KEY_ENTER || ch == '\n' || ch == '\r' ){
-            now_input_path_open(state,ctx);
-        }
+       
 
         if(ch == 'q'){
             return false;
         }
-        if(ch == KEY_BACKSPACE || (input_result == OK && iswprint(ch)) || ch == '\t'){
+        if(ch == KEY_BACKSPACE || (input_result == OK && iswprint(ch)) || ch == '\t' || ch == '\n'){
             int table_rows = ctx->file_browse_screen.dir_name_table_rows;
             struct dir_table table[table_rows];
             int men_num = check_dir_mem(table,table_rows);
             if(men_num >= 0){
-                state->dir_num = men_num;
+                ctx->file_browse_screen.dir_num = men_num;
+                ctx->file_browse_screen.dir_name_table_num = men_num;
+                state->file_select_line_data.now_logical_line = 0;
                 if(men_num > 0 &&
                    (state->file_select_line_data.now_line < 0 ||
                     state->file_select_line_data.now_line >= men_num)){
-                    set_file_select_line(state,0);
+                    set_file_select_line(state,ctx->file_browse_screen.dir_name_table_num,0);
                 }
                 for(int i = 0; i < table_rows;i++){
                     if(i < men_num){
                         
-                        snprintf(ctx->file_browse_screen.dir_name_table[i],
-                            DIR_ENTRY_NAME_MAX,"%s",table[i].d_name);
+                        snprintf(ctx->file_browse_screen.dir_name_table[i].name,
+                            sizeof(ctx->file_browse_screen.dir_name_table[i].name),
+                            "%s",table[i].d_name);
+                        ctx->file_browse_screen.dir_name_table[i].d_type = table[i].d_type;
                     }
                     else{
-                        ctx->file_browse_screen.dir_name_table[i][0] = '\0';
+                        ctx->file_browse_screen.dir_name_table[i].name[0] = '\0';
+                        ctx->file_browse_screen.dir_name_table[i].d_type = DT_UNKNOWN;
                     }
                 }
                 
@@ -409,17 +428,34 @@ static bool handle_file_browse_screen_input(struct editor_input_context *ctx, in
             }
         }
     }
-    if (ch == KEY_UP || (ch == 'k' && input_mode)) {
-        // next_lineはハイライトを移す先。端では上下に循環させる。
-        int next_line = (state->file_select_line_data.now_line <= 0) 
-            ? state->dir_num - 1:state->file_select_line_data.now_line  - 1;
-        set_file_select_line(state, next_line);
+    // now_lineは画面内の位置、now_logical_lineは全件テーブルの開始位置として別に動かす。
+    if(ch == KEY_UP || (ch == 'k' && !input_mode)){
+        int visible_num = ctx->file_browse_screen.dir_num -
+            state->file_select_line_data.now_logical_line;
+        if(visible_num > state->file_browser_area.h)visible_num = state->file_browser_area.h;
+        int next_line = state->file_select_line_data.now_line;
+        if(next_line > 0){
+            next_line--;
+        }
+        else if(state->file_select_line_data.now_logical_line > 0){
+            state->file_select_line_data.now_logical_line--;
+        }
+        set_file_select_line(state, visible_num, next_line);
         state->render_flags |= RENDER_FILE_BROWSE;
-    } else if (ch == KEY_DOWN  || (ch == 'j' && input_mode)) {
-        // next_lineはハイライトを移す先。端では上下に循環させる。
-        int next_line = (state->file_select_line_data.now_line  >= state->dir_num - 1)
-            ?0:state->file_select_line_data.now_line  + 1;
-        set_file_select_line(state, next_line);
+
+    } else if(ch == KEY_DOWN || (ch == 'j' && !input_mode)){
+        int visible_num = ctx->file_browse_screen.dir_num -
+            state->file_select_line_data.now_logical_line;
+        if(visible_num > state->file_browser_area.h)visible_num = state->file_browser_area.h;
+        int next_line = state->file_select_line_data.now_line;
+        if(next_line + 1 < visible_num){
+            next_line++;
+        }
+        else if(state->file_select_line_data.now_logical_line + visible_num <
+                ctx->file_browse_screen.dir_num){
+            state->file_select_line_data.now_logical_line++;
+        }
+        set_file_select_line(state, visible_num, next_line);
         state->render_flags |= RENDER_FILE_BROWSE;
     }
 

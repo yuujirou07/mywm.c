@@ -45,7 +45,7 @@ void resize_file_browser(struct editor_input_context *ctx){
     state->file_browser_area.h     = (box.h - 2 > 0) ? box.h - 2 : 0;
 
     if(state->file_browser_area.h > ctx->file_browse_screen.dir_name_table_rows){
-        char (*table)[DIR_ENTRY_NAME_MAX] =
+        struct dir_entry *table =
             realloc(ctx->file_browse_screen.dir_name_table,
                     (size_t)state->file_browser_area.h * sizeof(*table));
         if(table != NULL){
@@ -61,9 +61,12 @@ void resize_file_browser(struct editor_input_context *ctx){
     // 幅が変わっても行の内容は有効なままなので、表示件数が変わる高さの変化のときだけ
     // ディレクトリを走査し直す(ドラッグ中に毎回走らせない)。
     if(state->file_browser_area.h != old_h){
-        load_dir_table(state, ctx->file_browse_screen.dir_name_table,
-                       ctx->file_browse_screen.dir_name_table_rows,
-                       ctx->file_browse_screen.path_name);
+        load_dir_table(state, &ctx->file_browse_screen.dir_name_table,
+                       &ctx->file_browse_screen.dir_name_table_rows,
+                       ctx->file_browse_screen.path_name,
+                       state->file_select_line_data.now_logical_line,
+                       &ctx->file_browse_screen.dir_num,
+                       &ctx->file_browse_screen.dir_name_table_num);
     }
 }
 
@@ -344,7 +347,7 @@ void handle_char_input(WINDOW *win, wchar_t ch, struct editor_state *state){
 // カーソルが表示範囲外へ出る場合は一時的に非表示にする。
 // 引数: win=スクロールするウィンドウ、event=getmouse()の格納先、state=表示位置とカーソル状態。
 // 返り値: なし。
-void handle_mouse(WINDOW *win, MEVENT *event, struct editor_state *state) {
+void handle_mouse(WINDOW *win, MEVENT *event, struct editor_state *state,int dir_num) {
     if (getmouse(event) != OK){
         return;
     }
@@ -357,7 +360,7 @@ void handle_mouse(WINDOW *win, MEVENT *event, struct editor_state *state) {
             break;
         }
         case file_browse_screen:{
-            file_browse_screen_mouse_event(win,event,state);
+            file_browse_screen_mouse_event(win,event,state,dir_num);
             break;
         }
         default:
@@ -621,7 +624,7 @@ void editor_screen_mouse_event(WINDOW *win, MEVENT *event, struct editor_state *
     state->is_cur_show = editor_cursor_is_visible(state);
 }
 
-void file_browse_screen_mouse_event(WINDOW *win, MEVENT *event, struct editor_state *state){
+void file_browse_screen_mouse_event(WINDOW *win, MEVENT *event, struct editor_state *state,int dir_num){
     //ホイールで選択行を動かすだけなので描画先ウィンドウは使わない
     (void)win;
 
@@ -629,15 +632,15 @@ void file_browse_screen_mouse_event(WINDOW *win, MEVENT *event, struct editor_st
         if(event->bstate & BUTTON4_PRESSED){
              // next_lineはハイライトを移す先。端では上下に循環させる。
             int next_line = (state->file_select_line_data.now_line <= 0) 
-                ? state->dir_num - 1:state->file_select_line_data.now_line - 1;
-            set_file_select_line(state, next_line);
+                ? dir_num - 1:state->file_select_line_data.now_line - 1;
+            set_file_select_line(state, dir_num, next_line);
             
         }  
         if(event->bstate & BUTTON5_PRESSED){
             // next_lineはハイライトを移す先。端では上下に循環させる。
-            int next_line = (state->file_select_line_data.now_line  >= state->dir_num - 1)
+            int next_line = (state->file_select_line_data.now_line  >= dir_num - 1)
                 ?0:state->file_select_line_data.now_line + 1;
-            set_file_select_line(state, next_line);
+            set_file_select_line(state, dir_num, next_line);
         }      
     }
 }
