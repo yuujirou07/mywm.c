@@ -81,7 +81,9 @@ struct jump_mode{
 struct file_data{
     FILE*   now_open_file; // 現在開いているFILE。未オープンならNULL。
     char**  file_str_data; // ファイルから読み込んだ各行の文字列配列。
-    char    now_open_path_name[DEFAULT_PATH_NAME_MAX_SIZE]; // 現在開いているファイルパス。
+    // 実際に開いて編集・保存・LSP通知するファイルパス。
+    // now_open_path_name()内のファイルブラウザ用パスとは別に保持する。
+    char    now_open_path_name[DEFAULT_PATH_NAME_MAX_SIZE];
     long*   file_line_start_num; // ファイル内で各行が始まるバイト位置。
     long    file_line_start_num_counter; // file_line_start_numに登録済みの行数。
     long    description_line_end; // 保存対象として扱う論理行数。
@@ -95,6 +97,7 @@ struct file_data{
 enum select_state{
     file,
     folder,
+    unkown,
     error,
 };
 
@@ -125,7 +128,7 @@ struct file_browse_select_state{
 
 struct dir_table{
     char *path_name;
-    char *d_name;
+    char d_name[DIR_ENTRY_NAME_MAX];
     unsigned char d_type;
 };
 
@@ -228,7 +231,7 @@ struct editor_state {
     int                        render_flags; // update_screen()へ渡す再描画要求。
     int                        draw_box_count; // draw_box_dataに積まれている数。
     bool                       is_cur_show; // カーソル表示中ならtrue。
-
+    bool                       mylsp_use;
 };
 
 static inline enum now_screen_state editor_get_screen_state(struct editor_state *state){
@@ -250,7 +253,7 @@ static inline enum now_screen_state editor_get_previous_screen_state(struct edit
 }
 
 static inline void editor_set_screen_state(struct editor_state *state,
-                                           enum now_screen_state next_state){
+                                        enum now_screen_state next_state){
     struct screen_state_log *log = &state->screen_log;
 
     if(log->screen_state_log_counter > 0 &&
@@ -605,5 +608,9 @@ int update_screen_ratio(struct editor_input_context *ctx);
 // main.c
 // 指定座標へ文字列を描画する。
 void my_mvaddstr(struct pos pos,char *str);
+
+enum select_state get_path_state(const char *path);
+int now_input_path_open(struct editor_state *state,struct editor_input_context *ctx);
+void restore_edit_screen(struct editor_state *state);
 
 #endif

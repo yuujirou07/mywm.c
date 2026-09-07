@@ -15,7 +15,7 @@ void newinput_mouce(struct wl_listener *listener, void *data) {
 		&mouce->pointer->base,
 		mouce->delta_x,
 		mouce->delta_y);
-
+		
 	//もしマウスカーソル下にサーフェスがあった場合ノードとしてこの構造体で受け取る
 	struct wlr_scene_node *resizing_scene_node = NULL;
 	bool is_in_resize_pos = false;

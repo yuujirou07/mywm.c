@@ -4,8 +4,10 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <wchar.h>
 #include <wctype.h>
+#include "error_log.h"
 #include "lsp_src/language_server_communication.h"
 #include "txt_editor.h"
 #include"language_server_communication.h"
@@ -14,7 +16,7 @@ static void reset_jump_mode(struct editor_state *state);
 static long clamp_editor_target_line(struct editor_state *state, long target_line);
 static int draw_start_line_for_target(struct editor_state *state, long target_line);
 static void redraw_edit_screen(struct editor_state *state);
-static void restore_edit_screen(struct editor_state *state);
+void restore_edit_screen(struct editor_state *state);
 static void show_make_file_prompt(WINDOW *win, struct editor_state *state, struct box *file_box,
                                   int screen_center_y, struct pos screen_center_pos);
 static bool handle_edit_screen_input(struct editor_input_context *ctx, int input_result, wint_t ch);
@@ -89,6 +91,9 @@ static bool handle_edit_screen_input(struct editor_input_context *ctx, int input
         }
         return true;
     }
+    else if(ch == CTRL(' ')){
+       lsp_send_completion(ctx->lsp_data->to_server_fd,state); 
+    }
     if (ch == KEY_MOUSE) {
         handle_mouse(win, ctx->mouse_event, state);
         state->render_flags |= RENDER_LINE;
@@ -122,6 +127,7 @@ static bool handle_edit_screen_input(struct editor_input_context *ctx, int input
             curs_set(1);
             handle_char_input(win, (wchar_t)ch, state);
             send_lsp_did_change(ctx);
+            
             state->render_flags |= RENDER_LINE_STATUS;
         }
         if (ch == KEY_LEFT || ch == KEY_RIGHT || ch == KEY_UP || ch == KEY_DOWN){
@@ -161,13 +167,24 @@ static bool handle_file_browse_screen_input(struct editor_input_context *ctx, in
     if(ch == 'i' && !input_mode){
         state->is_cur_show = true;
         curs_set(1);
-        set_file_browse_path_input_mode(file_browse_screen,
-            true);
+        set_file_browse_path_input_mode(
+            file_browse_screen,
+            true
+            );
 
-        struct dir_table now_path = {
-            .path_name = ctx->file_browse_screen.path_name,
-        };
+        
+        size_t now_open_path_len = strlen(ctx->file_browse_screen.path_name);
+        char tmp_now_open_path[now_open_path_len + 2];
+        strcpy(tmp_now_open_path,ctx->file_browse_screen.path_name);
+        char joint_str[2] = {'/','\0'};
+        strcat(tmp_now_open_path,joint_str);
+        struct dir_table now_path = {.path_name = tmp_now_open_path};
         now_open_path_name(&now_path,set);
+        load_dir_table(
+            state,ctx->file_browse_screen.dir_name_table,
+            ctx->file_browse_screen.dir_name_table_rows,
+            ctx->file_browse_screen.path_name
+        );
         state->render_flags |= RENDER_FILE_BROWSE;
        
         return true;
@@ -303,27 +320,36 @@ static bool handle_file_browse_screen_input(struct editor_input_context *ctx, in
             }
         }
         if(ch == '\t'){
+        
+            const wchar_t *path = now_open_path_name(NULL,get);
+            if(path == NULL)return true;
+            char char_old_path[PATH_MAX];
+            size_t converted = wcstombs(char_old_path,path,sizeof(char_old_path) - 1);
+            
+            enum select_state path_state = get_path_state(char_old_path);
+            if(path_state == file){
+                now_input_path_open(state,ctx);
+                return true;
+            }
+
             int selected_line = state->file_select_line_data.now_line;
             if(selected_line < 0 || selected_line >= state->dir_num)return true;
 
             int candidate_rows = selected_line + 1;
             struct dir_table candidates[candidate_rows];
             int candidate_count = check_dir_mem(candidates,candidate_rows);
+            //もし選択行よりメンバが少なかったらバグっているのでエラー画面を出す
             if(candidate_count <= selected_line){
-                for(int i = 0; i < candidate_rows; i++){
-                    free(candidates[i].d_name);
-                }
+                editor_error_screen(state,"directory error");
                 return true;
             }
             struct dir_table *candidate = &candidates[selected_line];
+            if(path == NULL){
+                error_log("can not get open path name");
+                return true;
+            }
 
-            const wchar_t *path = now_open_path_name(NULL,get);
-            char char_old_path[PATH_MAX];
-            size_t converted = wcstombs(char_old_path,path,sizeof(char_old_path) - 1);
             if(converted == (size_t)-1){
-                for(int i = 0; i < candidate_rows; i++){
-                    free(candidates[i].d_name);
-                }
                 return true;
             }
             char_old_path[converted] = '\0';
@@ -341,43 +367,18 @@ static bool handle_file_browse_screen_input(struct editor_input_context *ctx, in
                     .path_name = char_path,
                 };
                 now_open_path_name(&now_path,set);
-                state->render_flags |= RENDER_FILE_BROWSE;
+                if(candidate->d_type != DT_REG)
+                    state->render_flags |= RENDER_FILE_BROWSE;
             }
-            for(int i = 0; i < candidate_rows; i++){
-                free(candidates[i].d_name);
-            }
-        }
-        if(ch == KEY_ENTER || ch == '\n' || ch == '\r'){
-            struct dir_table dir_info = {0};
-            now_open_path_name(&dir_info,get);
-            if(dir_info.path_name == NULL)return true;
-
-            char dir_path[PATH_MAX];
-            int path_size = snprintf(dir_path,sizeof(dir_path),"%s",dir_info.path_name);
-            if(path_size < 0 || (size_t)path_size >= sizeof(dir_path))return true;
-
-            char *last_slash = strrchr(dir_path,'/');
-            if(last_slash == dir_path){
-                dir_path[1] = '\0';
-            }
-            else if(last_slash != NULL){
-                *last_slash = '\0';
-            }
-            else{
-                dir_path[0] = '.';
-                dir_path[1] = '\0';
-            }
-
-            struct file_browse_select_state select_state;
-            load_file(state,ctx->file_browse_screen.dir_name_table,
-                dir_path,&select_state);
-            if(select_state.select_state == file){
-                load_screen_size(state);
-                editor_set_cursor(state,0,0);
-                restore_edit_screen(state);
-                set_file_browse_path_input_mode(&ctx->file_browse_screen,false);
+            if(candidate->d_type == DT_REG){
+                now_input_path_open(state,ctx);
+                return true;
             }
         }
+        if(ch == KEY_ENTER || ch == '\n' || ch == '\r' ){
+            now_input_path_open(state,ctx);
+        }
+
         if(ch == 'q'){
             return false;
         }
@@ -405,9 +406,6 @@ static bool handle_file_browse_screen_input(struct editor_input_context *ctx, in
                 
                 set_clear_box(&state->clear_box_data,*state->file_browser_box);
                 state->render_flags |= RENDER_FILE_BROWSE;
-            }
-            for(int i = 0; i < table_rows;i++){
-                free(table[i].d_name);
             }
         }
     }
@@ -683,7 +681,7 @@ static void redraw_edit_screen(struct editor_state *state){
 // restore_edit_screen(): ファイルブラウザやジャンプ入力から編集画面へ戻す。
 // 引数: state=復帰させる状態。
 // 返り値: なし。
-static void restore_edit_screen(struct editor_state *state){
+void restore_edit_screen(struct editor_state *state){
     editor_set_screen_state(state, edit_screen);
     state->is_cur_show = true;
     curs_set(true);

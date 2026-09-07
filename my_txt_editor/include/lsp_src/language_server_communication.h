@@ -11,6 +11,24 @@
 #define initialize_id_num 1
 #define NONE -1
 
+struct editor_state;
+
+typedef enum{
+    lsp_method_completion,
+    lsp_method_none,
+}lsp_method;
+
+typedef struct{
+    int line;
+    int character;
+}lsp_pos;
+
+typedef struct{
+    int id;
+    lsp_method lsp_method;
+    char *uri;
+    lsp_pos pos;
+}lsp_send_msg_data;
 
 struct lsp_send_receve_id_data{
     int used_id_history[MAX_ID_STRAGE_SIZE];
@@ -43,15 +61,15 @@ int lsp_path_to_file_uri(char *uri, size_t uri_size, const char *path);
 int lsp_send(int fd, const char *json);
 int lsp_send_initialize(int fd, int id, pid_t process_id, const char *root_uri);
 char *lsp_read_message(int fd);
+void lsp_handle_message(struct lsp_process *lsp, char *msg);
 void initialize_id(struct lsp_send_receve_id_data *id_data);
-int check_id(char *msg);
 void set_lsp_use_language(struct lsp_process *lsp,char *language);
 int lsp_send_did_open(int fd, const char *uri,
                       const char *language_id, const char *text);
-int lsp_is_publish_diagnostics(const char *msg);
-
 int lsp_send_did_change(int fd, const char *uri,
                         int version, const char *text);
 
+int lsp_make_msg(lsp_send_msg_data msg_data, char **msg);
+int lsp_send_completion(int lsp_fd,struct editor_state *state);
 
 #endif

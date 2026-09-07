@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,9 +11,12 @@
 #include <unistd.h>
 #include<cjson/cJSON.h>
 #include "lsp_src/language_server_communication.h"
+#include "txt_editor.h"
+#include "error_log.h"
 
 #define LSP_INVALID_FD (-1)
 #define LSP_HEADER_MAX 8192
+#define LSP_CONTENT_MAX ((size_t)32 * 1024 * 1024)
 
 /*
  * 指定した長さのデータをfdへすべて書き込む。
@@ -89,10 +93,10 @@ static int lsp_read_all(int fd, char *data, size_t len)
  *   header : \r\n\r\nで終わるLSPメッセージヘッダ文字列。
  *
  * 返り値:
- *   0以上 : JSON本文のバイト数。0は空の本文を表す。
- *   -1     : Content-Lengthが無い、または値が不正。
+ *   SIZE_MAX以外 : JSON本文のバイト数。0は空の本文を表す。
+ *   SIZE_MAX      : Content-Lengthが無い、値が不正、または上限を超えている。
  */
-static int lsp_parse_content_length(const char *header)
+static size_t lsp_parse_content_length(const char *header)
 {
     const char *line = header;
 
@@ -103,17 +107,18 @@ static int lsp_parse_content_length(const char *header)
         if(line_len >= 15 && strncasecmp(line, "Content-Length:", 15) == 0){
             const char *value = line + 15;
             char *end = NULL;
-            long length;
+            unsigned long long length;
 
             while(*value == ' ' || *value == '\t'){
                 value++;
             }
             errno = 0;
-            length = strtol(value, &end, 10);
-            if(errno != 0 || end == value || length < 0 || length > INT_MAX){
-                return -1;
+            length = strtoull(value, &end, 10);
+            if(errno != 0 || end == value || *value == '-' ||
+               length > (unsigned long long)LSP_CONTENT_MAX){
+                return SIZE_MAX;
             }
-            return (int)length;
+            return (size_t)length;
         }
 
         if(line_end == NULL){
@@ -122,7 +127,7 @@ static int lsp_parse_content_length(const char *header)
         line = line_end + 2;
     }
 
-    return -1;
+    return SIZE_MAX;
 }
 
 /*
@@ -431,7 +436,7 @@ char *lsp_read_message(int fd)
 {
     char header[LSP_HEADER_MAX + 1];
     size_t header_len = 0;
-    int content_length;
+    size_t content_length;
     char *json;
 
     // 危険: epollが保証するのは「1バイト以上読める」ことだけで、完全なメッセージではない。
@@ -453,24 +458,77 @@ char *lsp_read_message(int fd)
     }
 
     content_length = lsp_parse_content_length(header);
-    if(content_length < 0){
+    if(content_length == SIZE_MAX){
         return NULL;
     }
 
-    // 危険: Content-Lengthに実用上の上限がなく、相手の値だけで巨大なmallocを行う。
-    // 壊れたLanguage Serverからの入力でメモリ枯渇を起こし得る。
-    json = malloc((size_t)content_length + 1);
+    json = malloc(content_length + 1);
     if(json == NULL){
         return NULL;
     }
 
-    if(lsp_read_all(fd, json, (size_t)content_length) == -1){
+    if(lsp_read_all(fd, json, content_length) == -1){
         free(json);
         return NULL;
     }
 
     json[content_length] = '\0';
     return json;
+}
+
+// lsp_handle_message(): 受信済みのLSPメッセージ1件を種類別に振り分ける。
+// initialize応答にはinitialized通知を返し、診断通知はエラーログへ書き出す。
+// 引数: lsp=送信先fdとinitialized状態を持つLSPプロセス、msg='\0'終端のJSON文字列。
+// 返り値: なし。
+void lsp_handle_message(struct lsp_process *lsp, char *msg){
+    cJSON *root;
+    cJSON *jsonrpc;
+    cJSON *method;
+    cJSON *id;
+    cJSON *result;
+    cJSON *error;
+
+    if(lsp == NULL || msg == NULL){
+        return;
+    }
+
+    root = cJSON_Parse(msg);
+    if(root == NULL){
+        return;
+    }
+
+    jsonrpc = cJSON_GetObjectItemCaseSensitive(root, "jsonrpc");
+    method = cJSON_GetObjectItemCaseSensitive(root, "method");
+    id = cJSON_GetObjectItemCaseSensitive(root, "id");
+    result = cJSON_GetObjectItemCaseSensitive(root, "result");
+    error = cJSON_GetObjectItemCaseSensitive(root, "error");
+
+    if(!cJSON_IsString(jsonrpc) || strcmp(jsonrpc->valuestring, "2.0") != 0){
+        cJSON_Delete(root);
+        return;
+    }
+
+    if(cJSON_IsString(method)){
+        if(cJSON_IsNumber(id)){
+            error_log_write("unsupported LSP request\n");
+        }
+        else if(strcmp(method->valuestring, "textDocument/publishDiagnostics") == 0){
+            error_log_write(msg);
+            error_log_write("\n");
+        }
+    }
+    else if(cJSON_IsNumber(id) && id->valueint == initialize_id_num && !lsp->initialized){
+        if(error != NULL){
+            error_log_write(msg);
+            error_log_write("\n");
+        }
+        else if(result != NULL && lsp_send(lsp->to_server_fd,
+            "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}") == 0){
+            lsp->initialized = true;
+        }
+    }
+
+    cJSON_Delete(root);
 }
 
 void initialize_id(struct lsp_send_receve_id_data *id_data){
@@ -480,19 +538,6 @@ void initialize_id(struct lsp_send_receve_id_data *id_data){
         id_data->used_id_history[i] = i + 1;
     }
     id_data->id_storage_counter = 0;
-}
-
-int check_id(char *msg){
-    // 危険: Parseに成功したrootをcJSON_Delete()していない。
-    // LSPメッセージを受信するたびに解析ツリー全体がリークする。
-    cJSON *root = cJSON_Parse(msg);
-    cJSON *id = cJSON_GetObjectItemCaseSensitive(root, "id");
- 
-    int int_id = NONE;
-    if(cJSON_IsNumber(id) && id->valueint >= 0 ){
-        int_id = id->valueint;
-    }
-    return int_id;
 }
 
 void set_lsp_use_language(struct lsp_process *lsp,char *language){
@@ -538,25 +583,6 @@ int lsp_send_did_open(int fd, const char *uri,
     if(json != NULL){
         result = lsp_send(fd, json);
         free(json);
-    }
-
-    cJSON_Delete(root);
-    return result;
-}
-
-
-int lsp_is_publish_diagnostics(const char *msg)
-{
-    int result = 0;
-    cJSON *root = cJSON_Parse(msg);
-    if(root == NULL){
-        return 0;
-    }
-
-    cJSON *method = cJSON_GetObjectItemCaseSensitive(root, "method");
-    if(cJSON_IsString(method) &&
-       strcmp(method->valuestring, "textDocument/publishDiagnostics") == 0){
-        result = 1;
     }
 
     cJSON_Delete(root);
@@ -630,3 +656,95 @@ int lsp_send_did_change(int fd, const char *uri, int version, const char *text)
     return result;
 }
 
+/* 成功時は*msgに生成したJSONを返す。呼び出し側がfree()する。 */
+int lsp_make_msg(lsp_send_msg_data msg_data, char **msg){
+    cJSON *root;
+    cJSON *params;
+    cJSON *text_document;
+    cJSON *position;
+    char *json;
+
+    if(msg == NULL){
+        return -1;
+    }
+    *msg = NULL;
+
+    if(msg_data.id <= 0 || msg_data.uri == NULL ||
+       msg_data.pos.line < 0 || msg_data.pos.character < 0){
+        return -1;
+    }
+
+    root = cJSON_CreateObject();
+    if(root == NULL){
+        return -1;
+    }
+
+    if(cJSON_AddStringToObject(root, "jsonrpc", "2.0") == NULL ||
+       cJSON_AddNumberToObject(root, "id", msg_data.id) == NULL){
+        cJSON_Delete(root);
+        return -1;
+    }
+
+    switch(msg_data.lsp_method){
+        case lsp_method_completion:
+            if(cJSON_AddStringToObject(root, "method", "textDocument/completion") == NULL){
+                cJSON_Delete(root);
+                return -1;
+            }
+            break;
+        case lsp_method_none:
+        default:
+            cJSON_Delete(root);
+            return -1;
+    }
+
+    params = cJSON_AddObjectToObject(root, "params");
+    if(params == NULL){
+        cJSON_Delete(root);
+        return -1;
+    }
+
+    text_document = cJSON_AddObjectToObject(params, "textDocument");
+    if(text_document == NULL ||
+       cJSON_AddStringToObject(text_document, "uri", msg_data.uri) == NULL){
+        cJSON_Delete(root);
+        return -1;
+    }
+
+    position = cJSON_AddObjectToObject(params, "position");
+    if(position == NULL ||
+       cJSON_AddNumberToObject(position, "line", msg_data.pos.line) == NULL ||
+       cJSON_AddNumberToObject(position, "character", msg_data.pos.character) == NULL){
+        cJSON_Delete(root);
+        return -1;
+    }
+
+    json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if(json == NULL){
+        return -1;
+    }
+
+    *msg = json;
+    return 0;
+}
+
+int lsp_send_completion(int lsp_fd,struct editor_state *state){
+    lsp_send_msg_data msg_data = {0};
+    msg_data.id = 3;
+    msg_data.lsp_method = lsp_method_completion;
+    msg_data.pos.line = state->cursor.line;
+    msg_data.pos.character = state->cursor.col;
+    char uri[512];
+    lsp_path_to_file_uri(uri,sizeof(uri),state->file_data.now_open_path_name);
+    msg_data.uri = uri;
+
+    char *lsp_msg_ptr = NULL;
+    if(lsp_make_msg(msg_data,&lsp_msg_ptr) == -1){
+        return -1;
+    }
+
+    int result = lsp_send(lsp_fd,lsp_msg_ptr);
+    free(lsp_msg_ptr);
+    return result;
+}

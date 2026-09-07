@@ -24,7 +24,6 @@
 
 static void end_process(struct editor_state *state);
 static void lsp_poll_events(int *epfd, struct lsp_process *lsp, int timeout_ms);
-static void lsp_handle_message(struct lsp_process *lsp, char *msg);
 
 
 // main(): ncursesを初期化し、エディタ画面・ファイルブラウザ・エラー画面の
@@ -43,10 +42,12 @@ int main(int argc, char *argv[])
     bool startup_timer = 0;
     set_error_log_file("my_editor_error_log.txt");
 
-    if(argc > startuptime_log_file_argument_num){
-        char *result = strstr(argv[startuptime_log_file_argument_num],"startuptime_log.log");
 
-        if(result != NULL){
+    bool mylsp = false;
+    if(argc > startuptime_log_file_argument_num){
+        int result = strcmp(argv[startuptime_log_file_argument_num],"startuptime_log.log");
+
+        if(result == 0){
             int st_up_ag_num = startuptime_log_file_argument_num;
             int startuptime_log_file_name_size = strlen(argv[st_up_ag_num]);
             if((int)sizeof(startuptime_log_file_path_name) > startuptime_log_file_name_size){
@@ -58,12 +59,17 @@ int main(int argc, char *argv[])
                 error_log_write("path to long");
             }
         }
+        else if(strcmp(argv[startuptime_log_file_argument_num],"mylsp") == 0){
+            mylsp = true;
+        }
+        
     }
 
     struct editor_settings settings_data = {0};
     struct editor_state state = {0};
     struct ascii_data ascii_data = {0};
     state.settings_data = &settings_data;
+    state.mylsp_use = mylsp;
     struct box file_browse_box;
     struct box status_bar;
     MEVENT mouse_event;
@@ -332,15 +338,17 @@ int main(int argc, char *argv[])
                 .startup_start_time = startup_timer ? &startup_start_time : NULL,
                 .startup_log_path = startup_timer ? startuptime_log_file_path_name : NULL,
             },
+        
     };
 
 
     int running = true;
     while (running) {
-
+        
         //もしlspを使用する設定だったら
         if(epfd >= 0 && state.settings_data->lsp.lsp_use){
             lsp_poll_events(&epfd, &lsp, settings_data.lsp.lsp_epoll_timeout_ms);
+            error_log_write(lsp.from_server_msg_buff);
         }
 
         if(open_start_menu && start_menu != NULL){
@@ -437,25 +445,6 @@ static void lsp_poll_events(int *epfd, struct lsp_process *lsp, int timeout_ms)
     }
 }
 
-// lsp_handle_message(): 受信済みのLSPメッセージ1件を種類別に振り分ける。
-// initialize応答にはinitialized通知を返し、診断通知はエラーログへ書き出す。
-// 引数: lsp=送信先fdとinitialized状態を持つLSPプロセス、msg='\0'終端のJSON文字列。
-// 返り値: なし。
-static void lsp_handle_message(struct lsp_process *lsp, char *msg)
-{
-    if(check_id(msg) == initialize_id_num && !lsp->initialized){
-        if(lsp_send(lsp->to_server_fd,
-            "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}") == 0){
-            lsp->initialized = true;
-        }
-        return;
-    }
-
-    if(lsp_is_publish_diagnostics(msg)){
-        error_log_write(msg);
-        error_log_write("\n");
-    }
-}
 void my_mvaddstr(struct pos pos,char * str){
     mvaddstr(pos.y,pos.x,str);
 }

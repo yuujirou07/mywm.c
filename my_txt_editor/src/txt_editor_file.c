@@ -1,4 +1,5 @@
 #include <dirent.h>
+#include <errno.h>
 #include <limits.h>
 #include <linux/limits.h>
 #include <ncurses.h>
@@ -11,7 +12,9 @@
 #include <wchar.h>
 #include <sys/stat.h>
 #include<dirent.h>
+#include<sys/stat.h>
 #include"cjson/cJSON.h"
+#include "error_log.h"
 #include "txt_editor.h"
 #include "json_read.h"
 #include "path_util.h"
@@ -22,7 +25,7 @@
 // 行幅は画面幅と無関係な固定長なので、ここではエントリ名をそのまま保持する。
 // 表示幅に合わせた切り詰めはdraw_box_inside_dir()が描画時に行う。
 // 引数: state=ファイルブラウザ領域と件数、table=書き込み先テーブル、table_rows=tableの確保済み行数、path_name=読むディレクトリ。
-// 返り値: なし。
+// 返り値: なし。無効なテーブル・行数は何もせず、opendir()失敗時はプロセスを終了する。
 void load_dir_table(struct editor_state *state,char (*table)[DIR_ENTRY_NAME_MAX],int table_rows,char *path_name){
     state->dir_num = 0;
     if(table == NULL || table_rows <= 0 || state->file_browser_area.h <= 0){
@@ -53,11 +56,12 @@ void load_dir_table(struct editor_state *state,char (*table)[DIR_ENTRY_NAME_MAX]
     }
 }
 
-// load_file(): ファイルブラウザで選択中の名前を取り出し、Cファイルなら読み込み用に開く。
+// load_file(): ファイルブラウザで選択中の名前を取り出し、通常ファイルなら読み込み用に開く。
 // 開けない場合や対象外の拡張子ならエラー画面へ切り替える。
 // 引数: state=選択行とファイル状態、table=1行1エントリのファイル名一覧、path_name=現在ディレクトリ、select_state=選択結果の書き込み先。
 // tableがNULLの場合はpath_nameを完成済みのパスとして直接読み込む。
-// 返り値: なし。成功時はstate->file_data.now_open_fileにFILE*を保存する。
+// 返り値: なし。結果はselect_stateに格納する。
+// 所有権: ファイル選択成功時は先に開いていたFILE*を閉じ、新しいFILE*をstateが保持する。
 void load_file(struct editor_state *state, char (*table)[DIR_ENTRY_NAME_MAX],char *path_name,struct file_browse_select_state *select_state){
     select_state->select_name[0] = '\0';
     select_state->select_state = error;
@@ -139,7 +143,7 @@ void load_file(struct editor_state *state, char (*table)[DIR_ENTRY_NAME_MAX],cha
 
 // editor_free_text_buffer(): 編集バッファと行情報配列をまとめて解放する。
 // 引数: state=解放対象のエディタ状態。
-// 返り値: なし。
+// 返り値: なし。NULLのstateは何もしない。解放後の各ポインタはNULLに戻す。
 void editor_free_text_buffer(struct editor_state *state){
     if(state == NULL){
         return;
@@ -160,7 +164,8 @@ void editor_free_text_buffer(struct editor_state *state){
 // line_count行分の行情報配列(長さ・開始位置・行容量)を確保する。
 // line_offsetとline_capは0のままなので、呼び出し側がレイアウトを決めて埋める。
 // 引数: state=確保先、line_count=扱う行数、total_capacity=バッファ全体の要素数。
-// 返り値: 確保できたらtrue。失敗時は何も確保していない状態へ戻す。
+// 返り値: 確保できたらtrue。確保失敗時は全バッファを解放済みの状態に戻す。引数不正時は旧バッファを変更しない。
+// 所有権: stateが保持していた旧バッファを解放し、新しいバッファをstateの所有にする。
 bool editor_alloc_text_buffer(struct editor_state *state, int line_count, long total_capacity){
     if(state == NULL || line_count < 1 || total_capacity < 1){
         return false;
@@ -252,6 +257,7 @@ bool editor_ensure_line_cap(struct editor_state *state, int line, int need){
 // スロットを持つよう、必要なら伸長する。editor_ensure_line_cap()の行方向版にあたる。
 // 引数: state=編集バッファ、need_rows=最低限確保したい行スロット数。
 // 返り値: need_rows行を確保できたらtrue。realloc失敗時はfalse。
+// reallocが一部だけ成功した場合、成功分のポインタはstateへ反映するがline_capacityは変更しない。
 bool editor_ensure_row_capacity(struct editor_state *state, int need_rows){
     if(state == NULL || state->str.line == NULL || state->str.line_offset == NULL ||
        state->str.line_cap == NULL || need_rows < 0){
@@ -312,7 +318,7 @@ static size_t count_line_cells(const char *buff, int indent_range){
 
 // set_line_memory(): ファイル各行の開始位置(ftell)を保存し、後で任意行へfseekできるようにする。
 // 併せて全行の合計桁数を数え、file_total_str_sizeへ書き込む。
-// 引数: state=開いているFILE*と行開始位置配列。
+// 引数: state=開いているFILE*と、default_load_line_size要素以上の行開始位置配列を持つ状態。
 // 返り値: なし。
 void set_line_memory(struct editor_state *state){
     int max_line_size = state->settings_data->max_line_size;
@@ -357,8 +363,8 @@ void set_line_memory(struct editor_state *state){
 
 // load_string_data(): 保存済みの行開始位置から指定行数分だけ読み込み、
 // file_str_dataへ文字列として格納する。
-// 引数: state=読み込み元FILE*と格納先、load_start_line=開始行、load_size=読み込む行数。
-// 返り値: なし。
+// 引数: state=読み込み元FILE*と確保済みfile_str_data、load_start_line=開始行、load_size=読み込む行数。
+// 返り値: なし。load_start_lineが記録済み行数以上ならプロセスを終了する。
 void load_string_data(struct editor_state *state,long load_start_line,int load_size){
     if(load_start_line >= state->file_data.file_line_start_num_counter){
         exit(1);
@@ -379,7 +385,8 @@ void load_string_data(struct editor_state *state,long load_start_line,int load_s
 // 各行を先頭から詰めながらline_offset/line_capを確定させる。
 // 画面幅には一切依存しないため、リサイズしても再読み込みは不要。
 // 引数: state=開いているFILE*・行開始位置・編集バッファ。
-// 返り値: なし。
+// 返り値: なし。ファイル読み込み失敗時はエラー画面へ移行し、編集バッファ確保失敗時はプロセスを終了する。
+// 所有権: 読み込み成功時はchr_file_all_str_dataと編集バッファをstateが所有する。
 void load_all_lines(struct editor_state *state){
     long line_count = (state->file_data.file_line_start_num_counter < 1 )
         ?1:state->file_data.file_line_start_num_counter;
@@ -497,6 +504,11 @@ void load_all_lines(struct editor_state *state){
     }
 }
 
+// editor_buffer_to_utf8(): 編集中のwide-char行バッファをUTF-8文字列へ変換する。
+// 各論理行の末尾に'\n'を付け、セル値0は出力しない。
+// 引数: state=変換元の編集バッファと行数を持つエディタ状態。
+// 返り値: 成功時はNUL終端されたUTF-8文字列。引数不正、容量超過、確保・変換失敗時はNULL。
+// 所有権: 成功時の返値は呼び出し側がfree()する。
 char *editor_buffer_to_utf8(struct editor_state *state)
 {
     int line_count;
@@ -770,12 +782,19 @@ void load_custom_editor_settings(struct editor_settings *settings_data){
     cJSON_Delete(json_data);
 }
 
+// file_select_line_update(): 現在の選択行をprevious_lineに保存し、新しい選択行を設定する。
+// 引数: file_select_line=更新対象の選択行状態、line=新しい行番号。NULLは指定できない。
+// 返り値: なし。
 void file_select_line_update(struct file_select_line *file_select_line,int line){
     file_select_line->previous_line = file_select_line->now_line;
     file_select_line->now_line = line;
 }
 
 
+// input_mode_tmp_path(): set時にpathポインタを内部の一時パスとして保存する。
+// get時はpathが値渡しのため、現実装では呼び出し側へ保存値を返せない。
+// 引数: path=set時に保存する文字列ポインタ、flags=setまたはget。pathがNULLなら何もしない。
+// 返り値: なし。文字列は複製・解放せず、所有権は呼び出し側に残る。
 void input_mode_tmp_path(char *path,enum flags flags){
     if(path == NULL)return;
     static char *tmp_path = NULL;
@@ -789,11 +808,19 @@ void input_mode_tmp_path(char *path,enum flags flags){
 }
 
 
+// now_open_path_name(): 現在パスの設定・取得と、wide-char文字列への変換を行う。
+// set時はpath->path_nameと末尾名を内部へ複製し、get時にpathがあれば内部パスポインタと名前・種類を格納する。
+// 引数: path=set時はpath_nameが必須の入力、get時は保存情報の出力先。flags=setまたはget。
+// 返り値: 成功時は現在パスのwide-char文字列。引数不正、メモリ確保、文字変換失敗時はNULL。
+// 所有権: 返値とget時に格納するpath_nameは内部保持であり、呼び出し側はfree()しない。
+// wide-charの返値は次回呼び出しで上書きされ、get時のpath_nameは次回setで無効になる。
 const wchar_t *now_open_path_name(struct dir_table *path,enum flags flags){
     if((path == NULL || path->path_name == NULL) && flags == set)return NULL;
 
+    // ファイルブラウザで入力・移動中のパス。
+    // state->file_data.now_open_path_nameの編集中ファイルパスとは別に保持する。
     static struct dir_table now_open_path;
-    static wchar_t wide_path[PATH_MAX];
+    static wchar_t wide_path[PATH_MAX]; // now_open_path.path_nameを変換した返値用バッファ。
     if(flags == set){
         size_t path_size = strlen(path->path_name);
         const char *name_end = path->path_name + path_size;
@@ -811,20 +838,16 @@ const wchar_t *now_open_path_name(struct dir_table *path,enum flags flags){
         }
 
         char *saved_path = malloc(path_size + 1);
-        char *saved_name = malloc(name_size + 1);
-        if(saved_path == NULL || saved_name == NULL){
+        if(saved_path == NULL || name_size >= sizeof(now_open_path.d_name)){
             free(saved_path);
-            free(saved_name);
             return NULL;
         }
         memcpy(saved_path,path->path_name,path_size + 1);
-        memcpy(saved_name,name_start,name_size);
-        saved_name[name_size] = '\0';
 
         free(now_open_path.path_name);
-        free(now_open_path.d_name);
         now_open_path.path_name = saved_path;
-        now_open_path.d_name = saved_name;
+        memcpy(now_open_path.d_name,name_start,name_size);
+        now_open_path.d_name[name_size] = '\0';
         now_open_path.d_type = DT_UNKNOWN;
 
         struct stat st;
@@ -839,7 +862,7 @@ const wchar_t *now_open_path_name(struct dir_table *path,enum flags flags){
     }
     else if(flags == get && path != NULL){
         path->path_name = now_open_path.path_name;
-        path->d_name = now_open_path.d_name;
+        memcpy(path->d_name,now_open_path.d_name,sizeof(path->d_name));
         path->d_type = now_open_path.d_type;
     }
 
@@ -854,11 +877,18 @@ const wchar_t *now_open_path_name(struct dir_table *path,enum flags flags){
     return wide_path;
 }
 
+// check_dir_mem(): 現在パスの末尾名を含むディレクトリエントリを最大size件収集する。
+// 引数: dir_table=結果の格納先配列、size=配列の要素数。0以下は無効。
+// 返り値: 格納した件数。引数不正、文字変換、ディレクトリオープン失敗時は-1。
 int check_dir_mem(struct dir_table *dir_table,int size){
     if(dir_table == NULL || size <= 0)return -1;
     memset(dir_table,0,(size_t)size * sizeof(*dir_table));
 
     const wchar_t *path = now_open_path_name(NULL,get);
+    if(path == NULL){
+        error_log("can not get now open path name");
+        return -1;
+    }
     char char_path[PATH_MAX];
     size_t converted = wcstombs(char_path,path,sizeof(char_path) - 1);
     if(converted == (size_t)-1)return -1;
@@ -889,14 +919,52 @@ int check_dir_mem(struct dir_table *dir_table,int size){
         if(dir_mem_counter >= size)break;
         size_t dirent_name_size = strlen(dirent_dir->d_name);
         if(strstr(dirent_dir->d_name,now_dir_mem_name) != NULL){
-            char *name = malloc(dirent_name_size + 1);
-            if(name == NULL)break;
-            memcpy(name,dirent_dir->d_name,dirent_name_size + 1);
-            dir_table[dir_mem_counter].d_name = name;
+            if(dirent_name_size >= sizeof(dir_table[dir_mem_counter].d_name))continue;
+            memcpy(dir_table[dir_mem_counter].d_name,
+                   dirent_dir->d_name,dirent_name_size + 1);
             dir_table[dir_mem_counter].d_type = dirent_dir->d_type;
             dir_mem_counter++;
         }
     }
     closedir(dir);
     return dir_mem_counter;
+}
+
+enum select_state get_path_state(const char *path){
+    if(path == NULL)return error;
+    struct stat stat_state = {0};
+    int stat_rt = stat(path,&stat_state);
+    if(stat_rt != 0){
+        char *error_msg = strerror(errno);
+        if(strlen(error_msg) + 1 > ERROR_MSG_SIZE_MAX){
+            error_msg[ERROR_MSG_SIZE_MAX - 1] = '\0';
+        }
+        error_log(error_msg);
+    }
+    if(stat_state.st_mode & S_IFREG){
+        return file;
+    }
+    else if(stat_state.st_mode & S_IFDIR){
+        return folder;
+    }
+    else return unkown;
+}
+
+int now_input_path_open(struct editor_state *state,struct editor_input_context *ctx){
+    if(state == NULL || ctx == NULL)return -1;
+    struct dir_table dir_info = {0};
+    now_open_path_name(&dir_info,get);
+    if(dir_info.path_name == NULL)return true;
+
+    struct file_browse_select_state select_state;
+    load_file(state,NULL,dir_info.path_name,&select_state);
+
+    if(select_state.select_state == file){
+        load_screen_size(state);
+        editor_set_cursor(state,0,0);
+        restore_edit_screen(state);
+        set_file_browse_path_input_mode(&ctx->file_browse_screen,false);
+        
+    }
+    return 0;
 }
