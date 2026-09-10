@@ -12,6 +12,7 @@
 #include"default_settings.h"
 #include"lsp_src/language_server_communication.h"
 
+
 #define my_txt_editor_var 0.0
 #define new_file 0
 #define quit 1
@@ -579,7 +580,7 @@ void handle_tab(WINDOW *win, struct editor_state *state);
 // 入力されたワイド文字をカーソル位置へ挿入する。
 void handle_char_input(WINDOW *win, wchar_t ch, struct editor_state *state);
 // マウスホイールによる上下スクロールを処理する。
-void handle_mouse(WINDOW *win, MEVENT *event, struct editor_state *state,int dir_num);
+void handle_mouse(struct editor_input_context *ctx,int dir_num);
 // 矢印キーによるカーソル移動と画面スクロールを処理する。
 void handle_input_allow(WINDOW *win, wchar_t ch, struct editor_state *state);
 // カーソル移動と行ジャンプで使用する行番号上限を設定する。
@@ -591,7 +592,7 @@ int remove_line_join_str_data(struct editor_state *state,long remove_line_num);
 // カーソル位置で行を分割し、新しい行用の領域を作る。
 int make_new_line_space(struct editor_state *state,long make_space_line_num);
 // 編集画面でのマウス操作を処理する。
-void editor_screen_mouse_event(WINDOW *win, MEVENT *event, struct editor_state *state);
+void editor_screen_mouse_event(struct editor_input_context *ctx);
 // ファイルブラウザでのマウス操作を処理する。
 void file_browse_screen_mouse_event(WINDOW *win, MEVENT *event, struct editor_state *state,int dir_num);
 // ファイルブラウザのパス入力モードを設定する。

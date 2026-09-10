@@ -6,6 +6,7 @@
 #include <wchar.h>
 #include <wctype.h>
 #include "txt_editor.h"
+#include"txt_editor_syntax.h"
 
 static int limit = 0;
 
@@ -345,16 +346,21 @@ void handle_char_input(WINDOW *win, wchar_t ch, struct editor_state *state){
 
 // handle_mouse(): マウスホイールで表示開始行を上下に動かし、
 // カーソルが表示範囲外へ出る場合は一時的に非表示にする。
-// 引数: win=スクロールするウィンドウ、event=getmouse()の格納先、state=表示位置とカーソル状態。
+// 引数: ctx=ウィンドウ、マウスイベント、表示状態を持つ入力context、dir_num=ディレクトリ選択行。
 // 返り値: なし。
-void handle_mouse(WINDOW *win, MEVENT *event, struct editor_state *state,int dir_num) {
+void handle_mouse(struct editor_input_context *ctx,int dir_num) {
+    WINDOW *win = ctx->win;
+    MEVENT *event = ctx->mouse_event;
+    struct editor_state *state = ctx->state;
+
     if (getmouse(event) != OK){
         return;
     }
     switch(editor_get_screen_state(state)){
         case edit_screen:{
-            editor_screen_mouse_event(win,event,state);
+            editor_screen_mouse_event(ctx);
             curs_set(state->is_cur_show ? 1 : 0);
+
             state->render_flags |= RENDER_EDIT_SCREEN_BASE;
             state->render_flags |= RENDER_FILE_DATA;
             break;
@@ -600,10 +606,11 @@ int make_new_line_space(struct editor_state *state,long make_space_line_num){
 // editor_screen_mouse_event(): ホイールで表示開始行だけを動かす。
 // スクロールは編集位置を変えないため、cursorは書き換えない。カーソルの画面座標は
 // scr_start_numから自動的にずれるので、表示可否だけを取り直す。
-// 引数: win=未使用、event=getmouse()済みのイベント、state=表示位置とカーソル。
+// 引数: ctx=ウィンドウ、getmouse()済みのイベント、表示位置とカーソルを持つ入力context。
 // 返り値: なし。
-void editor_screen_mouse_event(WINDOW *win, MEVENT *event, struct editor_state *state){
-    (void)win;
+void editor_screen_mouse_event(struct editor_input_context *ctx){
+    MEVENT *event = ctx->mouse_event;
+    struct editor_state *state = ctx->state;
 
     int line_limit = editor_line_limit(state);
     bool can_scroll_down = state->scr.scr_start_num + state->write_area.h < line_limit;
@@ -611,10 +618,19 @@ void editor_screen_mouse_event(WINDOW *win, MEVENT *event, struct editor_state *
     //エディター画面下スクロール処理
     if (event->bstate & BUTTON5_PRESSED && can_scroll_down) {
         state->scr.scr_start_num++;
-
+        if(state->settings_data->built_in_syntax){
+            scroll_syntax_pos_data(-1);
+            update_line_syntax_data(ctx,state->write_area.h - 1);
+        }
+        
     //エディター画面上スクロール処理
     } else if ((event->bstate & BUTTON4_PRESSED) && state->scr.scr_start_num > 0) {
         state->scr.scr_start_num--;
+        if(state->settings_data->built_in_syntax){
+            scroll_syntax_pos_data(+1);
+            int scr_updaate_line = state->scr.scr_start_num + state->write_area.h -1;
+            update_line_syntax_data(ctx,0);
+        }
     }
     else{
         return;

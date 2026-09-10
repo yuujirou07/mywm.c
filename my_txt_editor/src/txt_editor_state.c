@@ -12,6 +12,7 @@
 #include "lsp_src/language_server_communication.h"
 #include "txt_editor.h"
 #include"language_server_communication.h"
+#include "txt_editor_syntax.h"
 
 static void reset_jump_mode(struct editor_state *state);
 static long clamp_editor_target_line(struct editor_state *state, long target_line);
@@ -96,7 +97,7 @@ static bool handle_edit_screen_input(struct editor_input_context *ctx, int input
        lsp_send_completion(ctx->lsp_data->to_server_fd,state); 
     }
     if (ch == KEY_MOUSE) {
-        handle_mouse(win, ctx->mouse_event, state, 0);
+        handle_mouse(ctx, 0);
         state->render_flags |= RENDER_LINE;
 
         return true;
@@ -116,6 +117,9 @@ static bool handle_edit_screen_input(struct editor_input_context *ctx, int input
             handle_char_input(win, (wchar_t)ch, state);
             send_lsp_did_change(ctx);
         }
+
+        int now_scr_line_num = state->cursor.line - state->scr.scr_start_num; 
+        update_line_syntax_data(ctx,now_scr_line_num);
         state->render_flags |= RENDER_LINE_STATUS;
     } else {
         if (input_result == OK && iswprint((wint_t)ch)) {
@@ -152,7 +156,6 @@ static bool handle_edit_screen_input(struct editor_input_context *ctx, int input
 static bool handle_file_browse_screen_input(struct editor_input_context *ctx, int input_result, wint_t ch)
 {
     struct editor_state *state = ctx->state;
-    WINDOW *win = ctx->win;
     struct file_browse_screen_context *file_browse_screen = &ctx->file_browse_screen;
 
     //もしインプットモードなら英数字のキーには反応させない
@@ -217,8 +220,7 @@ static bool handle_file_browse_screen_input(struct editor_input_context *ctx, in
             }
 
             if(ch == KEY_MOUSE){
-                handle_mouse(win,ctx->mouse_event,ctx->state,
-                    ctx->file_browse_screen.dir_name_table_num);
+                handle_mouse(ctx,ctx->file_browse_screen.dir_name_table_num);
             }
 
 

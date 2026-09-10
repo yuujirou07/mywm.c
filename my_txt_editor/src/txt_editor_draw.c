@@ -6,6 +6,7 @@
 #include <stddef.h>
 #include <wchar.h>
 #include "txt_editor.h"
+#include"txt_editor_syntax.h"
 
 #define container_of(ptr, type, member) \
     ((type *)((char *)(ptr) - offsetof(type, member)))

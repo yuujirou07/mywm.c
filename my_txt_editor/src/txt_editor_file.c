@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <time.h>
 #include <unistd.h>
 #include <wchar.h>
 #include <sys/stat.h>
@@ -19,6 +20,7 @@
 #include "json_read.h"
 #include "path_util.h"
 #include"default_settings.h"
+#include"txt_editor_syntax.h"
 
 // load_dir_table(): path_name配下のディレクトリエントリを読み込み、
 // ファイルブラウザ表示用テーブルへ全エントリの名前と種別を保持する。
@@ -1019,7 +1021,10 @@ int now_input_path_open(struct editor_state *state,struct editor_input_context *
         editor_set_cursor(state,0,0);
         restore_edit_screen(state);
         set_file_browse_path_input_mode(&ctx->file_browse_screen,false);
-        
+        if(state->settings_data->built_in_syntax){
+            syntax *syntax = now_usint_syntax_ptr_ctl(NULL,get);
+            if(syntax != NULL)set_syntax_data(syntax,ctx);
+        }
     }
     return 0;
 }

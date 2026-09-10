@@ -352,6 +352,7 @@ int main(int argc, char *argv[])
         
     };
 
+    now_usint_syntax_ptr_ctl(&syntax,set);
 
     int running = true;
     while (running) {
@@ -374,24 +375,11 @@ int main(int argc, char *argv[])
         
         update_screen(&input_context);
         if(editor_get_screen_state(&state) == edit_screen){
-            int syntax_num = state.settings_data->built_in_syntax
-                ? set_syntax_data(&syntax,&input_context) : 0;
-            // 前回の着色を戻してから、本文描画後の画面へ適用する。
-            for(int h = 0;h < state.write_area.h;h++){
-                if(state.write_area.w > 0)
-                    mvchgat(state.write_area.y_start + h,state.write_area.x_start,
-                        state.write_area.w,A_NORMAL,1,NULL);
-            }
-            for(int i = 0;i < syntax_num;i++){
-                syntax_data *data = &syntax.syntax_list_data.syntax_data[i];
-                syntax_area *area = &data->area;
-                mvchgat(state.write_area.y_start + area->st_y,
-                    state.write_area.x_start + area->st_x,
-                    area->end_x - area->st_x + 1,A_NORMAL,syntax_color_pair(data->type),NULL);
-            }
+            apply_syntax_color(&input_context,syntax);
             editor_sync_cursor(&state);
             refresh();
         }
+
         wint_t ch = 0;
         int input_result;
         input_result = get_wch(&ch);
