@@ -22,6 +22,7 @@
 #define DEFAULT_EPOLL_TIME_OUT_MS 16
 #define DEFAULT_LSP_USE true
 #define DEFAULT_USE_ICON false
+#define DEFAULT_BUILT_IN_SYNTAX true
 
 
 struct lsp_settings_data{
@@ -46,6 +47,7 @@ struct editor_settings{
     bool show_start_menu;
     bool file_select_scene_lighting;
     bool use_icon;
+    bool built_in_syntax;
     struct lsp_settings_data lsp;
 
 };

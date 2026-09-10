@@ -675,6 +675,7 @@ void load_default_editor_settings(struct editor_settings *settings_data){
     settings_data->lsp.lsp_epoll_timeout_ms     = DEFAULT_EPOLL_TIME_OUT_MS;
     settings_data->lsp.lsp_use                  = DEFAULT_LSP_USE;
     settings_data->use_icon                     = DEFAULT_USE_ICON;
+    settings_data->built_in_syntax              = DEFAULT_BUILT_IN_SYNTAX;
 }
 
 // load_custom_editor_settings(): 設定JSONがあれば読み込み、既定値を上書きする。
@@ -774,6 +775,11 @@ void load_custom_editor_settings(struct editor_settings *settings_data){
     cJSON *use_icon = cJSON_GetObjectItemCaseSensitive(json_data, "use_icon");
     if(cJSON_IsBool(use_icon)){
         settings_data->use_icon = cJSON_IsTrue(use_icon);
+    }
+
+    cJSON *built_in_syntax = cJSON_GetObjectItemCaseSensitive(json_data,"built_in_syntax");
+    if(cJSON_IsBool(built_in_syntax)){
+        settings_data->built_in_syntax = cJSON_IsTrue(built_in_syntax);
     }
 
     cJSON *lsp = cJSON_GetObjectItemCaseSensitive(json_data, "lsp");

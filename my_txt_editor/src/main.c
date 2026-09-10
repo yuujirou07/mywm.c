@@ -20,6 +20,7 @@
 #include "txt_editor.h"
 #include"error_log.h"
 #include"path_util.h"
+#include"txt_editor_syntax.h"
 
 
 static void end_process(struct editor_state *state);
@@ -98,6 +99,7 @@ int main(int argc, char *argv[])
     }
     init_pair(2, COLOR_BLACK, COLOR_WHITE);
     init_pair(3, COLOR_BLACK, COLOR_RED);
+    init_syntax_colors();
 
     state.scr.scr_start_num = 0;
 
@@ -306,6 +308,10 @@ int main(int argc, char *argv[])
         }
         set_lsp_use_language(&lsp,state.settings_data->lsp.lsp_language);
     }
+
+    syntax syntax = {0};
+    init_syntax(&syntax);
+    set_syntax_language(C,&syntax);
     
     struct editor_input_context input_context = {
             .win = win,
@@ -367,6 +373,25 @@ int main(int argc, char *argv[])
         }
         
         update_screen(&input_context);
+        if(editor_get_screen_state(&state) == edit_screen){
+            int syntax_num = state.settings_data->built_in_syntax
+                ? set_syntax_data(&syntax,&input_context) : 0;
+            // 前回の着色を戻してから、本文描画後の画面へ適用する。
+            for(int h = 0;h < state.write_area.h;h++){
+                if(state.write_area.w > 0)
+                    mvchgat(state.write_area.y_start + h,state.write_area.x_start,
+                        state.write_area.w,A_NORMAL,1,NULL);
+            }
+            for(int i = 0;i < syntax_num;i++){
+                syntax_data *data = &syntax.syntax_list_data.syntax_data[i];
+                syntax_area *area = &data->area;
+                mvchgat(state.write_area.y_start + area->st_y,
+                    state.write_area.x_start + area->st_x,
+                    area->end_x - area->st_x + 1,A_NORMAL,syntax_color_pair(data->type),NULL);
+            }
+            editor_sync_cursor(&state);
+            refresh();
+        }
         wint_t ch = 0;
         int input_result;
         input_result = get_wch(&ch);
@@ -381,11 +406,13 @@ int main(int argc, char *argv[])
         }
 
         running = editor_handle_screen_input(&input_context, input_result, ch);
+
         continue;
 
     }
     // resize_file_browser()がreallocした場合、最新のポインタはcontext側にある。
     free(input_context.file_browse_screen.dir_name_table);
+    free(syntax.syntax_list_data.syntax_data);
     if(handle != NULL)
         dlclose(handle);
     if(epfd >= 0)
