@@ -9,7 +9,7 @@
 #include"txt_editor.h"
 #include"txt_editor_syntax.h"
 
-// Dark+の近似色。色ペア1〜3は本文・選択・エラー表示が使用する。
+// Dark Modernの256色近似。色ペア1〜3は本文・選択・エラー表示が使用する。
 static const struct {
     short color_256; // 256色以上の端末で使う前景色番号。
     short color_8; // 256色未満の端末で使う基本色番号。
@@ -18,13 +18,13 @@ static const struct {
     [literal]       = {173,COLOR_YELLOW},
     [comment]       = {65,COLOR_GREEN},
     [Method]        = {187,COLOR_YELLOW},
-    [type]          = {74,COLOR_BLUE},
+    [type]          = {68,COLOR_BLUE},
     [operator]      = {188,COLOR_WHITE},
-    [variable]      = {73,COLOR_BLUE},
-    [declaration_keyword] = {75,COLOR_BLUE},
-    [character_literal] = {180,COLOR_YELLOW},
-    [header_name] = {151,COLOR_GREEN},
-    [member_method] = {222,COLOR_YELLOW},
+    [variable]      = {153,COLOR_CYAN},
+    [declaration_keyword] = {68,COLOR_BLUE},
+    [character_literal] = {173,COLOR_YELLOW},
+    [header_name] = {173,COLOR_YELLOW},
+    [member_method] = {187,COLOR_YELLOW},
 };
 
 // 登録されたsyntax_dataへの借用ポインタを保持する。要素自体は所有・解放しない。
