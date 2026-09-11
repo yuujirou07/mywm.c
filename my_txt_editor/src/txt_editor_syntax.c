@@ -23,6 +23,7 @@ static const struct {
     [variable]      = {73,COLOR_BLUE},
 };
 
+// 登録されたsyntax_dataへの借用ポインタを保持する。要素自体は所有・解放しない。
 syntax_data **syntax_data_collection = NULL;
 static int garbage_collection_allocate_num = 256;
 static int collection_count = 0;
@@ -62,6 +63,10 @@ static const wchar_t *const reserved_words[] = {
     L"continue",
     L"else",
     L"#include",
+    L"static",
+    L"struct",
+    L"union",
+    L"enum"
 };
 
 static const wchar_t *const type_words[] = {
@@ -77,6 +82,9 @@ static const wchar_t *const type_words[] = {
     L"bool",
     L"_Bool",
 };
+
+// set_syntax_language()が現在の言語に合わせて切り替える。文字列リテラルを借用する。
+const wchar_t *comment_ev_str = L"//";
 
 
 
@@ -122,7 +130,7 @@ int find_syntax_word(const wint_t *line,int line_len,int pos,
 }
 
 /* 引数: syntaxは初期化済みの管理情報、x/yは表示領域内の開始位置、
- * word_lenは正の着色文字数、word_typeは分類。同一行の範囲を末尾へ追加する。
+ * word_lenは正の着色文字数、word_typeは分類。同じ開始座標があれば上書きし、なければ末尾へ追加する。
  * 返り値: 成功0、realloc失敗-1（既存の配列・件数は維持）。
  * 再確保すると既存要素へのポインタは無効になるため、呼び出し後に取得し直す。
  */
@@ -197,11 +205,25 @@ int init_syntax(syntax *syntax){
     return 0;
 }
 
-/* 引数: langは保存する言語、syntaxは設定先。langの値の妥当性は検証しない。
- * 返り値: 成功0、syntaxがNULLなら-1。既存の解析結果は変更しない。
+/* 言語を保存し、その言語の行コメント開始文字列をcomment_ev_strへ設定する。
+ * 引数: langはC/CPP/PY/TSのいずれか、syntaxは設定先。
+ * C、CPP、TSは"//"、PYは"#"を使用する。
+ * 返り値: 成功0、syntaxがNULLまたはlangが範囲外なら-1。既存の解析結果は変更しない。
  */
 int set_syntax_language(language lang,syntax *syntax){
     if(syntax == NULL)return -1;
+    switch(lang){
+        case C:
+        case CPP:
+        case TS:
+            comment_ev_str = L"//";
+            break;
+        case PY:
+            comment_ev_str = L"#";
+            break;
+        default:
+            return -1;
+    }
     syntax->lang = lang;
     return 0;
 }
@@ -209,8 +231,9 @@ int set_syntax_language(language lang,syntax *syntax){
 
 
 /* 引数: syntaxはinit_syntax成功済み、ctxは有効なstateを持つ入力コンテキスト。
- * スクロール開始行から表示領域内の予約語と型名を再解析し、着色情報を置き換える。
- * langは参照せず、文字列・コメント内かどうかの区別もしない。
+ * スクロール開始行から表示領域内を再解析し、予約語、型、メソッド、行コメント、変数、リテラル、ヘッダー名の情報を再構築する。
+ * コメント開始文字列はset_syntax_language()が設定したcomment_ev_strを使う。
+ * 文字列内かどうかの区別や複数行コメントの追跡はしない。
  * 返り値: 登録件数（0以上）。NULL引数・state不在・未確保・追加失敗なら-1。
  * 再解析開始後の失敗では件数が0または途中までの結果になる。配列は保持する。
  * ctxは借用して変更しない。配列の再確保により以前の要素ポインタは無効になり得る。
@@ -235,10 +258,18 @@ int set_syntax_data(syntax *syntax,struct editor_input_context *ctx){
         if(scan_syntax_method(syntax,line_st_ptr,line_str_len,view_cols,h,Method) < 0)return -1;
         if(scan_syntax_comment(syntax,line_st_ptr,line_str_len,view_cols,h,comment) < 0)return -1;
         if(scan_syntax_variable(syntax,line_st_ptr,line_str_len,view_cols,h,variable) < 0)return -1;
+        if(scan_syntax_header_name(syntax,line_st_ptr,line_str_len,view_cols,h,literal) < 0)return -1;
+        if(scan_syntax_literal(syntax,line_st_ptr,line_str_len,view_cols,h,literal) < 0)return -1;
     }
     return syntax->syntax_list_data.syntax_list_num;
 }
 
+/* 現在表示中の1行を解析し、登録済みの着色情報へ追加または上書きする。
+ * 引数: ctxは有効なstateを持つ入力コンテキスト、lineは表示領域先頭を0とする画面相対行。
+ * now_usint_syntax_ptr_ctl()で事前にsyntaxを登録し、syntax_dataを確保しておく必要がある。
+ * 返り値: 更新後の登録件数。ctx/state、登録syntax、配列、対象ファイル行が無効、または追加失敗なら-1。
+ * この関数は対象行に残った古い範囲を一括削除せず、同じ開始座標の範囲だけを上書きする。
+ */
 int update_line_syntax_data(struct editor_input_context *ctx,int line){
     if(ctx == NULL || ctx->state == NULL)return -1;
     syntax *syntax = now_usint_syntax_ptr_ctl(NULL,get);
@@ -258,9 +289,16 @@ int update_line_syntax_data(struct editor_input_context *ctx,int line){
     if(scan_syntax_method(syntax,line_st_ptr,line_str_len,view_cols,h,Method) < 0)return -1;
     if(scan_syntax_comment(syntax,line_st_ptr,line_str_len,view_cols,h,comment) < 0)return -1;
     if(scan_syntax_variable(syntax,line_st_ptr,line_str_len,view_cols,h,variable) < 0)return -1;
+    if(scan_syntax_header_name(syntax,line_st_ptr,line_str_len,view_cols,h,literal) < 0)return -1;
+    if(scan_syntax_literal(syntax,line_st_ptr,line_str_len,view_cols,h,literal) < 0)return -1;
     return syntax->syntax_list_data.syntax_list_num;
 }
 
+/* 本文領域を通常色へ戻した後、syntaxに登録された画面内の範囲へ色を適用してrefreshする。
+ * 引数: ctxは有効なstateを持つ入力コンテキスト、syntaxは借用配列を含む浅いコピー。
+ * syntax_dataの所有権は移動せず、この関数では確保・解放しない。
+ * 返り値: ctxがNULLなら-1、それ以外は0。ncurses関数の失敗は返り値へ反映しない。
+ */
 int apply_syntax_color(struct editor_input_context *ctx,syntax syntax){
     if(ctx == NULL)return -1;
     struct editor_state *state = ctx->state; 
@@ -289,7 +327,11 @@ int apply_syntax_color(struct editor_input_context *ctx,syntax syntax){
 }
 
 
-
+/* 行内で、空白を挟んで'('が続く識別子をメソッドとして着色情報へ追加する。
+ * 引数: syntaxは初期化済み、line_st_ptrはline_len要素の行、view_colsは表示列数、
+ * hは画面相対行、mthodは登録する分類。予約語と型名は対象外にする。
+ * 返り値: 成功0、着色情報の追加失敗なら-1。失敗前に追加した情報は残る。
+ */
 int scan_syntax_method(syntax *syntax,wint_t *line_st_ptr,
     int line_len,int view_cols,int h,syntax_type mthod){
 
@@ -317,28 +359,42 @@ int scan_syntax_method(syntax *syntax,wint_t *line_st_ptr,
     return 0;
 }
 
+/* comment_ev_strと一致する位置から表示行末までをコメントとして登録する。
+ * 引数: syntaxは初期化済み、line_st_ptrはline_len要素の行バッファ、
+ * view_colsは表示列数、hは画面相対行、commentは登録する分類。
+ * 返り値: コメントなしなら0。着色情報の追加結果を返す。
+ */
 int scan_syntax_comment(syntax *syntax,wint_t *line_st_ptr,
         int line_len,int view_cols,int h,syntax_type comment){
 
-    wint_t comment_ev_str[2] = {L'/',L'/'};
-
-    int is_find_command_str = 0;
-    for(int i = 0; i < view_cols;i++){
-        if(*(line_st_ptr + i) == comment_ev_str[0] &&
-            is_find_command_str == 0){
-            is_find_command_str++;
+    int limit = line_len < view_cols ? line_len : view_cols;
+    int comment_ev_str_len = (int)wcslen(comment_ev_str);
+    for(int i = 0;i + comment_ev_str_len <= limit;i++){
+        bool is_comment_start = true;
+        for(int j = 0;j < comment_ev_str_len;j++){
+            if(line_st_ptr[i + j] != (wint_t)comment_ev_str[j]){
+                is_comment_start = false;
+                break;
+            }
         }
-        else if(*(line_st_ptr + i) == comment_ev_str[0] &&
-            is_find_command_str == 1){
-            add_syntax_data(syntax,i - 1,h,(view_cols - i),comment);
-            break;
+        if(is_comment_start){
+            return add_syntax_data(
+                syntax,
+                i,
+                h,
+                (view_cols - i),
+                comment);
         }
     }
-    
     return 0;
 }
 
 
+/* 型名の後ろにある識別子を変数候補として着色情報へ追加する。
+ * 引数: syntaxは初期化済み、line_st_ptrはline_len要素の行、view_colsは表示列数、
+ * hは画面相対行、commentは登録する分類。空白と'*'を読み飛ばし、関数形式は対象外にする。
+ * 返り値: 成功0、着色情報の追加失敗なら-1。失敗前に追加した情報は残る。
+ */
 int scan_syntax_variable(syntax *syntax,wint_t *line_st_ptr,
         int line_len,int view_cols,int h,syntax_type comment){
     int limit = line_len < view_cols ? line_len : view_cols;
@@ -369,6 +425,10 @@ int scan_syntax_variable(syntax *syntax,wint_t *line_st_ptr,
     return 0;
 }
 
+/* 全着色範囲の画面上の行座標を同じ量だけ移動する。
+ * 引数: syntaxは移動対象、yは加算する行数。正なら下、負なら上へ移動する。
+ * 返り値: syntaxがNULLなら-1、それ以外は0。画面外へ出た範囲も配列から削除しない。
+ */
 int move_syntax_pos_data(syntax *syntax,int y){
     if(syntax == NULL)return -1;
     syntax_list_data *syntax_list = &syntax->syntax_list_data;
@@ -379,6 +439,11 @@ int move_syntax_pos_data(syntax *syntax,int y){
     return 0;
 }
 
+/* syntax_dataへの借用ポインタをモジュール内の一覧へ登録する。
+ * 引数: syntax_data_ptrは呼び出し側が所有し、登録中は有効でなければならない。
+ * 返り値: 成功0、NULLまたは一覧用配列のmalloc/realloc失敗なら-1。
+ * 一覧用配列はこのモジュールが所有するが、現在は登録解除・解放処理を持たない。
+ */
 int add_garbage_collection(syntax_data *syntax_data_ptr){
     if(syntax_data_ptr == NULL)return -1;
     if(syntax_data_collection == NULL){
@@ -399,6 +464,11 @@ int add_garbage_collection(syntax_data *syntax_data_ptr){
     return 0;
 }
 
+/* 現在使用中のsyntaxへの借用ポインタを保存または取得する。
+ * 引数: flagsがsetならnow_using_syntaxを保存し、getなら引数を参照せず現在値を取得する。
+ * 保存したsyntaxは利用中、有効でなければならない。所有権は移動しない。
+ * 返り値: set/get成功時は現在値。setへNULLを渡した場合、未登録のget、その他のflagsではNULL。
+ */
 syntax* now_usint_syntax_ptr_ctl(syntax *now_using_syntax,enum flags flags){
     if(now_using_syntax == NULL && flags == set)return NULL;
     static syntax *now_using_syntax_ptr = NULL;
@@ -412,9 +482,89 @@ syntax* now_usint_syntax_ptr_ctl(syntax *now_using_syntax,enum flags flags){
     return NULL;
 }
 
+/* 登録済みsyntaxの全着色範囲を画面上で移動する。
+ * 引数: yは各範囲へ加算する行数。正なら下、負なら上へ移動する。
+ * 返り値: syntaxが未登録なら-1、移動処理を呼び出した場合は0。
+ */
 int scroll_syntax_pos_data(int y){
     syntax *syntax_ptr = now_usint_syntax_ptr_ctl(NULL,get);
     if(syntax_ptr == NULL)return -1;
     move_syntax_pos_data(syntax_ptr,y);
+    return 0;
+}
+
+/* 行頭の#includeに続く山括弧または二重引用符形式のヘッダー名を着色情報へ追加する。
+ * 引数: syntaxは初期化済み、line_st_ptrはline_len要素の行、view_colsは表示列数、
+ * hは画面相対行、str_typeは登録する分類。囲み文字も着色範囲に含める。
+ * 返り値: 対象なしなら0、追加成功なら0、着色情報の追加失敗なら-1。
+ */
+int scan_syntax_header_name(syntax *syntax,wint_t *line_st_ptr,
+        int line_len,int view_cols,int h,syntax_type str_type){
+    const wchar_t *const words[] = {
+        L"#include"
+    };
+
+    int include_len = find_syntax_word(
+        line_st_ptr,
+        line_len,
+        0,
+        words,
+        sizeof(words) / sizeof(words[0])
+    );
+    if(include_len == 0)return 0;
+
+    int limit = line_len < view_cols ? line_len : view_cols;
+    int start_x = include_len;
+    while(start_x < limit && iswspace(line_st_ptr[start_x]))start_x++;
+    if(start_x >= limit)return 0;
+
+    wint_t close_ch;
+    if(line_st_ptr[start_x] == L'<')close_ch = L'>';
+    else if(line_st_ptr[start_x] == L'"')close_ch = L'"';
+    else return 0;
+
+    int end_x = start_x + 1;
+    while(end_x < limit && line_st_ptr[end_x] != close_ch)end_x++;
+    if(end_x >= limit)return 0;
+
+    return add_syntax_data(syntax,start_x,h,end_x - start_x + 1,str_type);
+}
+
+/* 二重引用符の文字列リテラルと単一引用符の文字リテラルを着色情報へ追加する。
+ * 引数: syntaxは初期化済み、line_st_ptrはline_len要素の行、view_colsは表示列数、
+ * hは画面相対行、literal_typeは登録する分類。引用符も着色範囲に含める。
+ * 返り値: 成功0、着色情報の追加失敗なら-1。閉じていないリテラルは登録しない。
+ */
+int scan_syntax_literal(syntax *syntax,wint_t *line_st_ptr,
+        int line_len,int view_cols,int h,syntax_type literal_type){
+    int limit = line_len < view_cols ? line_len : view_cols;
+
+    for(int i = 0;i < limit;i++){
+        wint_t quote = line_st_ptr[i];
+        if(quote != L'"' && quote != L'\'')continue;
+
+        int start_x = i;
+        bool escaped = false;
+        for(i++;i < limit;i++){
+            if(escaped){
+                escaped = false;
+                continue;
+            }
+            if(line_st_ptr[i] == L'\\'){
+                escaped = true;
+                continue;
+            }
+            if(line_st_ptr[i] == quote){
+                if(add_syntax_data(
+                    syntax,
+                    start_x,
+                    h,
+                    i - start_x + 1,
+                    literal_type
+                ) < 0)return -1;
+                break;
+            }
+        }
+    }
     return 0;
 }

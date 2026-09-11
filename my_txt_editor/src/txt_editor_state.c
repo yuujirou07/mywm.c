@@ -118,6 +118,7 @@ static bool handle_edit_screen_input(struct editor_input_context *ctx, int input
             send_lsp_did_change(ctx);
         }
 
+        // update_line_syntax_data()へ渡すのはファイル行ではなく画面内の相対行。
         int now_scr_line_num = state->cursor.line - state->scr.scr_start_num; 
         update_line_syntax_data(ctx,now_scr_line_num);
         state->render_flags |= RENDER_LINE_STATUS;
@@ -503,6 +504,12 @@ static bool handle_line_jump_mode_input(struct editor_input_context *ctx, wint_t
         curs_set(1);
         reset_jump_mode(state);
         editor_set_screen_state(state, edit_screen);
+        if(state->settings_data->built_in_syntax){
+            syntax *syntax = now_usint_syntax_ptr_ctl(NULL,get);
+            if(syntax != NULL){
+                set_syntax_data(syntax,ctx);
+            }
+        }
     }
     return true;
 }

@@ -42,7 +42,7 @@ int main(int argc, char *argv[])
 
     bool startup_timer = 0;
     set_error_log_file("my_editor_error_log.txt");
-
+  
 
     bool mylsp = false;
     if(argc > startuptime_log_file_argument_num){
@@ -352,6 +352,7 @@ int main(int argc, char *argv[])
         
     };
 
+    // 部分更新とスクロール処理から参照するsyntaxを借用ポインタとして登録する。
     now_usint_syntax_ptr_ctl(&syntax,set);
 
     int running = true;
@@ -383,7 +384,7 @@ int main(int argc, char *argv[])
         wint_t ch = 0;
         int input_result;
         input_result = get_wch(&ch);
-
+        
         if (input_result == ERR)
             continue;
 

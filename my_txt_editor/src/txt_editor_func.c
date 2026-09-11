@@ -606,6 +606,7 @@ int make_new_line_space(struct editor_state *state,long make_space_line_num){
 // editor_screen_mouse_event(): ホイールで表示開始行だけを動かす。
 // スクロールは編集位置を変えないため、cursorは書き換えない。カーソルの画面座標は
 // scr_start_numから自動的にずれるので、表示可否だけを取り直す。
+// 組み込み構文着色が有効なら既存範囲を1行移動し、新しく現れた端の1行を解析する。
 // 引数: ctx=ウィンドウ、getmouse()済みのイベント、表示位置とカーソルを持つ入力context。
 // 返り値: なし。
 void editor_screen_mouse_event(struct editor_input_context *ctx){
