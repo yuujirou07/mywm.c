@@ -22,6 +22,10 @@ typedef enum{
     type,
     operator,
     variable,
+    declaration_keyword,
+    character_literal,
+    header_name,
+    member_method,
 }syntax_type;
 
 

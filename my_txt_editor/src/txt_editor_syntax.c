@@ -21,6 +21,10 @@ static const struct {
     [type]          = {74,COLOR_BLUE},
     [operator]      = {188,COLOR_WHITE},
     [variable]      = {73,COLOR_BLUE},
+    [declaration_keyword] = {75,COLOR_BLUE},
+    [character_literal] = {180,COLOR_YELLOW},
+    [header_name] = {151,COLOR_GREEN},
+    [member_method] = {222,COLOR_YELLOW},
 };
 
 // 登録されたsyntax_dataへの借用ポインタを保持する。要素自体は所有・解放しない。
@@ -63,10 +67,18 @@ static const wchar_t *const reserved_words[] = {
     L"continue",
     L"else",
     L"#include",
+};
+
+static const wchar_t *const declaration_words[] = {
     L"static",
     L"struct",
     L"union",
-    L"enum"
+    L"enum",
+    L"typedef",
+    L"const",
+    L"extern",
+    L"volatile",
+    L"inline",
 };
 
 static const wchar_t *const type_words[] = {
@@ -255,11 +267,13 @@ int set_syntax_data(syntax *syntax,struct editor_input_context *ctx){
             reserved_words,sizeof(reserved_words) / sizeof(reserved_words[0]),reserved_word) < 0)return -1;
         if(scan_syntax_words(syntax,line_st_ptr,line_str_len,view_cols,h,
             type_words,sizeof(type_words) / sizeof(type_words[0]),type) < 0)return -1;
+        if(scan_syntax_words(syntax,line_st_ptr,line_str_len,view_cols,h,
+            declaration_words,sizeof(declaration_words) / sizeof(declaration_words[0]),declaration_keyword) < 0)return -1;
         if(scan_syntax_method(syntax,line_st_ptr,line_str_len,view_cols,h,Method) < 0)return -1;
         if(scan_syntax_comment(syntax,line_st_ptr,line_str_len,view_cols,h,comment) < 0)return -1;
         if(scan_syntax_variable(syntax,line_st_ptr,line_str_len,view_cols,h,variable) < 0)return -1;
-        if(scan_syntax_header_name(syntax,line_st_ptr,line_str_len,view_cols,h,literal) < 0)return -1;
         if(scan_syntax_literal(syntax,line_st_ptr,line_str_len,view_cols,h,literal) < 0)return -1;
+        if(scan_syntax_header_name(syntax,line_st_ptr,line_str_len,view_cols,h,header_name) < 0)return -1;
     }
     return syntax->syntax_list_data.syntax_list_num;
 }
@@ -286,11 +300,13 @@ int update_line_syntax_data(struct editor_input_context *ctx,int line){
         reserved_words,sizeof(reserved_words) / sizeof(reserved_words[0]),reserved_word) < 0)return -1;
     if(scan_syntax_words(syntax,line_st_ptr,line_str_len,view_cols,h,
         type_words,sizeof(type_words) / sizeof(type_words[0]),type) < 0)return -1;
+    if(scan_syntax_words(syntax,line_st_ptr,line_str_len,view_cols,h,
+        declaration_words,sizeof(declaration_words) / sizeof(declaration_words[0]),declaration_keyword) < 0)return -1;
     if(scan_syntax_method(syntax,line_st_ptr,line_str_len,view_cols,h,Method) < 0)return -1;
     if(scan_syntax_comment(syntax,line_st_ptr,line_str_len,view_cols,h,comment) < 0)return -1;
     if(scan_syntax_variable(syntax,line_st_ptr,line_str_len,view_cols,h,variable) < 0)return -1;
-    if(scan_syntax_header_name(syntax,line_st_ptr,line_str_len,view_cols,h,literal) < 0)return -1;
     if(scan_syntax_literal(syntax,line_st_ptr,line_str_len,view_cols,h,literal) < 0)return -1;
+    if(scan_syntax_header_name(syntax,line_st_ptr,line_str_len,view_cols,h,header_name) < 0)return -1;
     return syntax->syntax_list_data.syntax_list_num;
 }
 
@@ -329,7 +345,8 @@ int apply_syntax_color(struct editor_input_context *ctx,syntax syntax){
 
 /* 行内で、空白を挟んで'('が続く識別子をメソッドとして着色情報へ追加する。
  * 引数: syntaxは初期化済み、line_st_ptrはline_len要素の行、view_colsは表示列数、
- * hは画面相対行、mthodは登録する分類。予約語と型名は対象外にする。
+ * hは画面相対行、mthodは通常の関数名の分類。予約語と型名は対象外にする。
+ * 直前が'.'または'->'ならmember_methodに分類する（構文上の推定）。
  * 返り値: 成功0、着色情報の追加失敗なら-1。失敗前に追加した情報は残る。
  */
 int scan_syntax_method(syntax *syntax,wint_t *line_st_ptr,
@@ -350,9 +367,18 @@ int scan_syntax_method(syntax *syntax,wint_t *line_st_ptr,
             sizeof(reserved_words) / sizeof(reserved_words[0])) > 0)continue;
         if(find_syntax_word(line_st_ptr,line_len,start_x,type_words,
             sizeof(type_words) / sizeof(type_words[0])) > 0)continue;
+        if(find_syntax_word(line_st_ptr,line_len,start_x,declaration_words,
+            sizeof(declaration_words) / sizeof(declaration_words[0])) > 0)continue;
 
         if(word_len > view_cols - start_x)word_len = view_cols - start_x;
-        if(add_syntax_data(syntax,start_x,h,word_len,mthod) < 0)return -1;
+        int prev_x = start_x - 1;
+        while(prev_x >= 0 && iswspace(line_st_ptr[prev_x]))prev_x--;
+        syntax_type method_type = mthod;
+        if(prev_x >= 0 && (line_st_ptr[prev_x] == L'.' ||
+            (prev_x > 0 && line_st_ptr[prev_x] == L'>' && line_st_ptr[prev_x - 1] == L'-'))){
+            method_type = member_method;
+        }
+        if(add_syntax_data(syntax,start_x,h,word_len,method_type) < 0)return -1;
 
             
     }
@@ -532,7 +558,8 @@ int scan_syntax_header_name(syntax *syntax,wint_t *line_st_ptr,
 
 /* 二重引用符の文字列リテラルと単一引用符の文字リテラルを着色情報へ追加する。
  * 引数: syntaxは初期化済み、line_st_ptrはline_len要素の行、view_colsは表示列数、
- * hは画面相対行、literal_typeは登録する分類。引用符も着色範囲に含める。
+ * hは画面相対行、literal_typeは文字列の分類。単一引用符はcharacter_literalを使う。
+ * 引用符も着色範囲に含める。
  * 返り値: 成功0、着色情報の追加失敗なら-1。閉じていないリテラルは登録しない。
  */
 int scan_syntax_literal(syntax *syntax,wint_t *line_st_ptr,
@@ -560,7 +587,7 @@ int scan_syntax_literal(syntax *syntax,wint_t *line_st_ptr,
                     start_x,
                     h,
                     i - start_x + 1,
-                    literal_type
+                    quote == L'\'' ? character_literal : literal_type
                 ) < 0)return -1;
                 break;
             }
