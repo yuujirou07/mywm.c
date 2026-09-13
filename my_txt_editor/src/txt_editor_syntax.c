@@ -278,11 +278,11 @@ int set_syntax_data(syntax *syntax,struct editor_input_context *ctx){
     return syntax->syntax_list_data.syntax_list_num;
 }
 
-/* 現在表示中の1行を解析し、登録済みの着色情報へ追加または上書きする。
+/* 現在表示中の1行にある古い着色情報を削除し、その行を再解析する。
  * 引数: ctxは有効なstateを持つ入力コンテキスト、lineは表示領域先頭を0とする画面相対行。
  * now_usint_syntax_ptr_ctl()で事前にsyntaxを登録し、syntax_dataを確保しておく必要がある。
  * 返り値: 更新後の登録件数。ctx/state、登録syntax、配列、対象ファイル行が無効、または追加失敗なら-1。
- * この関数は対象行に残った古い範囲を一括削除せず、同じ開始座標の範囲だけを上書きする。
+ * 対象行以外の着色情報と確保済み配列は保持する。
  */
 int update_line_syntax_data(struct editor_input_context *ctx,int line){
     if(ctx == NULL || ctx->state == NULL)return -1;
@@ -293,8 +293,19 @@ int update_line_syntax_data(struct editor_input_context *ctx,int line){
     int h = line;
     int now_file_line_num = ctx->state->scr.scr_start_num + h;
     if(now_file_line_num < 0 || now_file_line_num >= editor_line_limit(ctx->state))return -1;
+    syntax_list_data *list = &syntax->syntax_list_data;
+    int write_index = 0;
+    for(int read_index = 0;read_index < list->syntax_list_num;read_index++){
+        syntax_data *data = &list->syntax_data[read_index];
+        if(data->area.st_y == h)continue;
+        if(write_index != read_index)list->syntax_data[write_index] = *data;
+        write_index++;
+    }
+    list->syntax_list_num = write_index;
+
     int line_str_len = editor_line_len(ctx->state,now_file_line_num);
     wint_t *line_st_ptr = editor_line_cells(ctx->state,now_file_line_num);
+    if(line_st_ptr == NULL)return list->syntax_list_num;
     int view_cols = editor_view_cols(ctx->state);
     if(scan_syntax_words(syntax,line_st_ptr,line_str_len,view_cols,h,
         reserved_words,sizeof(reserved_words) / sizeof(reserved_words[0]),reserved_word) < 0)return -1;
@@ -310,7 +321,7 @@ int update_line_syntax_data(struct editor_input_context *ctx,int line){
     return syntax->syntax_list_data.syntax_list_num;
 }
 
-/* 本文領域を通常色へ戻した後、syntaxに登録された画面内の範囲へ色を適用してrefreshする。
+/* 本文領域を通常色へ戻した後、syntaxに登録された画面内の範囲へ色を適用する。
  * 引数: ctxは有効なstateを持つ入力コンテキスト、syntaxは借用配列を含む浅いコピー。
  * syntax_dataの所有権は移動せず、この関数では確保・解放しない。
  * 返り値: ctxがNULLなら-1、それ以外は0。ncurses関数の失敗は返り値へ反映しない。
@@ -331,14 +342,13 @@ int apply_syntax_color(struct editor_input_context *ctx,syntax syntax){
         syntax_data *data = &syntax.syntax_list_data.syntax_data[i];
         syntax_area *area = &data->area;
         if(area->st_y < 0 || area->end_y < 0)continue;
-        else if(area->st_y > state->write_area.h || area->end_y > state->write_area.h)continue;
+        else if(area->st_y >= state->write_area.h || area->end_y >= state->write_area.h)continue;
 
         short syntax_color = syntax_color_pair(data->type); 
         mvchgat(state->write_area.y_start + area->st_y,
             state->write_area.x_start + area->st_x,
             area->end_x - area->st_x + 1,A_NORMAL,syntax_color,NULL);
     }
-    refresh();
     return 0;
 }
 
@@ -508,14 +518,24 @@ syntax* now_usint_syntax_ptr_ctl(syntax *now_using_syntax,enum flags flags){
     return NULL;
 }
 
-/* 登録済みsyntaxの全着色範囲を画面上で移動する。
- * 引数: yは各範囲へ加算する行数。正なら下、負なら上へ移動する。
- * 返り値: syntaxが未登録なら-1、移動処理を呼び出した場合は0。
+/* 登録済みsyntaxの全着色範囲を画面上で移動し、画面外の範囲を削除する。
+ * 引数: yは各範囲へ加算する行数。正なら下、負なら上へ移動する。view_rowsは表示行数。
+ * 返り値: syntaxが未登録、またはview_rowsが0以下なら-1。それ以外は0。
  */
-int scroll_syntax_pos_data(int y){
+int scroll_syntax_pos_data(int y,int view_rows){
     syntax *syntax_ptr = now_usint_syntax_ptr_ctl(NULL,get);
-    if(syntax_ptr == NULL)return -1;
-    move_syntax_pos_data(syntax_ptr,y);
+    if(syntax_ptr == NULL || view_rows <= 0)return -1;
+    if(move_syntax_pos_data(syntax_ptr,y) < 0)return -1;
+
+    syntax_list_data *list = &syntax_ptr->syntax_list_data;
+    int write_index = 0;
+    for(int read_index = 0;read_index < list->syntax_list_num;read_index++){
+        syntax_data *data = &list->syntax_data[read_index];
+        if(data->area.end_y < 0 || data->area.st_y >= view_rows)continue;
+        if(write_index != read_index)list->syntax_data[write_index] = *data;
+        write_index++;
+    }
+    list->syntax_list_num = write_index;
     return 0;
 }
 

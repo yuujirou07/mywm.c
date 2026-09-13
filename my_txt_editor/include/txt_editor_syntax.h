@@ -92,7 +92,7 @@ int scan_syntax_literal(syntax *syntax,wint_t *line_st_ptr,
         int line_len,int view_cols,int h,syntax_type literal_type);
 
 int move_syntax_pos_data(syntax *syntax,int y);
-int scroll_syntax_pos_data(int y);
+int scroll_syntax_pos_data(int y,int view_rows);
 
 int update_line_syntax_data(struct editor_input_context *ctx,int line);
 syntax* now_usint_syntax_ptr_ctl(syntax *now_using_syntax,enum flags flags);

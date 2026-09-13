@@ -3,14 +3,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stddef.h>
 #include <wchar.h>
 #include "txt_editor.h"
-
-
-#define container_of(ptr, type, member) \
-    ((type *)((char *)(ptr) - offsetof(type, member)))
-
+#include"txt_editor_syntax.h"
 
 static void draw_search_box(struct box search_box,WINDOW *win);
 
@@ -112,7 +107,7 @@ void draw_editor_buffer_line(struct editor_state *state, int line, int screen_y)
 
 // draw_line_numbers(): 表示開始行(scr_start_num)を基準に、左端へ行番号を描画する。
 // カーソルの退避・復元は行わない。描画で動いた端末カーソルは、
-// update_screen()の最後にeditor_sync_cursor()がモデルから置き直す。
+// 編集画面の全描画後にmain()がeditor_sync_cursor()でモデルから置き直す。
 // 引数: state=画面サイズ・表示開始行・書き込み領域を持つエディタ状態。
 // 返り値: なし。
 void draw_line_numbers(struct editor_state *state) {
@@ -356,10 +351,10 @@ void set_file_select_line(struct editor_state *state,int dir_num,int line){
 // editor_move_cursor_line()は使わずここで直接書き込む。呼び出し側でcursor.lineを
 // 重ねて動かさないこと(この関数がすでに+num分を反映済み)。
 // 桁は移動先の行長へ丸めるが、呼び出し側が別の桁を指定したい場合は戻ってから上書きする。
-// 引数: state=カーソル行と表示開始行、win=スクロール対象、num=移動行数。
+// 引数: ctx=カーソル行と表示開始行を持つ入力context、num=-1または1の移動行数。
 // 返り値: なし。
-void editor_screen_move_line(struct editor_state *state,WINDOW *win,int num){
-    (void)win;
+void editor_screen_move_line(struct editor_input_context *ctx,int num){
+    struct editor_state *state = ctx->state;
     int line_limit = get_line_limit();
     int next_cursor_line = state->cursor.line + num;
     int next_scr_start = state->scr.scr_start_num + num;
@@ -370,6 +365,13 @@ void editor_screen_move_line(struct editor_state *state,WINDOW *win,int num){
     state->cursor.line = next_cursor_line;
     state->cursor.col  = editor_clamp_col(state, next_cursor_line, state->cursor.col);
     state->scr.scr_start_num = next_scr_start;
+
+    if(state->settings_data->built_in_syntax){
+        scroll_syntax_pos_data(-num,state->write_area.h);
+        int update_line = num > 0 ? state->write_area.h - 1 : 0;
+        update_line_syntax_data(ctx,update_line);
+    }
+
     state->render_flags |= RENDER_EDIT_SCREEN_BASE;
     state->render_flags |= RENDER_FILE_DATA;
 }
@@ -562,6 +564,7 @@ void update_screen(struct editor_input_context *ctx){
     struct editor_state *state = ctx->state;
     WINDOW *win = ctx->win;
     
+
     if(flags & RENDER_ALL){
         
     }
@@ -644,17 +647,8 @@ void update_screen(struct editor_input_context *ctx){
         }
     }
 
-    // 端末カーソルはモデルの表示結果。描画で動いた分をここで1回だけ置き直す。
-    // move()を呼ぶ場所をこの1点に集約したので、「カーソルがどこにあるか」は
-    // state->cursorだけを見れば分かる。
-    // 注意: ファイル名入力欄やジャンプ入力欄は自前でmove()するが、この行が
-    // 後から上書きするため編集位置に戻る(改修前と同じ挙動)。入力欄側へ
-    // カーソルを渡したくなったら、変更するのはこの1箇所だけでよい。
-    if(editor_get_screen_state(state) == edit_screen)
-        editor_sync_cursor(state);
-
     ctx->state->render_flags = RENDER_NONE;
-    refresh();
+    if(editor_get_screen_state(state) != edit_screen)refresh();
 }
 
 void request_clear_box(struct editor_state *state, struct box box){

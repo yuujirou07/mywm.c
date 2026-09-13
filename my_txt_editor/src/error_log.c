@@ -1,5 +1,6 @@
 #include<stdio.h>
 #include <string.h>
+
 static FILE *file = NULL;
 
 void set_error_log_file(char *file_path){
@@ -15,10 +16,7 @@ void set_error_log_file(char *file_path){
 }
 
 void close_error_log_file(){
-        if(file != NULL){
-                fclose(file);
-        }
-
+        if(file != NULL)fclose(file);
 }
 
 

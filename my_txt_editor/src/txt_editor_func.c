@@ -63,11 +63,11 @@ void resize_file_browser(struct editor_input_context *ctx){
     // ディレクトリを走査し直す(ドラッグ中に毎回走らせない)。
     if(state->file_browser_area.h != old_h){
         load_dir_table(state, &ctx->file_browse_screen.dir_name_table,
-                       &ctx->file_browse_screen.dir_name_table_rows,
-                       ctx->file_browse_screen.path_name,
-                       state->file_select_line_data.now_logical_line,
-                       &ctx->file_browse_screen.dir_num,
-                       &ctx->file_browse_screen.dir_name_table_num);
+            &ctx->file_browse_screen.dir_name_table_rows,
+            ctx->file_browse_screen.path_name,
+            state->file_select_line_data.now_logical_line,
+            &ctx->file_browse_screen.dir_num,
+            &ctx->file_browse_screen.dir_name_table_num);
     }
 }
 
@@ -124,8 +124,8 @@ void handle_resize(WINDOW *win, struct editor_input_context *ctx){
             state->write_area.y_end = state->status_bar->pos.y;
         }
     }
-    state->write_area.w    = state->write_area.x_end - state->write_area.x_start;
-    state->write_area.h    = state->write_area.y_end - state->write_area.y_start;
+    state->write_area.w = state->write_area.x_end - state->write_area.x_start;
+    state->write_area.h = state->write_area.y_end - state->write_area.y_start;
 
     ctx->edit_screen.line_start_pos = (struct pos){
         state->write_area.x_start-1,state->write_area.y_start
@@ -144,9 +144,10 @@ void handle_resize(WINDOW *win, struct editor_input_context *ctx){
 
 // handle_backspace(): カーソル左の1文字を削除し、行バッファを左へ詰める。
 // 行頭では前の行末へカーソルを移動する。
-// 引数: win=現在カーソル位置を持つウィンドウ、state=文字バッファと行情報。
+// 引数: ctx=ウィンドウ、文字バッファ、行情報を持つ入力context。
 // 返り値: なし。
-void handle_backspace(WINDOW *win, struct editor_state *state) {
+void handle_backspace(struct editor_input_context *ctx) {
+    struct editor_state *state = ctx->state;
     int line = state->cursor.line;
     if(line < 0 || line >= editor_line_limit(state)){
         return;
@@ -197,7 +198,7 @@ void handle_backspace(WINDOW *win, struct editor_state *state) {
         }
         else{
             //関数内でcursor.lineの値も変更される
-            editor_screen_move_line(state,win,-1);
+            editor_screen_move_line(ctx,-1);
         }
         //どちらの経路も桁は触らないため、ここで結合位置へ寄せる
         state->cursor.col = editor_clamp_col(state, state->cursor.line, join_col);
@@ -208,9 +209,10 @@ void handle_backspace(WINDOW *win, struct editor_state *state) {
 
 // handle_newline(): カーソル位置で現在行を分割し、右側の文字列を下の新しい行へ移す。
 // その後、カーソルを次の行の行頭(col=0)へ進める。
-// 引数: win=改行操作を反映するウィンドウ、state=カーソル行と書き込み領域。
+// 引数: ctx=ウィンドウ、カーソル行、書き込み領域を持つ入力context。
 // 返り値: なし。
-void handle_newline(WINDOW *win, struct editor_state *state) {
+void handle_newline(struct editor_input_context *ctx) {
+    struct editor_state *state = ctx->state;
     int line = state->cursor.line;
     if(line < 0 || line >= editor_line_limit(state)){
         return;
@@ -229,7 +231,7 @@ void handle_newline(WINDOW *win, struct editor_state *state) {
     }
     else{
         // editor_screen_move_line()がcursor.lineの+1も行うため、ここでは動かさない
-        editor_screen_move_line(state,win,1);
+        editor_screen_move_line(ctx,1);
     }
     state->cursor.col = 0;
 
@@ -358,11 +360,12 @@ void handle_mouse(struct editor_input_context *ctx,int dir_num) {
     }
     switch(editor_get_screen_state(state)){
         case edit_screen:{
+            int old_scr_start_num = state->scr.scr_start_num;
             editor_screen_mouse_event(ctx);
-            curs_set(state->is_cur_show ? 1 : 0);
-
-            state->render_flags |= RENDER_EDIT_SCREEN_BASE;
-            state->render_flags |= RENDER_FILE_DATA;
+            if(old_scr_start_num != state->scr.scr_start_num){
+                state->render_flags |= RENDER_EDIT_SCREEN_BASE;
+                state->render_flags |= RENDER_FILE_DATA;
+            }
             break;
         }
         case file_browse_screen:{
@@ -376,9 +379,10 @@ void handle_mouse(struct editor_input_context *ctx,int dir_num) {
 
 // handle_input_allow(): 矢印キー入力を処理し、行長を超えない位置へカーソルを移動する。
 // 画面端ではスクロールしながら表示内容を補う。
-// 引数: win=カーソル移動対象のウィンドウ、ch=KEY_UP/DOWN/LEFT/RIGHT、state=行長と表示位置。
+// 引数: ctx=カーソルと表示位置を持つ入力context、ch=KEY_UP/DOWN/LEFT/RIGHT。
 // 返り値: なし。
-void handle_input_allow(WINDOW *win, wchar_t ch, struct editor_state *state){
+void handle_input_allow(struct editor_input_context *ctx,wchar_t ch){
+    struct editor_state *state = ctx->state;
     int line_limit = get_line_limit();
     if(line_limit <= 0){
         return;
@@ -396,32 +400,23 @@ void handle_input_allow(WINDOW *win, wchar_t ch, struct editor_state *state){
                 editor_move_cursor_line(state, -1);
             }
             else if(state->scr.scr_start_num > 0){
-              editor_screen_move_line(state, win,-1);
+              editor_screen_move_line(ctx,-1);
             }
             break;
         }
         case KEY_DOWN:{
-            if(line + 1 >= line_limit){
-                break;
-            }
-            if (can_move_down_in_view) {
-                editor_move_cursor_line(state, 1);
-            }
-            else{
-                editor_screen_move_line(state,win,1);
-            }
+            if(line + 1 >= line_limit)break;
+            if (can_move_down_in_view)editor_move_cursor_line(state, 1);
+            else editor_screen_move_line(ctx,1);
             break;
         }
         case KEY_LEFT:{
-            if (state->cursor.col > 0){
-                state->cursor.col--;
-            }
+            if (state->cursor.col > 0)state->cursor.col--;
             else if (can_move_up_in_view && line > 0) {
                 editor_move_cursor_line(state, -1);
                 state->cursor.col = editor_clamp_col(state, state->cursor.line,
-                                                     editor_line_len(state, state->cursor.line));
+                    editor_line_len(state, state->cursor.line));
             }
-
             break;
         }
         case KEY_RIGHT:{
@@ -619,7 +614,7 @@ void editor_screen_mouse_event(struct editor_input_context *ctx){
     if (event->bstate & BUTTON5_PRESSED && can_scroll_down) {
         state->scr.scr_start_num++;
         if(state->settings_data->built_in_syntax){
-            scroll_syntax_pos_data(-1);
+            scroll_syntax_pos_data(-1,state->write_area.h);
             update_line_syntax_data(ctx,state->write_area.h - 1);
         }
         
@@ -627,10 +622,23 @@ void editor_screen_mouse_event(struct editor_input_context *ctx){
     } else if ((event->bstate & BUTTON4_PRESSED) && state->scr.scr_start_num > 0) {
         state->scr.scr_start_num--;
         if(state->settings_data->built_in_syntax){
-            scroll_syntax_pos_data(+1);
-            int scr_updaate_line = state->scr.scr_start_num + state->write_area.h -1;
+            scroll_syntax_pos_data(+1,state->write_area.h);
             update_line_syntax_data(ctx,0);
         }
+    }
+    else if(event->bstate & BUTTON1_PRESSED){
+        int x = event->x;
+        int y = event->y;
+
+        if(y < state->write_area.y_start || y >= state->write_area.y_end ||
+            x < state->write_area.x_start || x >= state->write_area.x_end){
+            return;
+        }
+        struct pos write_area_pos;
+        write_area_pos.y = y - state->write_area.y_start;
+        write_area_pos.x = x - state->write_area.x_start;
+        int line_num = state->scr.scr_start_num + write_area_pos.y;
+        editor_set_cursor(state,line_num,write_area_pos.x);
     }
     else{
         return;

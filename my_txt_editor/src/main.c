@@ -63,7 +63,7 @@ int main(int argc, char *argv[])
         else if(strcmp(argv[startuptime_log_file_argument_num],"mylsp") == 0){
             mylsp = true;
         }
-        
+
     }
 
     struct editor_settings settings_data = {0};
@@ -143,6 +143,7 @@ int main(int argc, char *argv[])
     curs_set(1);
     raw();
     scrollok(win, TRUE);
+    mouseinterval(10);
     mousemask(ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION, NULL);  
     
     char path_name[PATH_MAX];
@@ -376,9 +377,14 @@ int main(int argc, char *argv[])
         
         update_screen(&input_context);
         if(editor_get_screen_state(&state) == edit_screen){
-            apply_syntax_color(&input_context,syntax);
+            bool show_cursor = state.is_cur_show;
+            curs_set(0);
+            if(state.settings_data->built_in_syntax){
+                apply_syntax_color(&input_context,syntax);
+            }
             editor_sync_cursor(&state);
             refresh();
+            curs_set(show_cursor ? 1 : 0);
         }
 
         wint_t ch = 0;
@@ -390,7 +396,7 @@ int main(int argc, char *argv[])
 
         if (input_result == KEY_CODE_YES && ch == KEY_RESIZE) {
             handle_resize(win, &input_context);
-          
+            set_syntax_data(&syntax,&input_context);
             continue;
         }
 
@@ -449,12 +455,8 @@ static void lsp_poll_events(int *epfd, struct lsp_process *lsp, int timeout_ms)
 
     for(int i = 0; i < n_events; i++){
         /* ディスクリプタが不正の場合 */
-        if(events[i].data.fd < 0){
-            continue;
-        }
-        if(events[i].data.fd != lsp->from_server_fd){
-            continue;
-        }
+        if(events[i].data.fd < 0)continue;
+        if(events[i].data.fd != lsp->from_server_fd)continue;
 
         char *msg = lsp_read_message(lsp->from_server_fd);
         if(msg == NULL){

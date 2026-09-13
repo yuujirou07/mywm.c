@@ -430,6 +430,17 @@ static inline struct pos editor_cursor_screen_pos(struct editor_state *state){
     return pos;
 }
 
+static inline struct pos editor_cursor_write_area_pos(struct editor_state *state){
+    struct pos pos;
+    pos.x = state->cursor.col;
+    pos.y = state->cursor.line - state->scr.scr_start_num;
+    return pos;
+}
+
+static inline int editor_cursor_logical_line_pos(struct editor_state *state){
+    return state->cursor.line;
+}
+
 // editor_cursor_is_visible(): カーソル行が現在の表示範囲に入っているかを返す。
 // 引数: state=カーソル行・表示開始行・書き込み領域を持つエディタ状態。
 // 返り値: 編集領域内に見えているならtrue。
@@ -508,7 +519,7 @@ void show_file_browse(struct editor_state *state,struct box file_browse_box,stru
 // ファイルブラウザの選択行を変更し、再描画を要求する。
 void set_file_select_line(struct editor_state *state,int dir_num,int line);
 // 論理カーソル行を移動し、必要なら画面をスクロールする。
-void editor_screen_move_line(struct editor_state *state,WINDOW *win,int num);
+void editor_screen_move_line(struct editor_input_context *ctx,int num);
 // エラー画面へ切り替え、指定したエラーメッセージを表示する。
 void editor_error_screen(struct editor_state *state,char *error_comment);
 // 編集バッファのうち現在画面に見える範囲を描画する。
@@ -572,9 +583,9 @@ void resize_file_browser(struct editor_input_context *ctx);
 // 端末リサイズ後の画面サイズ、描画領域、カーソル位置を更新する。
 void handle_resize(WINDOW *win, struct editor_input_context *ctx);
 // カーソル左の文字を削除し、必要なら前の行と連結する。
-void handle_backspace(WINDOW *win, struct editor_state *state);
+void handle_backspace(struct editor_input_context *ctx);
 // カーソル位置で現在行を分割し、新しい行を作る。
-void handle_newline(WINDOW *win, struct editor_state *state);
+void handle_newline(struct editor_input_context *ctx);
 // インデント幅の空白を編集バッファへ挿入する。
 void handle_tab(WINDOW *win, struct editor_state *state);
 // 入力されたワイド文字をカーソル位置へ挿入する。
@@ -582,7 +593,7 @@ void handle_char_input(WINDOW *win, wchar_t ch, struct editor_state *state);
 // マウスホイールによる上下スクロールを処理する。
 void handle_mouse(struct editor_input_context *ctx,int dir_num);
 // 矢印キーによるカーソル移動と画面スクロールを処理する。
-void handle_input_allow(WINDOW *win, wchar_t ch, struct editor_state *state);
+void handle_input_allow(struct editor_input_context *ctx,wchar_t ch);
 // カーソル移動と行ジャンプで使用する行番号上限を設定する。
 void set_line_limit(int limit);
 // カーソル移動と行ジャンプで使用する行番号上限を取得する。

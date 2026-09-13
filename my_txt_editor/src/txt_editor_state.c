@@ -66,7 +66,7 @@ static bool handle_edit_screen_input(struct editor_input_context *ctx, int input
         state->render_flags |= RENDER_EDIT_SCREEN_BASE;
     }
     if (input_result == KEY_CODE_YES && ch == KEY_BACKSPACE && state->is_cur_show) {
-        handle_backspace(win, state);
+        handle_backspace(ctx);
         send_lsp_did_change(ctx);
         return true;
     }
@@ -87,9 +87,13 @@ static bool handle_edit_screen_input(struct editor_input_context *ctx, int input
         save_file(state);
         flushinp();
         if(editor_get_screen_state(state) == ask_make_file_mode){
-            show_make_file_prompt(win, state, &state->ask_make_file_box,
-                                  ctx->ask_make_file_mode.screen_center_y,
-                                  ctx->ask_make_file_mode.screen_center_pos);
+            show_make_file_prompt(
+                win,
+                state,
+                &state->ask_make_file_box,
+                ctx->ask_make_file_mode.screen_center_y,
+                ctx->ask_make_file_mode.screen_center_pos
+            );
         }
         return true;
     }
@@ -104,11 +108,11 @@ static bool handle_edit_screen_input(struct editor_input_context *ctx, int input
     }
     if (state->is_cur_show) {
         if (ch == KEY_ENTER || ch == '\n' || ch == '\r') {
-            handle_newline(win, state);
+            handle_newline(ctx);
         } else if (ch == '\t') {
             handle_tab(win, state);
         } else if (ch == KEY_LEFT || ch == KEY_RIGHT || ch == KEY_UP || ch == KEY_DOWN){
-            handle_input_allow(win, ch, state);
+            handle_input_allow(ctx,ch);
         } else if (input_result == OK && iswprint((wint_t)ch)) {
             if (ch == 'q') {
                 return false;
@@ -117,10 +121,8 @@ static bool handle_edit_screen_input(struct editor_input_context *ctx, int input
             handle_char_input(win, (wchar_t)ch, state);
             send_lsp_did_change(ctx);
         }
-
-        // update_line_syntax_data()へ渡すのはファイル行ではなく画面内の相対行。
-        int now_scr_line_num = state->cursor.line - state->scr.scr_start_num; 
-        update_line_syntax_data(ctx,now_scr_line_num);
+        struct pos write_area_pos = editor_cursor_write_area_pos(state);
+        update_line_syntax_data(ctx,write_area_pos.y);
         state->render_flags |= RENDER_LINE_STATUS;
     } else {
         if (input_result == OK && iswprint((wint_t)ch)) {
