@@ -371,7 +371,7 @@ int main(int argc, char *argv[])
 
         if(editor_get_screen_state(&state) == start_menu_screen){
             running = editor_handle_screen_input(&input_context, OK, 0);
-            if(running == false){break;}
+            if(running == false)break;
             continue;
         }
         
@@ -391,8 +391,7 @@ int main(int argc, char *argv[])
         int input_result;
         input_result = get_wch(&ch);
         
-        if (input_result == ERR)
-            continue;
+        if (input_result == ERR)continue;
 
         if (input_result == KEY_CODE_YES && ch == KEY_RESIZE) {
             handle_resize(win, &input_context);
@@ -401,9 +400,7 @@ int main(int argc, char *argv[])
         }
 
         running = editor_handle_screen_input(&input_context, input_result, ch);
-
         continue;
-
     }
     // resize_file_browser()がreallocした場合、最新のポインタはcontext側にある。
     free(input_context.file_browse_screen.dir_name_table);

@@ -165,9 +165,8 @@ void draw_box(struct box box, WINDOW *win){
     int w = box.w;
     int h = box.h;
 
-    if(w <= 0 || h <= 0){
-        return;
-    }
+    if(w <= 0 || h <= 0)return;
+    
 
     struct pos top_left     = {x,     y};
     struct pos top_right    = {x + w - 1, y};
@@ -187,9 +186,7 @@ void draw_box(struct box box, WINDOW *win){
 }
 
 void request_draw_box(struct editor_state *state,struct box box){
-    if(state->draw_box_count >= DRAW_BOX_REQUEST_MAX){
-        return;
-    }
+    if(state->draw_box_count >= DRAW_BOX_REQUEST_MAX)return;
     state->draw_box_data[state->draw_box_count++] = box;
     state->render_flags |= RENDER_BOX;
 }

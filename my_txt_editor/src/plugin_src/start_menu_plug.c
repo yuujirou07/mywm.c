@@ -9,9 +9,6 @@
 #include"path_util.h"
 #include"txt_editor.h"
 
-
-#define option_list_max 8
-
 struct option_data{
         char *option_name;
         char short_cut_key;
@@ -29,8 +26,9 @@ static void write_startup_time_log(const struct timespec *start_time, const char
 
 
 int draw_start_menu(int screen_max_w,int screen_max_h,struct ascii_data *ascii_data_ptr,
-                    const struct timespec *startup_start_time,
-                    const char *startup_log_path){
+        const struct timespec *startup_start_time,
+                const char *startup_log_path){
+
         static bool is_first_start_menu = 1;
         struct pos screen_max_pos   = (struct pos){screen_max_w,screen_max_h};
         struct pos screen_mid_pos   = (struct pos){screen_max_w/2,screen_max_h/2};
@@ -39,14 +37,22 @@ int draw_start_menu(int screen_max_w,int screen_max_h,struct ascii_data *ascii_d
         struct option_data option_data[option_list_max];
 
         draw_ascii_logo(screen_mid_pos,&ascii_data);
-        int option_count = draw_option(screen_max_pos,&option_start_pos,ascii_data,option_data,option_list_max);
-        draw_version(screen_mid_pos,ascii_data);
+        int option_count = 
+                draw_option(
+                        screen_max_pos,
+                        &option_start_pos,
+                        ascii_data,
+                        option_data,
+                        option_list_max
+                );
 
+        draw_version(screen_mid_pos,ascii_data);
 
         for(int i = 0;i < option_count;i++){
                 mvchgat(option_data[i].y,option_data[i].x,
                         option_data[i].w,A_BOLD,1,NULL);
         }
+
         refresh();
         if(is_first_start_menu){
                 write_startup_time_log(startup_start_time,startup_log_path);
@@ -54,13 +60,11 @@ int draw_start_menu(int screen_max_w,int screen_max_h,struct ascii_data *ascii_d
         }
         
         while(1){
-
                 wint_t ch = 0;
                 int input_result;
                 input_result = get_wch(&ch);
-                if(input_result == ERR){
-                        continue;
-                }
+                if(input_result == ERR)continue;
+                
                 if(input_result == KEY_CODE_YES && ch == KEY_RESIZE){
                         return resize_request;
                 }
@@ -68,12 +72,11 @@ int draw_start_menu(int screen_max_w,int screen_max_h,struct ascii_data *ascii_d
                 int return_num = 0;
                 // 危険: 初期化済みなのはoption_count件だけで、残りのoption_dataは未初期化。
                 // option_list_maxまで読むと未初期化値をキーとして比較する未定義動作になる。
-                for(int i = 0;i < option_list_max;i++){
-                        if(ch != (wint_t)option_data[i].short_cut_key){continue;}
+                for(int i = 0;i < option_count;i++){
+                        if(ch != (wint_t)option_data[i].short_cut_key)continue;
                         option_fn(&option_data[i].short_cut_key,&return_num);
-                        if(ascii_data_ptr != NULL){
-                                *ascii_data_ptr = ascii_data;
-                        }
+                        if(return_num == none)continue;
+                        if(ascii_data_ptr != NULL)*ascii_data_ptr = ascii_data;
                         return return_num;
                 }
                 refresh();
@@ -82,10 +85,8 @@ int draw_start_menu(int screen_max_w,int screen_max_h,struct ascii_data *ascii_d
 }
 
 static void write_startup_time_log(const struct timespec *start_time, const char *log_path){
-        if(start_time == NULL || log_path == NULL){
-                return;
-        }
-
+        if(start_time == NULL || log_path == NULL)return;
+        
         struct timespec end_time;
         clock_gettime(CLOCK_MONOTONIC, &end_time);
         double msec = (end_time.tv_sec - start_time->tv_sec) * 1000.0 +
@@ -129,7 +130,8 @@ void draw_ascii_logo(struct pos screen_mid_pos,struct ascii_data *ascii_data){
 }
 
 
-int draw_option(struct pos screen_max_pos,struct pos *option_start_pos,struct ascii_data ascii_data,struct option_data *option_data,int size){
+int draw_option(struct pos screen_max_pos,struct pos *option_start_pos,
+        struct ascii_data ascii_data,struct option_data *option_data,int size){
 
         int ascii_art_option_space = 5;
         int option_list_counter = 0;
@@ -150,6 +152,11 @@ int draw_option(struct pos screen_max_pos,struct pos *option_start_pos,struct as
         if(option_list_counter < size){
                 option_data[option_list_counter].option_name    = "quit my txt editor";
                 option_data[option_list_counter].short_cut_key  = 'q';
+                option_list_counter++;
+        }
+        if(option_list_counter < size){
+                option_data[option_list_counter].option_name = "settings";
+                option_data[option_list_counter].short_cut_key = 's';
                 option_list_counter++;
         }
 
@@ -208,6 +215,10 @@ void option_fn(char *key,int *return_num){
                 }
                 case 'f':{
                         *return_num = select_folder;
+                        break;
+                }
+                case 's':{
+                        *return_num = settings;
                         break;
                 }
                 default:{

@@ -13,16 +13,10 @@
 #include"lsp_src/language_server_communication.h"
 
 
-#define my_txt_editor_var 0.0
-#define new_file 0
-#define quit 1
-#define select_folder 3
-#define none 4
 #define startuptime_log_file_argument_num 1
 #define FDS_N 4
 #define DRAW_BOX_REQUEST_MAX 64
 #define box_retention_max 64
-#define resize_request 5
 #define screen_state_log_storage 256
 // ファイルブラウザ一覧に保持する名前の最大長。
 #define DIR_ENTRY_NAME_MAX 256
@@ -105,11 +99,12 @@ enum select_state{
 enum now_screen_state{
     edit_screen, // 通常の編集画面。
     file_browse_screen, // ファイルブラウザ画面。
-    start_menu_file_browse_screen, // start menuから開いたファイルブラウザ。
     start_menu_screen, // start menu pluginの画面。
     error_screen, // エラー表示画面。
     line_jump_mode, // 行ジャンプ番号入力中。
     ask_make_file_mode, // 新規ファイル作成確認中。
+    setting_screen,
+    screen_state_log_error, // 指定された履歴位置が範囲外。
 };
 
 // 新規ファイル作成ダイアログの入力状態。
@@ -238,22 +233,19 @@ struct editor_state {
     bool                       mylsp_use;
 };
 
-static inline enum now_screen_state editor_get_screen_state(struct editor_state *state){
-    if(state->screen_log.screen_state_log_counter <= 0){
-        return edit_screen;
+static inline enum now_screen_state editor_get_screen_state_log(struct editor_state *state,
+                                                                int history_offset){
+    if(history_offset < 0 ||
+       history_offset >= state->screen_log.screen_state_log_counter){
+        return screen_state_log_error;
     }
 
-    return state->screen_log.screen_state_log[
-        state->screen_log.screen_state_log_counter - 1];
+    int log_index = state->screen_log.screen_state_log_counter - history_offset - 1;
+    return state->screen_log.screen_state_log[log_index];
 }
 
-static inline enum now_screen_state editor_get_previous_screen_state(struct editor_state *state){
-    if(state->screen_log.screen_state_log_counter < 2){
-        return edit_screen;
-    }
-
-    return state->screen_log.screen_state_log[
-        state->screen_log.screen_state_log_counter - 2];
+static inline enum now_screen_state editor_get_screen_state(struct editor_state *state){
+    return editor_get_screen_state_log(state,0);
 }
 
 static inline void editor_set_screen_state(struct editor_state *state,
@@ -270,7 +262,6 @@ static inline void editor_set_screen_state(struct editor_state *state,
         }
         log->screen_state_log_counter = screen_state_log_storage - 1;
     }
-
     log->screen_state_log[log->screen_state_log_counter++] = next_state;
 }
 
