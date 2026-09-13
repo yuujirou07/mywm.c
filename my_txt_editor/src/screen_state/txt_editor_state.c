@@ -190,6 +190,26 @@ int update_screen_ratio(struct editor_input_context *ctx){
         case start_menu_screen:
             // start menu pluginが次のループで新しい画面サイズを見て描き直す
             break;
+        case setting_screen: {
+            //枠の大きさは項目の内容で決まる。縮小時に古い枠が残らないよう、
+            //前の枠の範囲だけを消去予約してから作り直す。
+            struct box old_box = state->settings_screen_data.box;
+
+            set_settings_screen_box(state);
+
+            struct box clear_area = clamp_box_to_screen(state, old_box);
+            bool is_box_moved =
+                (old_box.pos.x != state->settings_screen_data.box.pos.x ||
+                 old_box.pos.y != state->settings_screen_data.box.pos.y ||
+                 old_box.w     != state->settings_screen_data.box.w ||
+                 old_box.h     != state->settings_screen_data.box.h);
+
+            if(is_box_moved && clear_area.w > 0 && clear_area.h > 0){
+                request_clear_box(state, clear_area);
+            }
+            state->render_flags |= RENDER_SETTINGS;
+            break;
+        }
         case edit_screen:
         default: {
             // 高さが縮むとカーソル行が編集領域の外へ出るため、はみ出したときだけ

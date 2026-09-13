@@ -1,5 +1,6 @@
 #include <dirent.h>
 #include <ncurses.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -7,6 +8,9 @@
 #include "txt_editor.h"
 #include"txt_editor_syntax.h"
 #include"error_log.h"
+
+#define SETTINGS_EXPLATAION_BOX_MIN_W 12
+
 static void draw_search_box(struct box search_box,WINDOW *win);
 // 設定項目名の画面上の表示幅を返す。
 static int settings_item_name_width(const char *name);
@@ -14,7 +18,10 @@ static int settings_item_name_width(const char *name);
 static void draw_settings_title(struct box box,WINDOW *win);
 // 設定画面の枠・タイトル・項目を描画する。
 static void draw_settings_screen(struct editor_input_context *ctx);
+static void draw_settings_explanation_box(struct editor_input_context *ctx);
+static int draw_settings_search_box(struct editor_input_context *ctx);
 
+static void draw_explanation_str(const char *str,struct box box);
 // line_draw_info(): 線の向きから描画範囲・移動量・罫線文字を決める。
 // 引数: start_pos/end_pos=線の端点、range/step_x/step_y/line_ch=計算結果の書き込み先。
 // 返り値: 縦線または横線ならtrue、斜め線ならfalse。
@@ -161,8 +168,40 @@ void draw_line(struct pos start_pos,struct pos end_pos,WINDOW *win,enum line_mod
     }
 }
 
-// draw_box(): 指定された矩形領域の枠線と四隅を描画し、表示中はカーソルを隠す。
-// 引数: state=カーソル表示状態、box=描く矩形、win=描画先ウィンドウ。
+// box_existing_chr(): 指定セルに既に描かれている文字だけを取り出す。
+// mvinch()は色やA_ALTCHARSETも一緒に返すため、文字の部分だけを残す。
+// 引数: y/x=確認する座標。
+// 返り値: その位置の文字。何も無ければ空白。
+static chtype box_existing_chr(int y, int x){
+    return (chtype)(mvinch(y, x) & A_CHARTEXT);
+}
+
+// box_joint_chr(): 角に重なる既存の罫線から、つなぎ目のT字を選ぶ。
+// 既に横線が通っていればこちらの縦線が突き当たるので上下のT、
+// 縦線が通っていればこちらの横線が突き当たるので左右のTになる。
+// つなぐ相手がいなければ角のまま返す。
+// 引数: corner=本来の角の文字、existing=その位置に既にある文字。
+// 返り値: 描くべき罫線文字。
+static chtype box_joint_chr(chtype corner, chtype existing){
+    if(existing == ACS_HLINE){
+        //上側の角なら下へ、下側の角なら上へ伸びる
+        if(corner == ACS_ULCORNER || corner == ACS_URCORNER)return ACS_TTEE;
+        if(corner == ACS_LLCORNER || corner == ACS_LRCORNER)return ACS_BTEE;
+        return corner;
+    }
+    if(existing == ACS_VLINE){
+        //左側の角なら右へ、右側の角なら左へ伸びる
+        if(corner == ACS_ULCORNER || corner == ACS_LLCORNER)return ACS_LTEE;
+        if(corner == ACS_URCORNER || corner == ACS_LRCORNER)return ACS_RTEE;
+        return corner;
+    }
+    return corner;
+}
+
+// draw_box(): 指定された矩形領域の枠線と四隅を描画する。
+// 既に罫線の通っている位置へ角が重なる場合は、その線とつながるT字へ
+// 置き換える。枠を引く前に角を読むため、自分の線は写り込まない。
+// 引数: box=描く矩形、win=描画先ウィンドウ。
 // 返り値: なし。
 void draw_box(struct box box, WINDOW *win){
 
@@ -179,15 +218,21 @@ void draw_box(struct box box, WINDOW *win){
     struct pos bottom_left  = {x,         y + h - 1};
     struct pos bottom_right = {x + w - 1, y + h - 1};
 
+    //角に重なる罫線は、線を引く前に読んでおく。
+    chtype corner_ul = box_joint_chr(ACS_ULCORNER,box_existing_chr(y,         x));
+    chtype corner_ur = box_joint_chr(ACS_URCORNER,box_existing_chr(y,         x + w - 1));
+    chtype corner_ll = box_joint_chr(ACS_LLCORNER,box_existing_chr(y + h - 1, x));
+    chtype corner_lr = box_joint_chr(ACS_LRCORNER,box_existing_chr(y + h - 1, x + w - 1));
+
     draw_line(top_left,    bottom_left,  win, all_draw_mode);
     draw_line(top_right,   bottom_right, win, all_draw_mode);
     draw_line(top_left,    top_right,    win, all_draw_mode);
     draw_line(bottom_left, bottom_right, win, all_draw_mode);
 
-    mvaddch(y,         x,         ACS_ULCORNER);
-    mvaddch(y,         x + w - 1, ACS_URCORNER);
-    mvaddch(y + h - 1, x,         ACS_LLCORNER);
-    mvaddch(y + h - 1, x + w - 1, ACS_LRCORNER);
+    mvaddch(y,         x,         corner_ul);
+    mvaddch(y,         x + w - 1, corner_ur);
+    mvaddch(y + h - 1, x,         corner_ll);
+    mvaddch(y + h - 1, x + w - 1, corner_lr);
 
 }
 
@@ -584,6 +629,8 @@ void update_screen(struct editor_input_context *ctx){
         }
         if(flags & RENDER_SETTINGS){
             draw_settings_screen(ctx);   
+            draw_settings_search_box(ctx);
+            draw_settings_explanation_box(ctx);
         }
 
         if(flags & RENDER_LINE){
@@ -740,8 +787,60 @@ static void draw_settings_title(struct box box,WINDOW *win){
     attroff(COLOR_PAIR(SETTINGS_ACCENT_COLOR_PAIR) | A_BOLD);
 }
 
+// set_settings_screen_box(): 設定項目の中身に合わせて設定画面の枠を決める。
+// 幅はキーと項目名が収まる列幅から、高さは項目数から求め、画面の中央へ置く。
+// 高さだけでは収まらない分は列を増やして横へ送るため、項目が増えるほど
+// 枠は横に広がる。項目が少ないときはSETTINGS_SCREEN_MIN_*まで広げ、画面に
+// 収まらない分の間引きはdraw_settings_screen()が行う。
+// 引数: state=設定項目・画面サイズ・枠を持つエディタ状態。
+// 返り値: なし。
+void set_settings_screen_box(struct editor_state *state){
+    if(state == NULL)return;
+    struct settings_screen_data *st_scr_data = &state->settings_screen_data;
+
+    //枠の上限。画面の端まで届かせず、上下左右に余白を残す。
+    int limit_w = state->scr.scr_size.x - state->scr.scr_size.x / SETTINGS_SCREEN_MARGIN_DIV;
+    int limit_h = state->scr.scr_size.y - state->scr.scr_size.y / SETTINGS_SCREEN_MARGIN_DIV;
+
+    //一番長い項目名にキーと余白を足して、1列分の幅を決める。
+    int name_width_max = 0;
+    for(int i = 0;i < st_scr_data->settings_item_data_num;i++){
+        int name_width = settings_item_name_width(st_scr_data->item_data[i].name);
+        if(name_width > name_width_max)name_width_max = name_width;
+    }
+    int col_w = name_width_max + SETTINGS_ITEM_KEY_WIDTH + 5;
+    if(col_w < SETTINGS_ITEM_COLUMN_MIN_WIDTH)col_w = SETTINGS_ITEM_COLUMN_MIN_WIDTH;
+    if(col_w > SETTINGS_ITEM_COLUMN_MAX_WIDTH)col_w = SETTINGS_ITEM_COLUMN_MAX_WIDTH;
+
+    //枠の内側に並べられる行数。上下の枠線の分を引く。
+    int rows = limit_h - 2;
+    if(rows < 1)rows = 1;
+
+    //縦に収まらない分は列を増やして横へ送る。
+    int col_count = (st_scr_data->settings_item_data_num + rows - 1) / rows;
+    if(col_count < 1)col_count = 1;
+
+    int box_w = col_w * col_count + 2;
+    int box_h = st_scr_data->settings_item_data_num + 2;
+    //項目が少なくても小さくなりすぎないよう、最小サイズまで広げる。
+    if(box_w < SETTINGS_SCREEN_MIN_W)box_w = SETTINGS_SCREEN_MIN_W;
+    if(box_h < SETTINGS_SCREEN_MIN_H)box_h = SETTINGS_SCREEN_MIN_H;
+    if(box_w > limit_w)box_w = limit_w;
+    if(box_h > limit_h)box_h = limit_h;
+
+    //残った余白は左右と上下へ均等に割って中央へ寄せる。
+    st_scr_data->box.pos = (struct pos){
+        (state->scr.scr_size.x - box_w) / 2,
+        (state->scr.scr_size.y - box_h) / 2
+    };
+    st_scr_data->box.w = box_w;
+    st_scr_data->box.h = box_h;
+}
+
 // draw_settings_screen(): 設定画面の枠・タイトル・項目を描画する。
 // 項目は上から下へ並べ、枠の高さに収まらなくなった分は次の列へ送る。
+// 1列が広くなりすぎないよう幅に上限を設け、余った幅は左右へ分けて
+// 項目の並びを中央へ寄せる。これで項目名とキーが離れすぎない。
 // 選択行はマーカーと反転表示で示す。項目名は列の左端、キーは列の右端に
 // 寄せるため、名前の長さが違ってもキーの位置がそろう。
 // 引数: ctx=設定項目と描画領域を持つ入力context。
@@ -768,10 +867,19 @@ static void draw_settings_screen(struct editor_input_context *ctx){
 
     //余りは切り捨てる。はみ出した分は使わないだけで、枠線へは被らない。
     int col_w = inner_w / col_count;
+    //枠が広いときはキーが右端まで離れてしまうため、列幅に上限を設ける。
+    if(col_w > SETTINGS_ITEM_COLUMN_MAX_WIDTH)col_w = SETTINGS_ITEM_COLUMN_MAX_WIDTH;
+    //使わなくなった幅は左右へ均等に割って、項目の並びを中央へ寄せる。
+    int items_pos_x = st_scr_data.box.pos.x + 1 + (inner_w - col_w * col_count) / 2;
+
+    //列の外側に前回の描画が残らないよう、内側を一度消してから並べる。
+    for(int y = 0; y < inner_h;y++){
+        mvhline(st_scr_data.box.pos.y + y + 1,st_scr_data.box.pos.x + 1,' ',inner_w);
+    }
 
     for(int c = 0; c < col_count;c++){
         //列の左端。マーカーはこの位置、名前はその2つ右に置く。
-        int col_pos_x = st_scr_data.box.pos.x + 1 + c * col_w;
+        int col_pos_x = items_pos_x + c * col_w;
         int mark_pos_x = col_pos_x;
         int item_pos_x = col_pos_x + 2;
         //キーは列の右端から桁数と余白1つ分だけ内側へ寄せる。
@@ -785,8 +893,6 @@ static void draw_settings_screen(struct editor_input_context *ctx){
             int scr_pos_y = st_scr_data.box.pos.y + i + 1;
             bool is_select = (item_index == st_scr_data.select_line);
 
-            //列の幅だけ消してから描く。前回の反転表示が残らないようにするため。
-            mvhline(scr_pos_y,col_pos_x,' ',col_w);
             if(is_select){
                 mvaddnwstr(scr_pos_y,mark_pos_x,L"\u276F",1);
             }
@@ -814,4 +920,78 @@ static void draw_settings_screen(struct editor_input_context *ctx){
             }
         }
     }
+}
+
+
+static int draw_settings_search_box(struct editor_input_context *ctx){
+
+    struct editor_state *state = ctx->state;
+    struct settings_screen_data st_scr_data = state->settings_screen_data;
+
+    if(st_scr_data.box.pos.y <= 0)return -1;
+
+    struct pos search_box_pos = (struct pos){st_scr_data.box.pos.x,st_scr_data.box.pos.y - 3};
+    struct box search_box = {search_box_pos,st_scr_data.box.w,3};
+    draw_box(search_box,ctx->win);
+    return 0;
+}
+
+
+static void draw_settings_explanation_box(struct editor_input_context *ctx){
+    struct editor_state *state = ctx->state;
+    struct settings_screen_data st_scr_data = state->settings_screen_data;
+
+    int x;
+    int y;
+    getmaxyx(ctx->win,y,x);
+
+    int explanation_box_pos_x = st_scr_data.box.pos.x + st_scr_data.box.w;
+    int explanation_box_max_w = x - explanation_box_pos_x;
+    if(explanation_box_max_w < SETTINGS_EXPLATAION_BOX_MIN_W)return;
+    
+
+    struct pos explanation_pos = {explanation_box_pos_x,st_scr_data.box.pos.y};
+    size_t explanation_str_len = strlen(st_scr_data.item_data[st_scr_data.select_line].explanation);
+    if(explanation_str_len <= 0)return;
+    //説明ウィンドウの座標から画面下までのセル数
+    int explanation_box_max_h = (y - st_scr_data.box.pos.y);
+    //説明ウィンドウの横幅に説明文を入れきれるかの計算
+    int explanation_str_h = (explanation_str_len/(SETTINGS_EXPLATAION_BOX_MIN_W - 2)) + 1;
+    
+    int area_w = 0;
+    int area_h = 0;
+    for(int w = SETTINGS_EXPLATAION_BOX_MIN_W;w < explanation_box_max_w;w++){
+        for(int h = st_scr_data.box.h; h < explanation_box_max_h;h++){
+            int explanation_box_area = w * h;
+            if(explanation_box_area < explanation_str_h)continue;
+            area_w = w;
+            area_h = h;
+            break;
+        }
+        if(area_h != 0)break;
+    }
+
+    struct box explanation_box = {explanation_pos,area_w,area_h};
+    draw_box(explanation_box,ctx->win);
+    draw_explanation_str(st_scr_data.item_data[st_scr_data.select_line].explanation,explanation_box);
+}
+
+
+
+static void draw_explanation_str(const char *str,struct box box){
+    int str_len = strlen(str);
+    if(str_len <= 0)return;
+
+    int loop_h = (str_len + box.w - 3) / (box.w - 2);
+    int offset = 0;
+    for(int h = 0;h < loop_h;h++){
+        struct pos explanation_str_pos = {box.pos.x + 1,box.pos.y + h+1};
+        int split_len = (str_len > box.w)?box.w - 2:str_len;
+        char splited_explanation_str[split_len + 1];
+        memcpy(splited_explanation_str,&str[offset],sizeof(char) * split_len);
+        splited_explanation_str[split_len] = '\0';
+        my_mvaddstr(explanation_str_pos,splited_explanation_str);
+        offset += split_len;
+    }
+    return;
 }

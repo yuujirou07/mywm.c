@@ -363,6 +363,7 @@ int main(int argc, char *argv[])
     struct settings_items_data item;
     item.key_code = 'q';
     item.name = "hello";
+    item.explanation = "just write hello";
     add_settings_screen_item(&state.settings_screen_data,item);
     int running = true;
     while (running) {

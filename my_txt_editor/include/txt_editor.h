@@ -206,6 +206,7 @@ struct screen_state_log{
 struct settings_items_data{
     const char *name;
     wint_t key_code; 
+    const char *explanation;
 };
 
 struct settings_screen_data{
@@ -556,6 +557,8 @@ void request_clear_box(struct editor_state *state, struct box box);
 void draw_line_jump(struct editor_state *state);
 // 消去対象の矩形をclear_box_dataへ追加する。
 int set_clear_box(struct clear_box_data *clear_box_data,struct box box);
+// 設定項目の中身に合わせて設定画面の枠を決め、画面の中央へ置く。
+void set_settings_screen_box(struct editor_state *state);
 
 // txt_editor_file.c
 // 指定ディレクトリの項目をファイルブラウザ用テーブルへ読み込む。

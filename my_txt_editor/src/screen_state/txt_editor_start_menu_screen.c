@@ -66,13 +66,9 @@ bool handle_start_menu_input(struct editor_input_context *ctx, wint_t ch){
         editor_set_screen_state(state,setting_screen);
         my_cur_set(state,false);
 
-        int y,x;
-        getmaxyx(ctx->win,y,x);
-        int pos_x = x/5;
-        int pos_y = y/10;
-        struct pos settings_pos = {pos_x,pos_y};
-        struct box settings_box = {settings_pos,x - (pos_x * 2),y - (pos_y * 2)};
-        state->settings_screen_data.box = settings_box;
+        //項目数と項目名の長さに合わせて枠を決め、画面の中央へ置く。
+        set_settings_screen_box(state);
+        struct box settings_box = state->settings_screen_data.box;
         // 枠はdraw_settings_screen()が描く。ここで要求するとRENDER_SETTINGSより
         // 後に枠が描き直され、枠上辺のタイトルが消える。
         request_clear_box(state,settings_box);
