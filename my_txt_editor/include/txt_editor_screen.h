@@ -3,6 +3,7 @@
 
 #include "txt_editor.h"
 
+// 各handle_*()はtxt_editor_state.cのdispatcherから呼ばれる画面別入力処理。
 bool handle_edit_screen_input(struct editor_input_context *ctx, int input_result, wint_t ch);
 bool handle_file_browse_screen_input(struct editor_input_context *ctx, int input_result, wint_t ch);
 bool handle_line_jump_mode_input(struct editor_input_context *ctx, wint_t ch);
@@ -12,6 +13,7 @@ bool handle_start_menu_input(struct editor_input_context *ctx, wint_t ch);
 bool handle_settings_screen_input(struct editor_input_context *ctx,wint_t ch,int input_result);
 
 void reset_jump_mode(struct editor_state *state);
+// 新規ファイル確認画面の配置を計算し、次回描画を要求する。
 void show_make_file_prompt(WINDOW *win, struct editor_state *state, struct box *file_box,
                            int screen_center_y, struct pos screen_center_pos);
 

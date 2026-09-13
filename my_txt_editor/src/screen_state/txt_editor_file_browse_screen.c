@@ -7,7 +7,7 @@
 #include "txt_editor_screen.h"
 
 // handle_file_browse_screen_input(): ファイルブラウザ画面の移動・選択・復帰を処理する。
-// 引数: ctx=ファイル一覧・現在パス・描画先を持つcontext、ch=入力文字またはKEY_*。
+// 引数: ctx=ファイル一覧・現在パス・描画先を持つcontext、input_result=get_wch()の結果、ch=入力文字またはKEY_*。
 // 返り値: 入力ループを続けるならtrue。
 bool handle_file_browse_screen_input(struct editor_input_context *ctx, int input_result, wint_t ch){
     struct editor_state *state = ctx->state;

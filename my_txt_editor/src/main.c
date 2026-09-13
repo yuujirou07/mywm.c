@@ -100,6 +100,7 @@ int main(int argc, char *argv[])
     init_pair(2, COLOR_BLACK, COLOR_WHITE);
     init_pair(3, COLOR_BLACK, COLOR_RED);
     init_syntax_colors();
+    init_pair(SETTINGS_ACCENT_COLOR_PAIR, COLOR_CYAN, COLOR_BLACK);
 
     state.scr.scr_start_num = 0;
 
@@ -201,7 +202,11 @@ int main(int argc, char *argv[])
         editor_free_text_buffer(&state);
         return 1;
     }
-
+    state.settings_screen_data.box = (struct box){(struct pos){0,0},0,0};
+    state.settings_screen_data.item_data = NULL;
+    state.settings_screen_data.settings_item_data_num = 0;
+    state.settings_screen_data.settings_item_data_allocate_num = 0;
+    state.settings_screen_data.select_line = 0;
     state.jump_mode_data.jump_line_num_counter = 0;
 
     editor_set_screen_state(&state, state.settings_data->show_start_menu ? start_menu_screen : edit_screen);
@@ -355,7 +360,10 @@ int main(int argc, char *argv[])
 
     // 部分更新とスクロール処理から参照するsyntaxを借用ポインタとして登録する。
     now_usint_syntax_ptr_ctl(&syntax,set);
-
+    struct settings_items_data item;
+    item.key_code = 'q';
+    item.name = "hello";
+    add_settings_screen_item(&state.settings_screen_data,item);
     int running = true;
     while (running) {
         

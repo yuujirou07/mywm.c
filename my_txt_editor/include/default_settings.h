@@ -23,6 +23,13 @@
 #define DEFAULT_LSP_USE true
 #define DEFAULT_USE_ICON false
 #define DEFAULT_BUILT_IN_SYNTAX true
+// 設定画面のキーとタイトルの色ペア。1〜3は本文・選択・エラー、4以降は構文色が
+// 使うため、それと重ならない15を割り当てる。
+#define SETTINGS_ACCENT_COLOR_PAIR 15
+// "[q]"のように囲み括弧を含めたキー表示の桁数。
+#define SETTINGS_ITEM_KEY_WIDTH 3
+// 設定項目の1列あたりの最小幅。これ未満になるくらいなら列を増やさない。
+#define SETTINGS_ITEM_COLUMN_MIN_WIDTH 24
 
 
 struct lsp_settings_data{

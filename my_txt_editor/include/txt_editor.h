@@ -27,9 +27,9 @@
 
 // update_screen()で再描画する領域を指定するビットフラグ。
 enum render_flags {
-    RENDER_NONE       = 0,       // 再描画要求なし。
-    RENDER_LINE_STATUS     = 1 << 0,  // 現在行表示を更新する。
-    RENDER_STATUS_BAR_LINE = 1 << 1,  // ステータスバーの区切り線を更新する。
+    RENDER_NONE       = 0,          // 再描画要求なし。
+    RENDER_LINE_STATUS     = 1 << 0,// 現在行表示を更新する。
+    RENDER_STATUS_BAR_LINE = 1 << 1,// ステータスバーの区切り線を更新する。
     RENDER_LINE  = 1 << 2,      // 編集領域左の縦線を更新する。
     RENDER_STATUS_BAR = 1 << 3, // ステータスバーの内容を更新する。
     RENDER_SELECT_DIR_SCENE_COLOR = 1 << 4, // ファイル選択行の反転表示を更新する。
@@ -41,6 +41,7 @@ enum render_flags {
     RENDER_ALL        = 1 << 10, // 画面全体更新用の予約フラグ。
     RENDER_LINE_JUMP = 1 << 11, // 行ジャンプ入力欄を更新する。
     RENDER_MAKE_FILE = 1 << 12, // 新規ファイル作成ダイアログを更新する。
+    RENDER_SETTINGS = 1 << 13, //設定ファイルを描画する
 };
 
 
@@ -202,6 +203,19 @@ struct screen_state_log{
     int screen_state_log_counter; // 記録済みの遷移数。
 };
 
+struct settings_items_data{
+    const char *name;
+    wint_t key_code; 
+};
+
+struct settings_screen_data{
+    struct box box;
+    struct settings_items_data *item_data;
+    int settings_item_data_num; 
+    int settings_item_data_allocate_num;
+    int select_line; // 選択中の項目行。設定項目の添字と同じ。
+};
+
 enum flags{
     set,
     get,
@@ -227,12 +241,16 @@ struct editor_state {
     struct file_select_line    file_select_line_data; // ファイルブラウザの選択行状態。
     struct clear_box_data      clear_box_data; // 次回消去する矩形領域。
     struct screen_state_log    screen_log; // 現在状態を末尾に持つ画面遷移履歴。
+    struct settings_screen_data settings_screen_data;
     int                        render_flags; // update_screen()へ渡す再描画要求。
     int                        draw_box_count; // draw_box_dataに積まれている数。
     bool                       is_cur_show; // カーソル表示中ならtrue。
     bool                       mylsp_use;
 };
 
+// editor_get_screen_state_log(): 現在位置を基準に画面遷移履歴を取得する。
+// 引数: state=画面遷移履歴を持つ状態、history_offset=0なら現在、1なら直前、2なら2つ前。
+// 返り値: 指定位置の画面状態。履歴範囲外ならscreen_state_log_error。
 static inline enum now_screen_state editor_get_screen_state_log(struct editor_state *state,
                                                                 int history_offset){
     if(history_offset < 0 ||
@@ -244,10 +262,17 @@ static inline enum now_screen_state editor_get_screen_state_log(struct editor_st
     return state->screen_log.screen_state_log[log_index];
 }
 
+// editor_get_screen_state(): 現在の画面状態を返す。
+// 引数: state=画面遷移履歴を持つ状態。
+// 返り値: 現在の画面状態。履歴が空ならscreen_state_log_error。
 static inline enum now_screen_state editor_get_screen_state(struct editor_state *state){
     return editor_get_screen_state_log(state,0);
 }
 
+// editor_set_screen_state(): 画面状態を履歴末尾へ追加する。
+// 同じ状態が連続する場合は追加せず、満杯なら最古の状態を捨てる。
+// 引数: state=更新する画面遷移履歴、next_state=遷移先。
+// 返り値: なし。
 static inline void editor_set_screen_state(struct editor_state *state,
                                         enum now_screen_state next_state){
     struct screen_state_log *log = &state->screen_log;
@@ -567,6 +592,16 @@ void file_select_line_update(struct file_select_line *file_select_line,int line)
 void input_mode_tmp_path(char *path,enum flags flags);
 // 現在開いているパスを保存または取得する。
 const wchar_t *now_open_path_name(struct dir_table *path,enum flags flags);
+// 現在パスの末尾名を含むディレクトリエントリを最大size件収集する。
+int check_dir_mem(struct dir_table *dir_table,int size);
+// パスがファイル・フォルダ・未確定のどれかを返す。
+enum select_state get_path_state(const char *path);
+// 入力中のパスを種類に応じて開く。
+int now_input_path_open(struct editor_state *state,struct editor_input_context *ctx);
+// ファイルブラウザの表示開始位置を保存または取得する。
+int file_browser_show_mem_start_num(int start_num,enum flags flags);
+// エントリ種別に対応するアイコン文字をiconへ書き込む。
+int get_icon(struct editor_state *state,struct dir_entry entry,wchar_t *icon);
 
 // txt_editor_func.c
 // 端末幅に合わせてファイルブラウザの枠と一覧テーブルを作り直す。
@@ -601,10 +636,9 @@ void file_browse_screen_mouse_event(WINDOW *win, MEVENT *event, struct editor_st
 void set_file_browse_path_input_mode(struct file_browse_screen_context *file_browser_screen_context,bool flag);
 // ファイルブラウザがパス入力モードかを返す。
 bool get_file_browse_path_input_mode(struct file_browse_screen_context *file_browser_screen_context);
-
+// カーソルの表示状態を切り替え、ncurses側へ反映する。
 void my_cur_set(struct editor_state *state,bool set);
 
-int check_dir_mem(struct dir_table *dir_table,int size);
 // txt_editor_state.c
 // 現在の画面状態に対応する入力処理へ入力を振り分ける。
 bool editor_handle_screen_input(struct editor_input_context *ctx, int input_result, wint_t ch);
@@ -612,18 +646,16 @@ bool editor_handle_screen_input(struct editor_input_context *ctx, int input_resu
 void move_view_to_line(struct editor_state *state, long target_line, int col);
 // 現在の画面状態に合わせて各描画領域の配置を更新する。
 int update_screen_ratio(struct editor_input_context *ctx);
+// ファイルブラウザやジャンプ入力から編集画面へ戻す。
+void restore_edit_screen(struct editor_state *state);
 
 // main.c
 // 指定座標へ文字列を描画する。
 void my_mvaddstr(struct pos pos,char *str);
 
-enum select_state get_path_state(const char *path);
-int now_input_path_open(struct editor_state *state,struct editor_input_context *ctx);
-void restore_edit_screen(struct editor_state *state);
-
-int file_browser_show_mem_start_num(int start_num,enum flags flags);
-
-int get_icon(struct editor_state *state,struct dir_entry entry,wchar_t *icon);
-
-
+// txt_editor_settings_screen.c
+// 設定画面の項目一覧へ項目を追加する。
+int add_settings_screen_item(struct settings_screen_data *settings_screen_data,struct settings_items_data item_data);
+// 設定画面の選択行をdelta分だけ動かす。
+void move_settings_select_line(struct settings_screen_data *settings_screen_data,int delta);
 #endif

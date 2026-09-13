@@ -6,14 +6,20 @@
 #include <wchar.h>
 #include "txt_editor.h"
 #include"txt_editor_syntax.h"
-
+#include"error_log.h"
 static void draw_search_box(struct box search_box,WINDOW *win);
+// 設定項目名の画面上の表示幅を返す。
+static int settings_item_name_width(const char *name);
+// 設定画面の枠上辺へタイトルを描画する。
+static void draw_settings_title(struct box box,WINDOW *win);
+// 設定画面の枠・タイトル・項目を描画する。
+static void draw_settings_screen(struct editor_input_context *ctx);
 
 // line_draw_info(): 線の向きから描画範囲・移動量・罫線文字を決める。
 // 引数: start_pos/end_pos=線の端点、range/step_x/step_y/line_ch=計算結果の書き込み先。
 // 返り値: 縦線または横線ならtrue、斜め線ならfalse。
 static bool line_draw_info(struct pos start_pos, struct pos end_pos,
-                           int *range, int *step_x, int *step_y, chtype *line_ch){
+                int *range, int *step_x, int *step_y, chtype *line_ch){
     if(start_pos.x == end_pos.x){
         *range = abs(start_pos.y - end_pos.y);
         *step_x = 0;
@@ -396,7 +402,7 @@ void editor_error_screen(struct editor_state *state,char *error_comment){
     attroff(COLOR_PAIR(3));
     mvaddstr(screen_center_y-9,comment_start_pos_x,error_comment);
     mvaddstr(screen_center_y-8,press_enter_comment_start_pos_x,"press enter to back");
-
+    error_log(error_comment);//ファイル出力
     refresh();
     flushinp();
 }
@@ -576,6 +582,9 @@ void update_screen(struct editor_input_context *ctx){
         if(flags & RENDER_LINE_STATUS){
             draw_line_status(state, win);
         }
+        if(flags & RENDER_SETTINGS){
+            draw_settings_screen(ctx);   
+        }
 
         if(flags & RENDER_LINE){
             draw_line(ctx->edit_screen.line_start_pos,
@@ -694,4 +703,115 @@ static void draw_search_box(struct box search_box,WINDOW *win){
     draw_box(search_box,win);
     mvaddch(search_box.pos.y,search_box.pos.x,ACS_LTEE);
     mvaddch(search_box.pos.y,search_box.pos.x + search_box.w -1,ACS_RTEE);
+}
+
+
+// settings_item_name_width(): 設定項目名の画面上の表示幅を返す。
+// UTF-8のバイト数と画面セル数は日本語やアイコンで一致しないため、
+// 一度ワイド文字へ変換してからwcswidth()で数える。
+// 引数: name=UTF-8の項目名。
+// 返り値: 表示幅。NULLや変換失敗時は-1。
+static int settings_item_name_width(const char *name){
+    if(name == NULL)return -1;
+
+    wchar_t wide_name[256];
+    size_t converted = mbstowcs(wide_name,name,sizeof(wide_name)/sizeof(wide_name[0]) - 1);
+    if(converted == (size_t)-1)return -1;
+    wide_name[converted] = L'\0';
+
+    int width = wcswidth(wide_name,converted);
+    return (width < 0) ? -1 : width;
+}
+
+// draw_settings_title(): 設定画面の枠上辺の中央へタイトルを埋め込む。
+// 枠線の上に重ね書きするため、必ずdraw_box()のあとに呼ぶ。
+// 引数: box=設定画面の枠、win=描画先ウィンドウ。
+// 返り値: なし。
+static void draw_settings_title(struct box box,WINDOW *win){
+    (void)win;
+
+    const char *title = " Settings ";
+    int title_len = (int)strlen(title);
+    if(box.w < title_len + 2)return;
+
+    int title_x = box.pos.x + (box.w - title_len) / 2;
+    attron(COLOR_PAIR(SETTINGS_ACCENT_COLOR_PAIR) | A_BOLD);
+    mvaddstr(box.pos.y,title_x,title);
+    attroff(COLOR_PAIR(SETTINGS_ACCENT_COLOR_PAIR) | A_BOLD);
+}
+
+// draw_settings_screen(): 設定画面の枠・タイトル・項目を描画する。
+// 項目は上から下へ並べ、枠の高さに収まらなくなった分は次の列へ送る。
+// 選択行はマーカーと反転表示で示す。項目名は列の左端、キーは列の右端に
+// 寄せるため、名前の長さが違ってもキーの位置がそろう。
+// 引数: ctx=設定項目と描画領域を持つ入力context。
+// 返り値: なし。
+static void draw_settings_screen(struct editor_input_context *ctx){
+    struct editor_state *state = ctx->state;
+    struct settings_screen_data st_scr_data = state->settings_screen_data;
+
+    draw_box(st_scr_data.box,ctx->win);
+    draw_settings_title(st_scr_data.box,ctx->win);
+
+    int item_num = st_scr_data.settings_item_data_num;
+    int inner_w = st_scr_data.box.w - 2;
+    //内側に並べられるのは上下の枠線を除いた分だけ。
+    int inner_h = st_scr_data.box.h - 2;
+    if(item_num <= 0 || inner_w <= 0 || inner_h <= 0)return;
+
+    //1列に入りきらない分を次の列へ回す。端数は最終列に入る。
+    int col_count = (item_num + inner_h - 1) / inner_h;
+    //狭い枠で列を増やしすぎると1列が潰れるため、最小幅で頭打ちにする。
+    int col_count_max = inner_w / SETTINGS_ITEM_COLUMN_MIN_WIDTH;
+    if(col_count > col_count_max)col_count = col_count_max;
+    if(col_count < 1)col_count = 1;
+
+    //余りは切り捨てる。はみ出した分は使わないだけで、枠線へは被らない。
+    int col_w = inner_w / col_count;
+
+    for(int c = 0; c < col_count;c++){
+        //列の左端。マーカーはこの位置、名前はその2つ右に置く。
+        int col_pos_x = st_scr_data.box.pos.x + 1 + c * col_w;
+        int mark_pos_x = col_pos_x;
+        int item_pos_x = col_pos_x + 2;
+        //キーは列の右端から桁数と余白1つ分だけ内側へ寄せる。
+        int key_pos_x = col_pos_x + col_w - 1 - SETTINGS_ITEM_KEY_WIDTH - 1;
+
+        for(int i = 0; i < inner_h;i++){
+            int item_index = c * inner_h + i;
+            if(item_index >= item_num)break;
+
+            struct settings_items_data item = st_scr_data.item_data[item_index];
+            int scr_pos_y = st_scr_data.box.pos.y + i + 1;
+            bool is_select = (item_index == st_scr_data.select_line);
+
+            //列の幅だけ消してから描く。前回の反転表示が残らないようにするため。
+            mvhline(scr_pos_y,col_pos_x,' ',col_w);
+            if(is_select){
+                mvaddnwstr(scr_pos_y,mark_pos_x,L"\u276F",1);
+            }
+
+            attron(A_BOLD);
+            my_mvaddstr((struct pos){item_pos_x,scr_pos_y},(char *)item.name);
+            attroff(A_BOLD);
+
+            //名前の後ろからキーの手前まで空白で埋める。
+            int name_width = settings_item_name_width(item.name);
+            if(name_width < 0)name_width = 0;
+            for(int blank = item_pos_x + name_width;blank < key_pos_x;blank++){
+                mvaddch(scr_pos_y,blank,' ');
+            }
+
+            wchar_t key_code[SETTINGS_ITEM_KEY_WIDTH + 1] =
+                {L'[',(wchar_t)item.key_code,L']',L'\0'};
+            attron(COLOR_PAIR(SETTINGS_ACCENT_COLOR_PAIR) | A_BOLD);
+            mvaddnwstr(scr_pos_y,key_pos_x,key_code,SETTINGS_ITEM_KEY_WIDTH);
+            attroff(COLOR_PAIR(SETTINGS_ACCENT_COLOR_PAIR) | A_BOLD);
+
+            //反転は最後に重ねる。名前とキーの色より選択表示を優先する。
+            if(is_select){
+                mvchgat(scr_pos_y,col_pos_x,col_w,A_NORMAL,2,NULL);
+            }
+        }
+    }
 }

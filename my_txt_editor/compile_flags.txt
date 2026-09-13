@@ -2,3 +2,4 @@
 -D_XOPEN_SOURCE=600
 -I/home/yuujirou07/vscode_proj/mywm_proj/my_txt_editor/include
 -I/home/yuujirou07/vscode_proj/mywm_proj/my_txt_editor/include/lsp_src
+-I/home/yuujirou07/vscode_proj/mywm_proj/my_txt_editor/src/screen_state

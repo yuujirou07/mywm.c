@@ -4,6 +4,9 @@
 #include "txt_editor_syntax.h"
 #include "txt_editor_screen.h"
 
+// send_lsp_did_change(): 編集バッファ全体をUTF-8化し、LSPへ変更通知を送る。
+// 引数: ctx=編集状態とLSPプロセスを持つcontext。
+// 返り値: なし。送信成功時は生成文字列をstateの文字列バッファが所有し、失敗時は関数内で解放する。
 static void send_lsp_did_change(struct editor_input_context *ctx);
 
 // handle_edit_screen_input(): 通常編集画面のキー入力を処理する。

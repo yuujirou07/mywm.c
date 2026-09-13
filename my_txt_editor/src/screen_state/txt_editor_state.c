@@ -25,9 +25,6 @@ bool editor_handle_screen_input(struct editor_input_context *ctx, int input_resu
     return true;
 }
 
-// jump_prompt_pos(): 行ジャンププロンプトを描画する座標を返す。
-// 引数: state=ステータスバー設定と書き込み領域を持つエディタ状態。
-// 返り値: プロンプトの左端座標。
 // clamp_editor_target_line(): 移動先行番号を編集可能な範囲へ丸める。
 // 引数: state=有効行数を持つエディタ状態、target_line=移動したい論理行番号。
 // 返り値: 有効範囲内の論理行番号。

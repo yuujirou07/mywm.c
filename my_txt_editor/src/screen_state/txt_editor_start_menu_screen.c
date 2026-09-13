@@ -1,6 +1,10 @@
 #include "start_menu.h"
+#include "txt_editor.h"
 #include "txt_editor_screen.h"
 
+// handle_start_menu_input(): start menu pluginを実行し、選択結果に対応する画面へ遷移する。
+// 引数: ctx=pluginと各遷移先の状態を持つcontext、ch=dispatcherとの共通形式用で未使用。
+// 返り値: 入力ループを続けるならtrue、pluginが終了を要求したらfalse。
 bool handle_start_menu_input(struct editor_input_context *ctx, wint_t ch){
     (void)ch;
     struct editor_state *state = ctx->state;
@@ -68,8 +72,11 @@ bool handle_start_menu_input(struct editor_input_context *ctx, wint_t ch){
         int pos_y = y/10;
         struct pos settings_pos = {pos_x,pos_y};
         struct box settings_box = {settings_pos,x - (pos_x * 2),y - (pos_y * 2)};
-        request_draw_box(state,settings_box);
+        state->settings_screen_data.box = settings_box;
+        // 枠はdraw_settings_screen()が描く。ここで要求するとRENDER_SETTINGSより
+        // 後に枠が描き直され、枠上辺のタイトルが消える。
         request_clear_box(state,settings_box);
+        state->render_flags |= RENDER_SETTINGS;
         return true;
     }
 
