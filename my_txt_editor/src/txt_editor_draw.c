@@ -504,7 +504,7 @@ static void draw_make_file_dialog(struct editor_input_context *ctx){
     if(!state->make_file_mode_status.is_input_scene){
         char comment[] = "The file cannot be found; would you like to create it?";
         int comment_len = strlen(comment);
-        int box_h = comment_len / state->scr.scr_size.x + 3;
+        int box_h = comment_len / state->scr.scr_size.x + 4;
         int box_w = (state->scr.scr_size.x > comment_len + 2)
             ? comment_len + 2 : state->scr.scr_size.x;
         struct box box = {

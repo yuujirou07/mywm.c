@@ -625,7 +625,7 @@ static void show_make_file_prompt(WINDOW *win, struct editor_state *state, struc
     (void)win;
     char comment_str[] = "The file cannot be found; would you like to create it?";
     int comment_str_len = strlen(comment_str);
-    int box_h = (comment_str_len / state->scr.scr_size.x + 1) + 2;
+    int box_h = (comment_str_len / state->scr.scr_size.x + 1) + 3;
     int box_w = (state->scr.scr_size.x > comment_str_len + 2)
         ? comment_str_len + 2 : state->scr.scr_size.x;
     struct box make_file_box;
