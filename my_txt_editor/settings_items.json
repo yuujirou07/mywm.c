@@ -1,0 +1,21 @@
+[
+  {"name":"max lines","key":"m","explanation":"Maximum number of lines handled by the editor."},
+  {"name":"max line size","key":"M","explanation":"Maximum size of one line."},
+  {"name":"line number space","key":"n","explanation":"Width reserved for line numbers."},
+  {"name":"indent range","key":"i","explanation":"Number of columns used for indentation."},
+  {"name":"jump cursor position","key":"j","explanation":"Cursor offset used after a line jump."},
+  {"name":"default load line size","key":"d","explanation":"Number of lines allocated when a file is opened."},
+  {"name":"load buffer lines","key":"b","explanation":"Number of line buffers allocated at once."},
+  {"name":"status bar side","key":"p","explanation":"Position of the status bar: top or bottom."},
+  {"name":"show status bar","key":"s","explanation":"Show or hide the status bar."},
+  {"name":"draw split line","key":"D","explanation":"Draw the separator beside the line numbers."},
+  {"name":"ask make file","key":"a","explanation":"Ask before creating a file that does not exist."},
+  {"name":"show start menu","key":"S","explanation":"Show the start menu when the editor starts."},
+  {"name":"file selection lighting","key":"f","explanation":"Highlight the selected entry in the file browser."},
+  {"name":"use icon","key":"c","explanation":"Show file type icons in the file browser."},
+  {"name":"built-in syntax","key":"y","explanation":"Enable built-in syntax highlighting."},
+  {"name":"LSP use","key":"l","explanation":"Enable Language Server Protocol support."},
+  {"name":"LSP launch at startup","key":"L","explanation":"Launch the language server when the editor starts."},
+  {"name":"LSP epoll timeout","key":"t","explanation":"Timeout in milliseconds used while polling the language server."},
+  {"name":"LSP language","key":"g","explanation":"Language identifier sent to the language server."}
+]

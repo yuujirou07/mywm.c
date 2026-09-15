@@ -659,6 +659,8 @@ void my_mvaddstr(struct pos pos,char *str);
 // txt_editor_settings_screen.c
 // 設定画面の項目一覧へ項目を追加する。
 int add_settings_screen_item(struct settings_screen_data *settings_screen_data,struct settings_items_data item_data);
+// JSONから設定画面の項目一覧を読み込む。
+int load_settings_screen_items(struct settings_screen_data *settings_screen_data);
 // 設定画面の選択行をdelta分だけ動かす。
 void move_settings_select_line(struct settings_screen_data *settings_screen_data,int delta);
 #endif

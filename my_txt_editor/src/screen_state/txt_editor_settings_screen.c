@@ -1,7 +1,13 @@
 #include<stdlib.h>
+#include<limits.h>
+#include<string.h>
+#include<unistd.h>
+#include<cjson/cJSON.h>
 #include "txt_editor.h"
 #include "txt_editor_screen.h"
 #include"error_log.h"
+#include"json_read.h"
+#include"path_util.h"
 
 // handle_settings_screen_input(): 設定画面の終了、選択行移動、入力エラーを処理する。
 // Tabでは履歴上の遷移元へ戻り、履歴が無ければエラー画面へ遷移する。
@@ -61,6 +67,7 @@ int add_settings_screen_item(struct settings_screen_data *settings_screen_data,s
             error_log("settings_item_data realloc error");
             return -1;
         }
+        settings_screen_data->item_data = tmp_item_data;
         settings_screen_data->settings_item_data_allocate_num *= 2;
     }
     settings_screen_data->item_data[settings_screen_data->settings_item_data_num] = item_data;
@@ -68,3 +75,58 @@ int add_settings_screen_item(struct settings_screen_data *settings_screen_data,s
     return 0;
 }
 
+int load_settings_screen_items(struct settings_screen_data *settings_screen_data){
+    const char *file_name = "settings_items.json";
+    char exe_dir_path[PATH_MAX];
+    const char *path = NULL;
+
+    if(access(file_name,R_OK) == 0){
+        path = file_name;
+    }
+    else if(editor_path_from_exe_dir(exe_dir_path,sizeof(exe_dir_path),file_name) != NULL &&
+            access(exe_dir_path,R_OK) == 0){
+        path = exe_dir_path;
+    }
+    else{
+        return -1;
+    }
+
+    char *buf = read_file_all(path);
+    if(buf == NULL)return -1;
+
+    cJSON *root = cJSON_Parse(buf);
+    free(buf);
+    if(!cJSON_IsArray(root)){
+        cJSON_Delete(root);
+        return -1;
+    }
+
+    cJSON *json_item = NULL;
+    cJSON_ArrayForEach(json_item,root){
+        cJSON *name = cJSON_GetObjectItemCaseSensitive(json_item,"name");
+        cJSON *key = cJSON_GetObjectItemCaseSensitive(json_item,"key");
+        cJSON *explanation = cJSON_GetObjectItemCaseSensitive(json_item,"explanation");
+        if(!cJSON_IsString(name) || !cJSON_IsString(key) ||
+           !cJSON_IsString(explanation) || key->valuestring[0] == '\0' ||
+           key->valuestring[1] != '\0'){
+            cJSON_Delete(root);
+            return -1;
+        }
+
+        struct settings_items_data item = {
+            .name = strdup(name->valuestring),
+            .key_code = (unsigned char)key->valuestring[0],
+            .explanation = strdup(explanation->valuestring),
+        };
+        if(item.name == NULL || item.explanation == NULL ||
+           add_settings_screen_item(settings_screen_data,item) < 0){
+            free((char *)item.name);
+            free((char *)item.explanation);
+            cJSON_Delete(root);
+            return -1;
+        }
+    }
+
+    cJSON_Delete(root);
+    return 0;
+}

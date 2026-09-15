@@ -207,6 +207,11 @@ int main(int argc, char *argv[])
     state.settings_screen_data.settings_item_data_num = 0;
     state.settings_screen_data.settings_item_data_allocate_num = 0;
     state.settings_screen_data.select_line = 0;
+    if(load_settings_screen_items(&state.settings_screen_data) < 0){
+        error_log_write("settings item load error\n");
+        end_process(&state);
+        return 1;
+    }
     state.jump_mode_data.jump_line_num_counter = 0;
 
     editor_set_screen_state(&state, state.settings_data->show_start_menu ? start_menu_screen : edit_screen);
@@ -352,7 +357,7 @@ int main(int argc, char *argv[])
                 .has_plugin = (start_menu != NULL),
                 .plugin = start_menu,
                 .ascii_data = &ascii_data,
-                .startup_start_time = startup_timer ? &startup_start_time : NULL,
+                 .startup_start_time = startup_timer ? &startup_start_time : NULL,
                 .startup_log_path = startup_timer ? startuptime_log_file_path_name : NULL,
             },
         
@@ -360,11 +365,6 @@ int main(int argc, char *argv[])
 
     // 部分更新とスクロール処理から参照するsyntaxを借用ポインタとして登録する。
     now_usint_syntax_ptr_ctl(&syntax,set);
-    struct settings_items_data item;
-    item.key_code = 'q';
-    item.name = "hello";
-    item.explanation = "just write hello";
-    add_settings_screen_item(&state.settings_screen_data,item);
     int running = true;
     while (running) {
         
@@ -435,6 +435,11 @@ static void end_process(struct editor_state *state){
     free(state->file_data.file_str_data);
     free(state->file_data.file_line_start_num);
     free(state->str.chr_file_all_str_data);
+    for(int i = 0;i < state->settings_screen_data.settings_item_data_num;i++){
+        free((char *)state->settings_screen_data.item_data[i].name);
+        free((char *)state->settings_screen_data.item_data[i].explanation);
+    }
+    free(state->settings_screen_data.item_data);
     editor_free_text_buffer(state);
 
     close_error_log_file();
