@@ -90,7 +90,7 @@ int main(int argc, char *argv[])
     cbreak();
     noecho();
     keypad(win, TRUE); 
-    curs_set(0);
+    my_cur_set(&state,false);
     
     start_color();
     if (has_colors()) {
@@ -106,8 +106,7 @@ int main(int argc, char *argv[])
 
     // 編集カーソルはここが唯一の初期化場所。以降、位置はstate.cursorだけが持ち、
     // 端末側へはeditor_sync_cursor()で反映する。
-    state.cursor.line = 0;
-    state.cursor.col  = 0;
+    state.cursor.file_pos = (struct pos){0,0};
 
     getmaxyx(win, state.scr.scr_size.y, state.scr.scr_size.x);
     clear();
@@ -138,10 +137,8 @@ int main(int argc, char *argv[])
     file_browse_box.pos.x = (state.scr.scr_size.x / 2) - file_browse_box.w / 2;
     file_browse_box.pos.y = state.scr.scr_size.y / 4;
 
-    state.is_cur_show = true;
+    my_cur_set(&state,true);
     state.file_browser_box = &file_browse_box;
-
-    curs_set(1);
     raw();
     scrollok(win, TRUE);
     mouseinterval(10);
@@ -387,13 +384,13 @@ int main(int argc, char *argv[])
         update_screen(&input_context);
         if(editor_get_screen_state(&state) == edit_screen){
             bool show_cursor = state.is_cur_show;
-            curs_set(0);
+            my_cur_set(&state,false);
             if(state.settings_data->built_in_syntax){
                 apply_syntax_color(&input_context,syntax);
             }
             editor_sync_cursor(&state);
             refresh();
-            curs_set(show_cursor ? 1 : 0);
+            my_cur_set(&state,show_cursor);
         }
 
         wint_t ch = 0;

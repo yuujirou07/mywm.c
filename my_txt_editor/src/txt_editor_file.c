@@ -652,8 +652,7 @@ void load_screen_size(struct editor_state *state){
     set_line_memory(state);
     load_all_lines(state);
     state->scr.scr_start_num = 0;
-    state->cursor.line = 0;
-    state->cursor.col  = 0;
+    state->cursor.file_pos = (struct pos){0,0};
 }
 
 // load_default_editor_settings(): エディタ設定へコンパイル時の既定値を入れる。

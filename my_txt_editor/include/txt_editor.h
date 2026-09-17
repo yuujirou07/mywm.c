@@ -11,7 +11,8 @@
 #include "ascii_art_comb.h"
 #include"default_settings.h"
 #include"lsp_src/language_server_communication.h"
-
+#include "editor_types.h"
+#include "settings_screen.h"
 
 #define startuptime_log_file_argument_num 1
 #define FDS_N 4
@@ -43,7 +44,6 @@ enum render_flags {
     RENDER_MAKE_FILE = 1 << 12, // 新規ファイル作成ダイアログを更新する。
     RENDER_SETTINGS = 1 << 13, //設定ファイルを描画する
 };
-
 
 // <sys/ttydefaults.h>(sys/epoll.h経由で入る)も同名・同値のCTRLを定義しているため、
 // 先に外してから定義し直す。値は同じなので、どちらが残っても動作は変わらない。
@@ -132,12 +132,6 @@ struct dir_entry {
     unsigned char d_type;
 };
 
-// ncurses画面上の座標。
-struct pos {
-    int x; // 横方向の座標。
-    int y; // 縦方向の座標。
-};
-
 // ファイルブラウザで反転表示する行の現在値と直前値。
 struct file_select_line {
     int now_line; // 表示領域の先頭から数えた選択行。
@@ -145,12 +139,7 @@ struct file_select_line {
     int now_logical_line; // dir_name_tableの表示開始添字。
 };
 
-// 画面上の矩形領域。
-struct box {
-    struct pos pos; // 左上座標。
-    int w; 
-    int h; 
-};
+
 
 // 文字入力・描画が許可される編集領域。
 struct write_possible_area {
@@ -169,13 +158,10 @@ struct scr_data {
     int scr_start_num; // 画面先頭に表示している論理行番号。
 };
 
-// 編集カーソルの論理位置。エディタが持つ唯一のカーソル情報源であり、
-// ncurses側のカーソルはこの値を毎フレーム反映しただけの表示結果として扱う。
-// 画面座標はeditor_cursor_screen_pos()で導出するので、ここには持たない
-// (画面サイズやスクロール位置が変わっても、この構造体は書き換え不要)。
+// 編集カーソルの論理ファイル座標と、描画時に計算した画面座標。
 struct cursor {
-    int line; // 論理行番号(0始まり)。ファイル先頭からの行。
-    int col;  // 行頭からの桁数(0始まり)。画面x座標ではない。
+    struct pos file_pos; // x=行頭からの桁、y=ファイル先頭からの論理行。
+    struct pos screen_pos; // x/y=画面上のカーソル座標。
 };
 
 // 編集バッファ本体と、行ごとの文字数・容量情報。
@@ -203,20 +189,6 @@ struct screen_state_log{
     int screen_state_log_counter; // 記録済みの遷移数。
 };
 
-struct settings_items_data{
-    const char *name;
-    wint_t key_code; 
-    const char *explanation;
-};
-
-struct settings_screen_data{
-    struct box box;
-    struct settings_items_data *item_data;
-    int settings_item_data_num; 
-    int settings_item_data_allocate_num;
-    int select_line; // 選択中の項目行。設定項目の添字と同じ。
-};
-
 enum flags{
     set,
     get,
@@ -242,7 +214,7 @@ struct editor_state {
     struct file_select_line    file_select_line_data; // ファイルブラウザの選択行状態。
     struct clear_box_data      clear_box_data; // 次回消去する矩形領域。
     struct screen_state_log    screen_log; // 現在状態を末尾に持つ画面遷移履歴。
-    struct settings_screen_data settings_screen_data;
+    settings_screen_data        settings_screen_data;
     int                        render_flags; // update_screen()へ渡す再描画要求。
     int                        draw_box_count; // draw_box_dataに積まれている数。
     bool                       is_cur_show; // カーソル表示中ならtrue。
@@ -435,27 +407,25 @@ static inline int editor_clamp_col(struct editor_state *state, int line, int col
     return editor_clamp_int(col, 0, len);
 }
 
-// editor_cursor_screen_pos(): 論理カーソル位置から画面座標を導出する。
-// 導出専用であり結果は保存しない。画面座標が要るのは描画とncursesへの反映だけで、
-// 編集ロジックはstate->cursorのlineとcolだけで完結させる。
+// editor_cursor_screen_pos(): 論理ファイル座標から画面座標を計算して保持する。
 // 引数: state=カーソル・表示開始行・書き込み領域を持つエディタ状態。
 // 返り値: カーソルを置くべき画面座標。
 static inline struct pos editor_cursor_screen_pos(struct editor_state *state){
-    struct pos pos;
-    pos.x = state->write_area.x_start + state->cursor.col;
-    pos.y = state->write_area.y_start + (state->cursor.line - state->scr.scr_start_num);
-    return pos;
+    state->cursor.screen_pos.x = state->write_area.x_start + state->cursor.file_pos.x;
+    state->cursor.screen_pos.y = state->write_area.y_start +
+        (state->cursor.file_pos.y - state->scr.scr_start_num);
+    return state->cursor.screen_pos;
 }
 
 static inline struct pos editor_cursor_write_area_pos(struct editor_state *state){
     struct pos pos;
-    pos.x = state->cursor.col;
-    pos.y = state->cursor.line - state->scr.scr_start_num;
+    pos.x = state->cursor.file_pos.x;
+    pos.y = state->cursor.file_pos.y - state->scr.scr_start_num;
     return pos;
 }
 
 static inline int editor_cursor_logical_line_pos(struct editor_state *state){
-    return state->cursor.line;
+    return state->cursor.file_pos.y;
 }
 
 // editor_cursor_is_visible(): カーソル行が現在の表示範囲に入っているかを返す。
@@ -472,7 +442,8 @@ static inline bool editor_cursor_is_visible(struct editor_state *state){
 // 引数: state=反映元のエディタ状態。
 // 返り値: なし。
 static inline void editor_sync_cursor(struct editor_state *state){
-    state->cursor.col = editor_clamp_col(state, state->cursor.line, state->cursor.col);
+    state->cursor.file_pos.x = editor_clamp_col(state, state->cursor.file_pos.y,
+        state->cursor.file_pos.x);
     struct pos pos = editor_cursor_screen_pos(state);
     move(pos.y, pos.x);
 }
@@ -483,26 +454,25 @@ static inline void editor_sync_cursor(struct editor_state *state){
 static inline void editor_set_cursor(struct editor_state *state, int line, int col){
     int line_limit = editor_line_limit(state);
     if(line_limit <= 0){
-        state->cursor.line = 0;
-        state->cursor.col  = 0;
+        state->cursor.file_pos = (struct pos){0,0};
         return;
     }
-    state->cursor.line = editor_clamp_int(line, 0, line_limit - 1);
-    state->cursor.col  = editor_clamp_col(state, state->cursor.line, col);
+    state->cursor.file_pos.y = editor_clamp_int(line, 0, line_limit - 1);
+    state->cursor.file_pos.x = editor_clamp_col(state, state->cursor.file_pos.y, col);
 }
 
 // editor_move_cursor_line(): 論理カーソル行をdelta分だけ動かす。桁は新しい行長へ丸める。
-// cursor.lineへの書き込みはこの関数かeditor_set_cursor()経由に統一し、
+// cursor.file_pos.yへの書き込みはこの関数かeditor_set_cursor()経由に統一し、
 // 複数箇所からの多重加算を防ぐ。
 // 引数: state=更新対象のエディタ状態、delta=移動量(負値で上へ)。
 // 返り値: 範囲内で移動できたらtrue、範囲外で何もしなかったらfalse。
 static inline bool editor_move_cursor_line(struct editor_state *state, int delta){
-    int next = state->cursor.line + delta;
+    int next = state->cursor.file_pos.y + delta;
     if(next < 0 || next >= editor_line_limit(state)){
         return false;
     }
-    state->cursor.line = next;
-    state->cursor.col  = editor_clamp_col(state, next, state->cursor.col);
+    state->cursor.file_pos.y = next;
+    state->cursor.file_pos.x = editor_clamp_col(state, next, state->cursor.file_pos.x);
 
     return true;
 }
@@ -654,13 +624,10 @@ void restore_edit_screen(struct editor_state *state);
 
 // main.c
 // 指定座標へ文字列を描画する。
+
+int cur_pos_push(struct pos mouse_pos,struct editor_state *state);
+int cur_pos_mg(struct pos mouse_pos,enum flags flags);
+int set_cur_pos();
 void my_mvaddstr(struct pos pos,char *str);
 
-// txt_editor_settings_screen.c
-// 設定画面の項目一覧へ項目を追加する。
-int add_settings_screen_item(struct settings_screen_data *settings_screen_data,struct settings_items_data item_data);
-// JSONから設定画面の項目一覧を読み込む。
-int load_settings_screen_items(struct settings_screen_data *settings_screen_data);
-// 設定画面の選択行をdelta分だけ動かす。
-void move_settings_select_line(struct settings_screen_data *settings_screen_data,int delta);
 #endif

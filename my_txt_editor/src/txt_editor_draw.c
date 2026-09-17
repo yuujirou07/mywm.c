@@ -395,8 +395,8 @@ void set_file_select_line(struct editor_state *state,int dir_num,int line){
 }
 
 // editor_screen_move_line(): 画面をnum行スクロールし、論理カーソル行と表示開始行を同期する。
-// cursor.lineとscr_start_numを両方有効な場合だけ同時に更新するため、
-// editor_move_cursor_line()は使わずここで直接書き込む。呼び出し側でcursor.lineを
+// cursor.file_pos.yとscr_start_numを両方有効な場合だけ同時に更新するため、
+// editor_move_cursor_line()は使わずここで直接書き込む。呼び出し側でcursor.file_pos.yを
 // 重ねて動かさないこと(この関数がすでに+num分を反映済み)。
 // 桁は移動先の行長へ丸めるが、呼び出し側が別の桁を指定したい場合は戻ってから上書きする。
 // 引数: ctx=カーソル行と表示開始行を持つ入力context、num=-1または1の移動行数。
@@ -404,14 +404,15 @@ void set_file_select_line(struct editor_state *state,int dir_num,int line){
 void editor_screen_move_line(struct editor_input_context *ctx,int num){
     struct editor_state *state = ctx->state;
     int line_limit = get_line_limit();
-    int next_cursor_line = state->cursor.line + num;
+    int next_cursor_line = state->cursor.file_pos.y + num;
     int next_scr_start = state->scr.scr_start_num + num;
     if(line_limit <= 0 || next_cursor_line < 0 || next_cursor_line >= line_limit || next_scr_start < 0){
         return;
     }
 
-    state->cursor.line = next_cursor_line;
-    state->cursor.col  = editor_clamp_col(state, next_cursor_line, state->cursor.col);
+    state->cursor.file_pos.y = next_cursor_line;
+    state->cursor.file_pos.x = editor_clamp_col(state, next_cursor_line,
+        state->cursor.file_pos.x);
     state->scr.scr_start_num = next_scr_start;
 
     if(state->settings_data->built_in_syntax){
@@ -428,8 +429,7 @@ void editor_screen_move_line(struct editor_input_context *ctx,int num){
 // 引数: state=画面状態と表示領域、error_comment=表示するエラーメッセージ。
 // 返り値: なし。
 void editor_error_screen(struct editor_state *state,char *error_comment){
-    state->is_cur_show = false;
-    curs_set(0);
+    my_cur_set(state,false);
     clear();
     editor_set_screen_state(state, error_screen);
 
@@ -529,7 +529,7 @@ void draw_line_status(struct editor_state *state,WINDOW *win){
     (void)win;
     char line_status_str[32];
     snprintf(line_status_str, sizeof(line_status_str), "%d/%ld",
-             state->cursor.line+1, state->file_data.description_line_end);
+             state->cursor.file_pos.y+1, state->file_data.description_line_end);
     int total_line_len = strlen(line_status_str);
     struct pos write_start_pos;
     write_start_pos.y = (state->settings_data->bar_side_state == top)
@@ -571,7 +571,7 @@ static void draw_make_file_dialog(struct editor_input_context *ctx){
         my_mvaddstr(text_pos, comment);
         mvaddstr(text_pos.y + 1, text_pos.x + box.w / 2 - (int)strlen("YES[y]") - 2, "YES[y]");
         mvaddstr(text_pos.y + 1, text_pos.x + box.w / 2 + 2, "NO[n]");
-        curs_set(0);
+        my_cur_set(state,false);
         editor_sync_cursor(state);
         return;
     }
@@ -604,7 +604,7 @@ static void draw_make_file_dialog(struct editor_input_context *ctx){
     state->write_file_name_area = input_box;
     move(input_box.pos.y + 1, input_box.pos.x + 1 +
          state->make_file_mode_status.new_file_name_counter);
-    curs_set(1);
+    my_cur_set(state,true);
 }
 
 void update_screen(struct editor_input_context *ctx){
@@ -628,9 +628,16 @@ void update_screen(struct editor_input_context *ctx){
             draw_line_status(state, win);
         }
         if(flags & RENDER_SETTINGS){
+            bool is_cur_move = false;
+            struct pos mouse_pos;
             draw_settings_screen(ctx);   
-            draw_settings_search_box(ctx);
+            if(state->settings_screen_data.value_input_mode){
+                draw_settings_search_box(ctx);
+                getyx(ctx->win,mouse_pos.y,mouse_pos.x);
+                is_cur_move = true;
+            }
             draw_settings_explanation_box(ctx);
+            if(is_cur_move)move(mouse_pos.y,mouse_pos.x);
         }
 
         if(flags & RENDER_LINE){
@@ -796,7 +803,7 @@ static void draw_settings_title(struct box box,WINDOW *win){
 // 返り値: なし。
 void set_settings_screen_box(struct editor_state *state){
     if(state == NULL)return;
-    struct settings_screen_data *st_scr_data = &state->settings_screen_data;
+    settings_screen_data *st_scr_data = &state->settings_screen_data;
 
     //枠の上限。画面の端まで届かせず、上下左右に余白を残す。
     int limit_w = state->scr.scr_size.x - state->scr.scr_size.x / SETTINGS_SCREEN_MARGIN_DIV;
@@ -847,7 +854,7 @@ void set_settings_screen_box(struct editor_state *state){
 // 返り値: なし。
 static void draw_settings_screen(struct editor_input_context *ctx){
     struct editor_state *state = ctx->state;
-    struct settings_screen_data st_scr_data = state->settings_screen_data;
+    settings_screen_data st_scr_data = state->settings_screen_data;
 
     draw_box(st_scr_data.box,ctx->win);
     draw_settings_title(st_scr_data.box,ctx->win);
@@ -889,7 +896,7 @@ static void draw_settings_screen(struct editor_input_context *ctx){
             int item_index = c * inner_h + i;
             if(item_index >= item_num)break;
 
-            struct settings_items_data item = st_scr_data.item_data[item_index];
+            settings_items_data item = st_scr_data.item_data[item_index];
             int scr_pos_y = st_scr_data.box.pos.y + i + 1;
             bool is_select = (item_index == st_scr_data.select_line);
 
@@ -926,21 +933,40 @@ static void draw_settings_screen(struct editor_input_context *ctx){
 static int draw_settings_search_box(struct editor_input_context *ctx){
 
     struct editor_state *state = ctx->state;
-    struct settings_screen_data st_scr_data = state->settings_screen_data;
+    settings_screen_data st_scr_data = state->settings_screen_data;
 
     if(st_scr_data.box.pos.y <= 0)return -1;
 
     struct pos search_box_pos = (struct pos){st_scr_data.box.pos.x,st_scr_data.box.pos.y - 3};
     struct box search_box = {search_box_pos,st_scr_data.box.w,3};
     draw_box(search_box,ctx->win);
+    int input_w = search_box.w - 2;
+    if(input_w <= 0)return -1;
+
+    mvhline(search_box.pos.y + 1,search_box.pos.x + 1,' ',input_w);
+    int input_start = st_scr_data.input_value_len - input_w;
+    if(input_start < 0)input_start = 0;
+    if(st_scr_data.input_value_len > input_start){
+        mvaddnwstr(search_box.pos.y + 1,search_box.pos.x + 1,
+                   &st_scr_data.input_value[input_start],input_w);
+    }
     return 0;
 }
 
 
 static void draw_settings_explanation_box(struct editor_input_context *ctx){
     struct editor_state *state = ctx->state;
-    struct settings_screen_data st_scr_data = state->settings_screen_data;
+    settings_screen_data st_scr_data = state->settings_screen_data;
 
+    int set_mouse_pos_x;
+    int set_mouse_pos_y;
+    getyx(ctx->win,set_mouse_pos_y,set_mouse_pos_x);
+
+    bool is_cur_showed = false;
+    if(state->is_cur_show){
+        my_cur_set(state,false);
+        is_cur_showed = true;
+    }
     int x;
     int y;
     getmaxyx(ctx->win,y,x);
@@ -974,6 +1000,8 @@ static void draw_settings_explanation_box(struct editor_input_context *ctx){
     struct box explanation_box = {explanation_pos,area_w,area_h};
     draw_box(explanation_box,ctx->win);
     draw_explanation_str(st_scr_data.item_data[st_scr_data.select_line].explanation,explanation_box);
+    move(set_mouse_pos_y,set_mouse_pos_x);
+    if(is_cur_showed)my_cur_set(state,true);
 }
 
 

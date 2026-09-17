@@ -38,7 +38,7 @@ bool handle_line_jump_mode_input(struct editor_input_context *ctx, wint_t ch){
         }
 
         move_view_to_line(state, n - 1, 0);
-        curs_set(1);
+        my_cur_set(state,true);
         reset_jump_mode(state);
         editor_set_screen_state(state, edit_screen);
         if(state->settings_data->built_in_syntax){

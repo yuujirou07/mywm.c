@@ -16,13 +16,11 @@ bool handle_error_screen_input(struct editor_input_context *ctx, wint_t ch){
         if(previous_state == start_menu_screen ||
            (previous_state == file_browse_screen &&
             previous_previous_state == start_menu_screen)){
-            state->is_cur_show = false;
-            curs_set(false);
+            my_cur_set(state,false);
             editor_set_screen_state(state, start_menu_screen);
         }
         else{
-            curs_set(true);
-            state->is_cur_show = true;
+            my_cur_set(state,true);
             editor_set_screen_state(state, edit_screen);
             state->render_flags |= RENDER_EDIT_SCREEN_BASE;
             state->render_flags |= RENDER_FILE_DATA;

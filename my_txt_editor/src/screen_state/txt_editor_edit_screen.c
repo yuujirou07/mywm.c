@@ -85,9 +85,8 @@ bool handle_edit_screen_input(struct editor_input_context *ctx, int input_result
             if(editor_line_limit(state) == 0){
                 return true;
             }
-            move_view_to_line(state, state->cursor.line, state->cursor.col);
-            state->is_cur_show = true;
-            curs_set(1);
+            move_view_to_line(state, state->cursor.file_pos.y, state->cursor.file_pos.x);
+            my_cur_set(state,true);
             handle_char_input(win, (wchar_t)ch, state);
             send_lsp_did_change(ctx);
 
@@ -96,9 +95,7 @@ bool handle_edit_screen_input(struct editor_input_context *ctx, int input_result
         if (ch == KEY_LEFT || ch == KEY_RIGHT || ch == KEY_UP || ch == KEY_DOWN){
             // nは現在の論理行。move_view_to_line()がstateを書き換える前に保持する。
             int n = editor_cursor_logical_line_pos(state);
-            state->is_cur_show = true;
-            curs_set(1);
-            struct pos write_area_pos = editor_cursor_write_area_pos(state);
+            my_cur_set(state,true);
             syntax syntax_data = {0};
             move_view_to_line(state, n - 1, 0);
 

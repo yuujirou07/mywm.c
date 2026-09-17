@@ -24,8 +24,7 @@ bool handle_file_browse_screen_input(struct editor_input_context *ctx, int input
 
     //パスインプットモード判定
     if(ch == 'i' && !input_mode){
-        state->is_cur_show = true;
-        curs_set(1);
+        my_cur_set(state,true);
         set_file_browse_path_input_mode(
             file_browse_screen,
             true

@@ -67,8 +67,7 @@ static void redraw_edit_screen(struct editor_state *state){
 // 返り値: なし。
 void restore_edit_screen(struct editor_state *state){
     editor_set_screen_state(state, edit_screen);
-    state->is_cur_show = true;
-    curs_set(true);
+    my_cur_set(state,true);
     redraw_edit_screen(state);
     // 編集位置はstate->cursorに残っているため、退避しておいた画面座標は要らない。
     editor_sync_cursor(state);
@@ -216,7 +215,7 @@ int update_screen_ratio(struct editor_input_context *ctx){
             // 表示開始行を取り直す。収まっているならスクロール位置は動かさない。
             if(!editor_cursor_is_visible(state)){
                 //内部でclear()と再描画要求、カーソル移動まで行う
-                move_view_to_line(state, state->cursor.line, state->cursor.col);
+                move_view_to_line(state, state->cursor.file_pos.y, state->cursor.file_pos.x);
                 break;
             }
 

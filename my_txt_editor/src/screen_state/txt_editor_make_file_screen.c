@@ -68,8 +68,7 @@ bool handle_ask_make_file_mode_input(struct editor_input_context *ctx, int input
             state->render_flags |= RENDER_FILE_DATA;
             editor_set_screen_state(state, edit_screen);
             editor_sync_cursor(state);
-            state->is_cur_show = true;
-            curs_set(true);
+            my_cur_set(state,true);
         }
 
     }

@@ -733,8 +733,8 @@ int lsp_send_completion(int lsp_fd,struct editor_state *state){
     lsp_send_msg_data msg_data = {0};
     msg_data.id = 3;
     msg_data.lsp_method = lsp_method_completion;
-    msg_data.pos.line = state->cursor.line;
-    msg_data.pos.character = state->cursor.col;
+    msg_data.pos.line = state->cursor.file_pos.y;
+    msg_data.pos.character = state->cursor.file_pos.x;
     char uri[512];
     lsp_path_to_file_uri(uri,sizeof(uri),state->file_data.now_open_path_name);
     msg_data.uri = uri;

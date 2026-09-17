@@ -80,6 +80,7 @@ void resize_file_browser(struct editor_input_context *ctx){
 void handle_resize(WINDOW *win, struct editor_input_context *ctx){
 
     struct editor_state *state = ctx->state;
+    bool is_cur_show = state->is_cur_show;
 
     getmaxyx(win, state->scr.scr_size.y, state->scr.scr_size.x);
 
@@ -88,7 +89,7 @@ void handle_resize(WINDOW *win, struct editor_input_context *ctx){
     int resize_msg_len = strlen(resize_msg);
 
     while(state->scr.scr_size.x <= 60 || state->scr.scr_size.y < 25){
-        curs_set(0);
+        my_cur_set(state,false);
 
         // 画面幅に収まらない場合は右端で切り詰めてから中央へ寄せる
         int draw_len = (resize_msg_len < state->scr.scr_size.x)
@@ -107,7 +108,7 @@ void handle_resize(WINDOW *win, struct editor_input_context *ctx){
             getmaxyx(win, state->scr.scr_size.y, state->scr.scr_size.x);
         }
     }
-    curs_set(state->is_cur_show ? 1 : 0);
+    my_cur_set(state,is_cur_show);
 
     state->write_area.y_start = 0;
     state->write_area.x_end = state->scr.scr_size.x - 1;
@@ -136,7 +137,8 @@ void handle_resize(WINDOW *win, struct editor_input_context *ctx){
 
     // 幅が縮むと桁が可視範囲外へ出るため、新しい可視幅で丸め直す。
     // 行番号は変わらないので、行方向はupdate_screen_ratio()側の判定に任せる。
-    state->cursor.col = editor_clamp_col(state, state->cursor.line, state->cursor.col);
+    state->cursor.file_pos.x = editor_clamp_col(state, state->cursor.file_pos.y,
+        state->cursor.file_pos.x);
 
     //各画面の枠やカーソル位置を新しい画面サイズの比率へ合わせ、再描画を要求する
     update_screen_ratio(ctx);
@@ -148,18 +150,18 @@ void handle_resize(WINDOW *win, struct editor_input_context *ctx){
 // 返り値: なし。
 void handle_backspace(struct editor_input_context *ctx) {
     struct editor_state *state = ctx->state;
-    int line = state->cursor.line;
+    int line = state->cursor.file_pos.y;
     if(line < 0 || line >= editor_line_limit(state)){
         return;
     }
 
-    if (state->cursor.col > 0) {
+    if (state->cursor.file_pos.x > 0) {
         // 行内の1文字削除。列容量が要るのはこちらの経路だけ。
         int col_limit = editor_col_limit(state, line);
         if(col_limit <= 0){
             return;
         }
-        int del_pos = state->cursor.col - 1;
+        int del_pos = state->cursor.file_pos.x - 1;
         if(del_pos < 0 || del_pos >= col_limit || del_pos >= state->str.line[line]){
             return;
         }
@@ -178,7 +180,7 @@ void handle_backspace(struct editor_input_context *ctx) {
                     move_count * sizeof(wint_t));
 
         cells[new_len] = 0;
-        state->cursor.col = del_pos;
+        state->cursor.file_pos.x = del_pos;
 
 
     } else if (line > 0) {
@@ -197,11 +199,11 @@ void handle_backspace(struct editor_input_context *ctx) {
             state->render_flags |= RENDER_LINE_STATUS;
         }
         else{
-            //関数内でcursor.lineの値も変更される
+            //関数内でcursor.file_pos.yの値も変更される
             editor_screen_move_line(ctx,-1);
         }
         //どちらの経路も桁は触らないため、ここで結合位置へ寄せる
-        state->cursor.col = editor_clamp_col(state, state->cursor.line, join_col);
+        state->cursor.file_pos.x = editor_clamp_col(state, state->cursor.file_pos.y, join_col);
         state->render_flags |= RENDER_EDIT_SCREEN_BASE;
     }
     state->render_flags |= RENDER_FILE_DATA;
@@ -213,7 +215,7 @@ void handle_backspace(struct editor_input_context *ctx) {
 // 返り値: なし。
 void handle_newline(struct editor_input_context *ctx) {
     struct editor_state *state = ctx->state;
-    int line = state->cursor.line;
+    int line = state->cursor.file_pos.y;
     if(line < 0 || line >= editor_line_limit(state)){
         return;
     }
@@ -230,14 +232,14 @@ void handle_newline(struct editor_input_context *ctx) {
         editor_move_cursor_line(state, 1);
     }
     else{
-        // editor_screen_move_line()がcursor.lineの+1も行うため、ここでは動かさない
+        // editor_screen_move_line()がcursor.file_pos.yの+1も行うため、ここでは動かさない
         editor_screen_move_line(ctx,1);
     }
-    state->cursor.col = 0;
+    state->cursor.file_pos.x = 0;
 
-    if(state->cursor.line >= state->file_data.description_line_end){
+    if(state->cursor.file_pos.y >= state->file_data.description_line_end){
         //行カウントは0から始まるので1足す
-        state->file_data.description_line_end = state->cursor.line + 1;
+        state->file_data.description_line_end = state->cursor.file_pos.y + 1;
     }
     state->render_flags |= RENDER_EDIT_SCREEN_BASE;
     state->render_flags |= RENDER_FILE_DATA;
@@ -250,7 +252,7 @@ void handle_newline(struct editor_input_context *ctx) {
 // 引数: win=描画先ウィンドウ、state=編集バッファ。
 // 返り値: なし。
 void handle_tab(WINDOW *win, struct editor_state *state) {
-    int line = state->cursor.line;
+    int line = state->cursor.file_pos.y;
     if(line < 0 || line >= editor_line_limit(state)){
         return;
     }
@@ -267,7 +269,7 @@ void handle_tab(WINDOW *win, struct editor_state *state) {
 void handle_char_input(WINDOW *win, wchar_t ch, struct editor_state *state){
     (void)win;
 
-    int line = state->cursor.line;
+    int line = state->cursor.file_pos.y;
     if(line < 0 || line >= editor_line_limit(state)){
         return;
     }
@@ -281,9 +283,9 @@ void handle_char_input(WINDOW *win, wchar_t ch, struct editor_state *state){
     if(view_cols <= 0){
         return;
     }
-    state->cursor.col = editor_clamp_int(state->cursor.col, 0, view_cols - 1);
+    state->cursor.file_pos.x = editor_clamp_int(state->cursor.file_pos.x, 0, view_cols - 1);
 
-    int writing_area = state->cursor.col;
+    int writing_area = state->cursor.file_pos.x;
     if(writing_area < 0 || writing_area >= view_cols){
         return;
     }
@@ -333,14 +335,14 @@ void handle_char_input(WINDOW *win, wchar_t ch, struct editor_state *state){
         state->file_data.description_line_end = line + 1;
     }
 
-    state->cursor.col = writing_area + char_width;
+    state->cursor.file_pos.x = writing_area + char_width;
     //自動で改行する仕様。判定は挿入前の桁で行う(可視幅の右端に居たかどうか)。
     if (writing_area >= view_cols - 1 && line + 1 < editor_line_limit(state)){
         editor_move_cursor_line(state, 1);
-        state->cursor.col = 0;
-        if(state->cursor.line >= state->file_data.description_line_end){
+        state->cursor.file_pos.x = 0;
+        if(state->cursor.file_pos.y >= state->file_data.description_line_end){
             //行カウントは0から始まるので1足す
-            state->file_data.description_line_end = state->cursor.line + 1;
+            state->file_data.description_line_end = state->cursor.file_pos.y + 1;
         }
     }
     state->render_flags |= RENDER_FILE_DATA;
@@ -390,7 +392,7 @@ void handle_input_allow(struct editor_input_context *ctx,wchar_t ch){
 
     // 画面内に留まったまま動けるかどうかの判定。画面座標ではなく
     // 「カーソル行が表示範囲のどこにいるか」で決める。
-    int line = state->cursor.line;
+    int line = state->cursor.file_pos.y;
     bool can_move_up_in_view   = (line > state->scr.scr_start_num);
     bool can_move_down_in_view = (line - state->scr.scr_start_num + 1 < state->write_area.h);
 
@@ -411,11 +413,11 @@ void handle_input_allow(struct editor_input_context *ctx,wchar_t ch){
             break;
         }
         case KEY_LEFT:{
-            if (state->cursor.col > 0)state->cursor.col--;
+            if (state->cursor.file_pos.x > 0)state->cursor.file_pos.x--;
             else if (can_move_up_in_view && line > 0) {
                 editor_move_cursor_line(state, -1);
-                state->cursor.col = editor_clamp_col(state, state->cursor.line,
-                    editor_line_len(state, state->cursor.line));
+                state->cursor.file_pos.x = editor_clamp_col(state, state->cursor.file_pos.y,
+                    editor_line_len(state, state->cursor.file_pos.y));
             }
             break;
         }
@@ -423,12 +425,12 @@ void handle_input_allow(struct editor_input_context *ctx,wchar_t ch){
             if(line < 0 || line >= line_limit){
                 break;
             }
-            if (state->cursor.col < editor_clamp_col(state, line, editor_line_len(state, line))){
-                state->cursor.col++;
+            if (state->cursor.file_pos.x < editor_clamp_col(state, line, editor_line_len(state, line))){
+                state->cursor.file_pos.x++;
             }
             else if (can_move_down_in_view && line + 1 < line_limit) {
                 editor_move_cursor_line(state, 1);
-                state->cursor.col = 0;
+                state->cursor.file_pos.x = 0;
             }
             break;
         }
@@ -535,7 +537,7 @@ int make_new_line_space(struct editor_state *state,long make_space_line_num){
 
     // 分割位置はカーソルの現在桁。端末へ問い合わせず、モデルの値をそのまま使う。
     // 行長を超えないよう丸める。
-    int col = editor_clamp_int(state->cursor.col, 0, old_len);
+    int col = editor_clamp_int(state->cursor.file_pos.x, 0, old_len);
 
     // 分割後、行make_space_line_num+1が実データとして加わる分だけ、
     // 「実際に使用中の行数」を伸ばす必要がある。

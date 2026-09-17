@@ -15,8 +15,7 @@ bool handle_start_menu_input(struct editor_input_context *ctx, wint_t ch){
         return true;
     }
 
-    state->is_cur_show = false;
-    curs_set(0);
+    my_cur_set(state,false);
     clear();
     int start_menu_result = ctx->start_menu_screen.plugin(
         state->scr.scr_size.x,state->scr.scr_size.y,
@@ -35,8 +34,7 @@ bool handle_start_menu_input(struct editor_input_context *ctx, wint_t ch){
     }
     else if(start_menu_result == select_folder){
         editor_set_screen_state(state, file_browse_screen);
-        state->is_cur_show = false;
-        curs_set(0);
+        my_cur_set(state,false);
 
         struct box clear_area;
         int logo_h = ctx->start_menu_screen.ascii_data != NULL
@@ -77,7 +75,6 @@ bool handle_start_menu_input(struct editor_input_context *ctx, wint_t ch){
     }
 
     editor_set_screen_state(state, edit_screen);
-    state->is_cur_show = true;
-    curs_set(1);
+    my_cur_set(state,true);
     return true;
 }
