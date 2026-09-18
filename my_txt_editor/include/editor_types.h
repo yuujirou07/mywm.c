@@ -12,4 +12,12 @@ struct box {
     int h;
 };
 
+
+enum flags{
+    set,
+    get,
+};
+
+
+
 #endif

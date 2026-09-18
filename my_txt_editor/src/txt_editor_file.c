@@ -34,7 +34,7 @@ int load_dir_table(struct editor_state *state,struct dir_entry **table,int *tabl
     if(table == NULL || table_rows == NULL || dir_num == NULL || table_num == NULL)return -1;
     *dir_num = 0;
     *table_num = 0;
-    if(*table == NULL || *table_rows <= 0 || state->file_browser_area.h <= 0){
+    if(*table == NULL || *table_rows <= 0 || state->file_browse.area.h <= 0){
         return -1;
     }
     if(start_num < 0)start_num = 0;
@@ -72,10 +72,10 @@ int load_dir_table(struct editor_state *state,struct dir_entry **table,int *tabl
     closedir(dir);
     *dir_num = entry_num;
     *table_num = (start_num < entry_num) ? entry_num - start_num : 0;
-    if(*table_num > state->file_browser_area.h)*table_num = state->file_browser_area.h;
+    if(*table_num > state->file_browse.area.h)*table_num = state->file_browse.area.h;
 
-    if(*table_num > 0 && state->file_select_line_data.now_line >= *table_num){
-        file_select_line_update(&state->file_select_line_data,*table_num - 1);
+    if(*table_num > 0 && state->file_browse.select_line.now_line >= *table_num){
+        file_select_line_update(&state->file_browse.select_line,*table_num - 1);
     }
     return 0;
 }
@@ -107,14 +107,14 @@ void load_file(struct editor_state *state,struct dir_entry *table,int table_num,
         file_name = (file_name != NULL) ? file_name + 1 : path_name_buff;
     }
     else{
-        if(state->file_select_line_data.now_line < 0 ||
-           state->file_select_line_data.now_line >= table_num){
+        if(state->file_browse.select_line.now_line < 0 ||
+           state->file_browse.select_line.now_line >= table_num){
             select_state->select_state = error;
             return;
         }
 
-        int entry_index = state->file_select_line_data.now_logical_line +
-            state->file_select_line_data.now_line;
+        int entry_index = state->file_browse.select_line.now_logical_line +
+            state->file_browse.select_line.now_line;
         file_name = table[entry_index].name;
 
         const char *separator = strcmp(path_name, "/") == 0 ? "" : "/";
@@ -578,10 +578,8 @@ char *editor_buffer_to_utf8(struct editor_state *state)
 
         for(int col = 0; col < line_len; col++){
             wint_t cell = cells[col];
-            if(cell == 0){
-                continue;
-            }
-
+            if(cell == 0)continue;
+            
             size_t bytes = wcrtomb(text + pos, (wchar_t)cell, &conversion_state);
             if(bytes == (size_t)-1){
                 free(text);
@@ -1011,15 +1009,15 @@ int now_input_path_open(struct editor_state *state,struct editor_input_context *
             *(last_slash_ptr + 1) = '\0';
             load_dir_table(
                 state,
-                &ctx->file_browse_screen.dir_name_table,
-                &ctx->file_browse_screen.dir_name_table_rows,
+                &state->file_browse.dir_name_table,
+                &state->file_browse.dir_name_table_rows,
                 dir_info.path_name,
                 0,
-                &ctx->file_browse_screen.dir_num,
-                &ctx->file_browse_screen.dir_name_table_num
+                &state->file_browse.dir_num,
+                &state->file_browse.dir_name_table_num
             );
             memcpy(
-                ctx->file_browse_screen.path_name,
+                state->file_browse.path_name,
                 dir_info.path_name,
                 sizeof(char) * ((last_slash_ptr+2) - &dir_info.path_name[0]));
         }
@@ -1029,7 +1027,7 @@ int now_input_path_open(struct editor_state *state,struct editor_input_context *
         load_screen_size(state);
         editor_set_cursor(state,0,0);
         restore_edit_screen(state);
-        set_file_browse_path_input_mode(&ctx->file_browse_screen,false);
+        set_file_browse_path_input_mode(&state->file_browse,false);
         if(state->settings_data->built_in_syntax){
             syntax *syntax = now_usint_syntax_ptr_ctl(NULL,get);
             if(syntax != NULL)set_syntax_data(syntax,ctx);

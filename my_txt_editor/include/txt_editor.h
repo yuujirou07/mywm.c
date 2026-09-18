@@ -13,6 +13,7 @@
 #include"lsp_src/language_server_communication.h"
 #include "editor_types.h"
 #include "settings_screen.h"
+#include"filetree.h"
 
 #define startuptime_log_file_argument_num 1
 #define FDS_N 4
@@ -37,13 +38,17 @@ enum render_flags {
     RENDER_EDIT_SCREEN_BASE = 1<<5, // 編集画面の枠や基本線を更新する。
     RENDER_FILE_DATA = 1<<6,    // 編集バッファの表示内容を更新する。
     RENDER_FILE_BROWSE = 1 << 7, // ファイルブラウザ全体を更新する。
-    RENDER_BOX        = 1 << 8, // draw_box_dataに積まれた枠を描画する。
+    RENDER_BOX        = 1 << 8, // draw_box_queueに積まれた枠を描画する。
     RENDER_CLEAR_BOX = 1 << 9,  // clear_box_dataに積まれた範囲を消す。
     RENDER_ALL        = 1 << 10, // 画面全体更新用の予約フラグ。
     RENDER_LINE_JUMP = 1 << 11, // 行ジャンプ入力欄を更新する。
     RENDER_MAKE_FILE = 1 << 12, // 新規ファイル作成ダイアログを更新する。
     RENDER_SETTINGS = 1 << 13, //設定ファイルを描画する
 };
+
+// ファイルツリーは編集画面の左端に重ねて出し、編集領域をその幅だけ右へ寄せる。
+// 描画側でwrite_areaを書き換えると再描画やリサイズで位置がずれるため、
+// レイアウトの計算はeditor_apply_write_area()へ集約する。
 
 // <sys/ttydefaults.h>(sys/epoll.h経由で入る)も同名・同値のCTRLを定義しているため、
 // 先に外してから定義し直す。値は同じなので、どちらが残っても動作は変わらない。
@@ -101,11 +106,12 @@ enum select_state{
 enum now_screen_state{
     edit_screen, // 通常の編集画面。
     file_browse_screen, // ファイルブラウザ画面。
+    filetree_screen, // ファイルツリー画面。
     start_menu_screen, // start menu pluginの画面。
     error_screen, // エラー表示画面。
     line_jump_mode, // 行ジャンプ番号入力中。
     ask_make_file_mode, // 新規ファイル作成確認中。
-    setting_screen,
+    setting_screen,//せってう画面
     screen_state_log_error, // 指定された履歴位置が範囲外。
 };
 
@@ -140,6 +146,22 @@ struct file_select_line {
     int now_logical_line; // dir_name_tableの表示開始添字。
 };
 
+// ファイルブラウザ画面の状態。外枠・内側領域・一覧テーブル・現在パス・選択行を
+// 1箇所にまとめる。描画側と入力側が同じ実体を直接見るので、実体を指す別名ポインタは持たない。
+struct file_browse_state{
+    struct box box; // ブラウザ全体の外枠。
+    struct box search_box; // パス入力欄の枠。
+    struct box area; // 外枠の内側で一覧を描く領域。
+    struct dir_entry *dir_name_table; // 一覧に出す名前と種別。
+    int dir_name_table_rows; // dir_name_tableの確保済み行数。
+    int dir_num; // ディレクトリ内の全エントリ数。
+    int dir_name_table_num; // 現在の表示範囲にある有効な行数。
+    // 現在表示しているディレクトリ。getcwd()で絶対パスに初期化するが、
+    // パス入力モードでは相対パスも入り得る。実体はここが所有する。
+    char path_name[PATH_MAX];
+    bool path_input_mode; // trueならパス入力欄を編集中。
+    struct file_select_line select_line; // 反転表示する行。
+};
 
 
 // 文字入力・描画が許可される編集領域。
@@ -186,15 +208,18 @@ struct clear_box_data{
     int clear_box_counter; // clear_boxに積まれている数。
 };
 
+// 次回更新で描く枠を積むキュー。配列と件数を分けて持つと
+// 「件数 <= 確保数」を呼び出し側が守る必要があるため、1つにまとめる。
+struct box_queue{
+    struct box box[DRAW_BOX_REQUEST_MAX]; // 積まれた枠。先頭からcount個が有効。
+    int count; // boxに入っている有効な数。
+};
+
 struct screen_state_log{
     enum now_screen_state screen_state_log[screen_state_log_storage]; // 画面遷移履歴。
     int screen_state_log_counter; // 記録済みの遷移数。
 };
 
-enum flags{
-    set,
-    get,
-};
 
 
 // エディタ全体で共有する実行時状態。
@@ -205,20 +230,18 @@ struct editor_state {
     struct cursor              cursor; // 編集カーソルの論理位置。カーソルの唯一の情報源。
     struct write_possible_area write_area; // 編集可能な画面領域。
     struct make_file_mode_status make_file_mode_status; // 新規ファイル作成ダイアログ状態。
-    struct box                 file_browser_area; // ファイル一覧を描画する内側領域。
-    struct box                 draw_box_data[DRAW_BOX_REQUEST_MAX]; // 次回描画する枠のキュー。
-    struct box                *file_browser_box; // ファイルブラウザ外枠への参照。
+    struct box_queue           draw_box_queue; // 次回描画する枠のキュー。
+    struct file_browse_state   file_browse; // ファイルブラウザ画面の状態。
     struct box                *status_bar; // ステータスバー領域への参照。
     struct box                 ask_make_file_box; // 新規ファイル作成ダイアログ外枠。
     struct box                 write_file_name_area; // 新規ファイル名入力欄。
     struct file_data           file_data; // 現在開いているファイルと行情報。
     struct jump_mode           jump_mode_data; // 行ジャンプ入力状態。
-    struct file_select_line    file_select_line_data; // ファイルブラウザの選択行状態。
     struct clear_box_data      clear_box_data; // 次回消去する矩形領域。
     struct screen_state_log    screen_log; // 現在状態を末尾に持つ画面遷移履歴。
-    settings_screen_data        settings_screen_data;
+    settings_screen_data       settings_screen_data;
+    file_tree_data             file_tree_data; 
     int                        render_flags; // update_screen()へ渡す再描画要求。
-    int                        draw_box_count; // draw_box_dataに積まれている数。
     bool                       is_cur_show; // カーソル表示中ならtrue。
     bool                       mylsp_use;
 };
@@ -273,19 +296,6 @@ struct edit_screen_context {
     struct pos line_end_pos;
 };
 
-struct file_browse_screen_context {
-    struct box box;
-    struct box search_box;
-    struct dir_entry *dir_name_table;
-    int dir_name_table_rows; // dir_name_tableの確保済み行数。
-    int dir_num; // ディレクトリ内の全エントリ数。
-    int dir_name_table_num; // 現在の表示範囲にある有効な行数。
-    // ファイルブラウザが現在表示しているディレクトリ。getcwd()で絶対パスに初期化するが、
-    // パス入力モードでは相対パスも入り得る。
-    char *path_name;
-    bool path_input_mode;
-};
-
 struct ask_make_file_mode_context {
     int screen_center_y;
     struct pos screen_center_pos;
@@ -306,10 +316,43 @@ struct editor_input_context {
     struct editor_state *state;
     struct lsp_process *lsp_data;
     struct edit_screen_context edit_screen;
-    struct file_browse_screen_context file_browse_screen;
     struct ask_make_file_mode_context ask_make_file_mode;
     struct start_menu_screen_context start_menu_screen;
 };
+
+// editor_filetree_offset(): ファイルツリーを表示中に編集領域を右へ寄せる列数を返す。
+// 引数: state=ファイルツリーの表示状態と枠を持つエディタ状態。
+// 返り値: 寄せる列数。表示していない、または枠が未設定なら0。
+static inline int editor_filetree_offset(struct editor_state *state){
+    if(!state->file_tree_data.is_show){
+        return 0;
+    }
+    int offset = state->file_tree_data.file_tree_box.pos.x +
+                 state->file_tree_data.file_tree_box.w;
+
+    return (offset > 0) ? offset : 0;
+}
+
+// editor_apply_write_area(): ファイルツリーの表示状態を反映し、編集領域の左端と幅を決め直す。
+// x_endは呼び出し側が決めた値(画面幅や右余白)をそのまま使う。
+// 引数: state=編集領域・画面設定・ファイルツリーを持つエディタ状態。
+// 返り値: なし。
+static inline void editor_apply_write_area(struct editor_state *state){
+    state->write_area.x_start = state->settings_data->line_number_space + 1 +
+                                editor_filetree_offset(state);
+    int w = state->write_area.x_end - state->write_area.x_start;
+    state->write_area.w = (w > 0) ? w : 0;
+}
+
+// editor_sync_split_line(): 区切り線の座標を現在のwrite_areaへ合わせる。
+// 引数: ctx=編集領域と区切り線座標を持つ入力context。
+// 返り値: なし。
+static inline void editor_sync_split_line(struct editor_input_context *ctx){
+    int x = ctx->state->write_area.x_start - 1;
+
+    ctx->edit_screen.line_start_pos = (struct pos){x,ctx->state->write_area.y_start};
+    ctx->edit_screen.line_end_pos   = (struct pos){x,ctx->state->write_area.y_end};
+}
 
 
 // editor_line_limit(): 編集対象として扱える最大行数を返す。
@@ -510,7 +553,7 @@ void draw_now_path_name(struct box file_browse_box,char *path_name);
 void draw_edit_screen_base(struct editor_state *state,WINDOW *win,struct pos start_pos,struct pos end_pos);
 void draw_box_inside_dir(struct editor_state *state,struct dir_entry *table);
 void draw_select_dir_scene_color(struct editor_state *state,int dir_num,int num);
-void show_file_browse(struct editor_state *state,struct box file_browse_box,struct dir_entry *dir_name_table,char *path_name,WINDOW *win);
+void show_file_browse(struct editor_state *state);
 void set_file_select_line(struct editor_state *state,int dir_num,int line);
 void editor_screen_move_line(struct editor_input_context *ctx,int num);
 void editor_error_screen(struct editor_state *state,char *error_comment);
@@ -550,7 +593,7 @@ int file_browser_show_mem_start_num(int start_num,enum flags flags);
 int get_icon(struct editor_state *state,struct dir_entry entry,wchar_t *icon);
 
 // txt_editor_func.c
-void resize_file_browser(struct editor_input_context *ctx);
+void resize_file_browser(struct editor_state *state);
 void handle_resize(WINDOW *win, struct editor_input_context *ctx);
 void handle_backspace(struct editor_input_context *ctx);
 void handle_newline(struct editor_input_context *ctx);
@@ -564,8 +607,8 @@ int remove_line_join_str_data(struct editor_state *state,long remove_line_num);
 int make_new_line_space(struct editor_state *state,long make_space_line_num);
 void editor_screen_mouse_event(struct editor_input_context *ctx);
 void file_browse_screen_mouse_event(WINDOW *win, MEVENT *event, struct editor_state *state,int dir_num);
-void set_file_browse_path_input_mode(struct file_browse_screen_context *file_browser_screen_context,bool flag);
-bool get_file_browse_path_input_mode(struct file_browse_screen_context *file_browser_screen_context);
+void set_file_browse_path_input_mode(struct file_browse_state *file_browse,bool flag);
+bool get_file_browse_path_input_mode(struct file_browse_state *file_browse);
 void my_cur_set(struct editor_state *state,bool set);
 
 // txt_editor_state.c

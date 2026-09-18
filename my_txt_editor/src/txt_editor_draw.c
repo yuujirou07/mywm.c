@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
+#include "filetree.h"
 #include "settings_screen.h"
 #include "txt_editor.h"
 #include"txt_editor_syntax.h"
@@ -18,6 +19,7 @@ static void draw_settings_title(struct box box,WINDOW *win);
 static void draw_settings_screen(struct editor_input_context *ctx);
 static void draw_settings_explanation_box(struct editor_input_context *ctx);
 static int draw_settings_search_box(struct editor_input_context *ctx);
+static int draw_filetree(struct editor_input_context *ctx,file_tree_data *filetree_data);
 
 static void draw_explanation_str(const char *str,struct box box);
 // line_draw_info(): 線の向きから描画範囲・移動量・罫線文字を決める。
@@ -124,7 +126,7 @@ void draw_editor_buffer_line(struct editor_state *state, int line, int screen_y)
 void draw_line_numbers(struct editor_state *state) {
     struct scr_data *scr_data = &state->scr;
     struct write_possible_area *area = &state->write_area;
-    int line_number_space = state->settings_data->line_number_space;
+    int line_number_space = (area->x_start > 0) ? area->x_start - 1 : 0;
     
     for (int i = 0; i < area->h; i++) {
         char num_str[6];
@@ -234,12 +236,24 @@ void draw_box(struct box box, WINDOW *win){
 
 }
 
-// request_draw_box(): 次回更新で描く枠を描画要求配列へ追加する。
+// flush_box_queue(): キューに積まれた枠を積んだ順に描画し、キューを空にする。
+// 引数: queue=描画する枠を持つキュー、win=描画先ウィンドウ。
+// 返り値: なし。
+static void flush_box_queue(struct box_queue *queue, WINDOW *win){
+    for(int i = 0; i < queue->count; i++){
+        draw_box(queue->box[i], win);
+    }
+    queue->count = 0;
+}
+
+// request_draw_box(): 次回更新で描く枠を描画要求キューの末尾へ追加する。
 // 引数: state=描画要求の保存先、box=枠線を含む描画領域。
-// 返り値: なし。要求配列が満杯なら追加しない。
+// 返り値: なし。キューが満杯なら追加しない。
 void request_draw_box(struct editor_state *state,struct box box){
-    if(state->draw_box_count >= DRAW_BOX_REQUEST_MAX)return;
-    state->draw_box_data[state->draw_box_count++] = box;
+    struct box_queue *queue = &state->draw_box_queue;
+
+    if(queue->count >= DRAW_BOX_REQUEST_MAX)return;
+    queue->box[queue->count++] = box;
     state->render_flags |= RENDER_BOX;
 }
 
@@ -304,25 +318,25 @@ void draw_edit_screen_base(struct editor_state *state,WINDOW *win,struct pos sta
 // 返り値: なし。
 void draw_box_inside_dir(struct editor_state *state,struct dir_entry *table){
     
-    if(table == NULL || state->file_browser_area.w <= 0 || state->file_browser_area.h <= 0){return;}
-    char clear[state->file_browser_area.w + 1];
-    memset(clear,' ',state->file_browser_area.w * sizeof(char));
-    clear[state->file_browser_area.w] = '\0';
+    if(table == NULL || state->file_browse.area.w <= 0 || state->file_browse.area.h <= 0){return;}
+    char clear[state->file_browse.area.w + 1];
+    memset(clear,' ',state->file_browse.area.w * sizeof(char));
+    clear[state->file_browse.area.w] = '\0';
 
     // エントリ名は幅に関係なく丸ごと保持しているため、はみ出す分はここで詰める。
     // 描き始めがpos.x+1なので、使える幅は内側幅から1引いた分。
-    int max_len = state->file_browser_area.w - 3;
+    int max_len = state->file_browse.area.w - 3;
 
     // now_logical_line以降の全件テーブルを、i番目の画面行へ対応付ける。
-    for(int i = 0;i < state->file_browser_area.h;i++){
-        mvaddstr(state->file_browser_area.pos.y + i, state->file_browser_area.pos.x,clear);
+    for(int i = 0;i < state->file_browse.area.h;i++){
+        mvaddstr(state->file_browse.area.pos.y + i, state->file_browse.area.pos.x,clear);
         if(max_len <= 0) continue;
 
-        struct dir_entry *entry = &table[state->file_select_line_data.now_logical_line + i];
+        struct dir_entry *entry = &table[state->file_browse.select_line.now_logical_line + i];
         if(entry->name[0] == '\0') continue;
 
-        int draw_y = state->file_browser_area.pos.y + i;
-        int draw_x = state->file_browser_area.pos.x + 3;
+        int draw_y = state->file_browse.area.pos.y + i;
+        int draw_x = state->file_browse.area.pos.x + 3;
         int len = (int)strlen(entry->name);
 
         wchar_t icon_code[2];
@@ -352,28 +366,24 @@ void draw_select_dir_scene_color(struct editor_state *state,int dir_num,int num)
     if(state->settings_data->file_select_scene_lighting == false)
         return;
 
-    if(state->file_browser_area.w <= 0 || dir_num <= 0 ||
-       state->file_select_line_data.now_line < 0 || state->file_select_line_data.now_line >= dir_num){
+    if(state->file_browse.area.w <= 0 || dir_num <= 0 ||
+       state->file_browse.select_line.now_line < 0 || state->file_browse.select_line.now_line >= dir_num){
         return;
     }
-    int lighting_line = state->file_browser_area.pos.y + state->file_select_line_data.now_line;
-    mvchgat(lighting_line,state->file_browser_area.pos.x,state->file_browser_area.w,A_NORMAL,num,NULL);
+    int lighting_line = state->file_browse.area.pos.y + state->file_browse.select_line.now_line;
+    mvchgat(lighting_line,state->file_browse.area.pos.x,state->file_browse.area.w,A_NORMAL,num,NULL);
 
-    if(state->file_select_line_data.previous_line != state->file_select_line_data.now_line){
-        int previous_line = state->file_browser_area.pos.y + state->file_select_line_data.previous_line;
-        mvchgat(previous_line,state->file_browser_area.pos.x,state->file_browser_area.w,A_NORMAL,1,NULL);
+    if(state->file_browse.select_line.previous_line != state->file_browse.select_line.now_line){
+        int previous_line = state->file_browse.area.pos.y + state->file_browse.select_line.previous_line;
+        mvchgat(previous_line,state->file_browse.area.pos.x,state->file_browse.area.w,A_NORMAL,1,NULL);
     }
     move(cur_y,cur_x);
 }
 
 // show_file_browse(): ファイルブラウザ全体の再描画を要求する。
-// 引数: state=描画要求の保存先、残りは呼び出し互換のため受け取る。
+// 引数: state=描画要求の保存先。枠やパスはstate->file_browseから参照する。
 // 返り値: なし。
-void show_file_browse(struct editor_state *state,struct box file_browse_box,struct dir_entry *dir_name_table,char *path_name,WINDOW *win){
-    (void)file_browse_box;
-    (void)dir_name_table;
-    (void)path_name;
-    (void)win;
+void show_file_browse(struct editor_state *state){
     state->render_flags |= RENDER_FILE_BROWSE;
 }
 
@@ -391,7 +401,7 @@ void set_file_select_line(struct editor_state *state,int dir_num,int line){
         line = dir_num - 1;
     }
     
-    file_select_line_update(&state->file_select_line_data, line);
+    file_select_line_update(&state->file_browse.select_line, line);
     state->render_flags |= RENDER_SELECT_DIR_SCENE_COLOR;
 }
 
@@ -434,14 +444,14 @@ void editor_error_screen(struct editor_state *state,char *error_comment){
     clear();
     editor_set_screen_state(state, error_screen);
 
-    int screen_center_x     = state->file_browser_area.pos.x + (state->file_browser_area.w/2);
+    int screen_center_x     = state->file_browse.area.pos.x + (state->file_browse.area.w/2);
     int error_comment_size  = strlen(error_comment);
     int error_size          = sizeof("error");
     int press_enter_comment = sizeof("press enter to back");
     int comment_start_pos_x = screen_center_x - (error_comment_size/2);
     int error_start_pos_x   = screen_center_x - (error_size/2);
     int press_enter_comment_start_pos_x = screen_center_x - (press_enter_comment/2);
-    int screen_center_y        =  state->file_browser_area.pos.y + (state->file_browser_area.h/2);
+    int screen_center_y        =  state->file_browse.area.pos.y + (state->file_browse.area.h/2);
 
     attron(COLOR_PAIR(3));
     mvaddstr(screen_center_y-10,error_start_pos_x,"error");
@@ -479,28 +489,34 @@ void draw_status_bar_path(struct editor_state *state, WINDOW *win){
     if(!state->settings_data->show_status_bar){
         return;
     }
-    if(state->file_data.now_open_path_name[0] == '\0' ){
-        memcpy(state->file_data.now_open_path_name,"Unknown file",sizeof("Unknown file"));
-    }
+    
     int status_y = (state->settings_data->bar_side_state == top)
         ? state->status_bar->pos.y - 1 : state->status_bar->pos.y;
-    char *draw_path = strrchr(state->file_data.now_open_path_name, '/');
-    if(draw_path == NULL){
-        draw_path = state->file_data.now_open_path_name;
+    
+    char *draw_path = NULL; 
+    if(state->file_data.now_open_path_name[0] == '\0'){ 
+        draw_path = "Unknown file";
     }
+    else{
+        
+        draw_path = strrchr(state->file_data.now_open_path_name, '/');
+        if(draw_path == NULL){
+            draw_path = state->file_data.now_open_path_name;
+        }
 
-    int path_len = strlen(draw_path);
-    int draw_len = path_len;
-    int max_len = state->status_bar->w - 2;
+        int path_len = strlen(draw_path);
+        int draw_len = path_len;
+        int max_len = state->status_bar->w - 2;
 
-    if(max_len <= 0){
-        return;
+        if(max_len <= 0){
+            return;
+        }
+        if(draw_len > max_len){
+            draw_path += draw_len - max_len;
+            draw_len = max_len;
+        }
     }
-    if(draw_len > max_len){
-        draw_path += draw_len - max_len;
-        draw_len = max_len;
-    }
-
+    size_t draw_len = strlen(draw_path);
     int draw_x = state->status_bar->pos.x + (state->status_bar->w - draw_len) / 2;
     if(state->settings_data->bar_side_state == top){
         mvhline(status_y, state->status_bar->pos.x, ' ', state->status_bar->w);
@@ -659,30 +675,35 @@ void update_screen(struct editor_input_context *ctx){
                       ctx->edit_screen.line_end_pos, win, all_draw_mode);
         }
         if(flags & RENDER_SELECT_DIR_SCENE_COLOR){
-            draw_select_dir_scene_color(state,ctx->file_browse_screen.dir_name_table_num,2);
+            draw_select_dir_scene_color(state,state->file_browse.dir_name_table_num,2);
         }
         if(flags & RENDER_EDIT_SCREEN_BASE){
             draw_edit_screen_base(state, win, ctx->edit_screen.line_start_pos,
                                   ctx->edit_screen.line_end_pos);
+            // 行番号の消去は画面左端から始まりツリーの枠まで及ぶため、
+            // ツリーを表示中は必ずこの後で描き直す。
+            if(state->file_tree_data.is_show){
+                draw_filetree(ctx,&state->file_tree_data);
+            }
         }
         if(flags & RENDER_FILE_DATA){
             draw_file_data(state);
         }
         if(flags & RENDER_FILE_BROWSE){
             //ブラウザ画面を後ろのコードが見えないように消す
-            set_clear_box(&state->clear_box_data,ctx->file_browse_screen.box);
-            clear_box(&ctx->state->clear_box_data);
-            draw_box(ctx->file_browse_screen.box, win);
-            draw_now_path_name(ctx->file_browse_screen.box,
-                               ctx->file_browse_screen.path_name);
-            draw_box_inside_dir(state, ctx->file_browse_screen.dir_name_table);
-            draw_select_dir_scene_color(state,ctx->file_browse_screen.dir_name_table_num,2);
+            set_clear_box(&state->clear_box_data,state->file_browse.box);
+            clear_box(&state->clear_box_data);
+            draw_box(state->file_browse.box, win);
+            draw_now_path_name(state->file_browse.box,
+                               state->file_browse.path_name);
+            draw_box_inside_dir(state, state->file_browse.dir_name_table);
+            draw_select_dir_scene_color(state,state->file_browse.dir_name_table_num,2);
 
             //サーチボックスの描画とサーチボックス内のパス描画
-            if(get_file_browse_path_input_mode(&ctx->file_browse_screen)){
+            if(get_file_browse_path_input_mode(&state->file_browse)){
                 my_cur_set(state,true);
 
-                struct box search_box = ctx->file_browse_screen.search_box;
+                struct box search_box = state->file_browse.search_box;
                 draw_search_box(search_box,ctx->win);
 
                 int cur_line = search_box.pos.y + 1;
@@ -712,10 +733,7 @@ void update_screen(struct editor_input_context *ctx){
             }
         }
         if(flags & RENDER_BOX){
-            for(int i = 0; i < state->draw_box_count; i++){
-                draw_box(state->draw_box_data[i], win);
-            }
-            state->draw_box_count = 0;
+            flush_box_queue(&state->draw_box_queue, win);
         }
         if(flags & RENDER_LINE_JUMP){
            draw_line_jump(state);
@@ -747,7 +765,8 @@ void request_clear_box(struct editor_state *state, struct box box){
 // 引数: state=入力値・ステータスバー配置・カーソル反映待ち位置を持つ状態。
 // 返り値: なし。
 void draw_line_jump(struct editor_state *state){
-     struct pos prompt_pos = {0, state->write_area.y_start};
+    struct pos prompt_pos = {state->write_area.x_start - 1,
+                             state->write_area.y_start};
 
     if(state->settings_data->show_status_bar){
         prompt_pos.y = (state->settings_data->bar_side_state == top)
@@ -1079,4 +1098,25 @@ static void draw_explanation_str(const char *str,struct box box){
         offset += split_len;
     }
     return;
+}
+
+
+// draw_filetree(): ファイルツリーの枠を描画する。
+// 編集領域の左端はshow_filetree()が決めるため、ここでは描画だけを行う。
+// 引数: ctx=描画先ウィンドウを持つ入力context、filetree_data=枠と表示状態を持つツリー状態。
+// 返り値: 常に0。
+static int draw_filetree(struct editor_input_context *ctx,file_tree_data *filetree_data){
+    struct box box = filetree_data->file_tree_box;
+
+    if(box.w <= 2 || box.h <= 2){
+        return 0;
+    }
+
+    // ツリーは編集画面の上に重ねるため、内側に残った編集画面の罫線や
+    // 行番号を消してから枠を描く。
+    for(int y = box.pos.y + 1;y < box.pos.y + box.h - 1;y++){
+        mvhline(y,box.pos.x + 1,' ',box.w - 2);
+    }
+    draw_box(box,ctx->win);
+    return 0;
 }

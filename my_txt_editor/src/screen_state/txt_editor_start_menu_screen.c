@@ -44,9 +44,7 @@ bool handle_start_menu_input(struct editor_input_context *ctx, wint_t ch){
         clear_area.h = state->scr.scr_size.y - logo_h;
 
         request_clear_box(state,clear_area);
-        show_file_browse(state, ctx->file_browse_screen.box,
-                         ctx->file_browse_screen.dir_name_table,
-                         ctx->file_browse_screen.path_name, win);
+        show_file_browse(state);
         refresh();
         return true;
     }

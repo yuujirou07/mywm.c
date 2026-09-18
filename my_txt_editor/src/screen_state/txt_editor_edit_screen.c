@@ -1,6 +1,9 @@
+#include <ncurses.h>
 #include <stdlib.h>
 #include <string.h>
 #include <wctype.h>
+#include "filetree.h"
+#include "txt_editor.h"
 #include "txt_editor_syntax.h"
 #include "txt_editor_screen.h"
 
@@ -27,7 +30,7 @@ bool handle_edit_screen_input(struct editor_input_context *ctx, int input_result
         state->render_flags |= RENDER_LINE_JUMP;
         return true;
     }
-    if (ch == CTRL('f')) {
+    else if (ch == CTRL('f')) {
         my_cur_set(state,false);
         editor_set_screen_state(state, file_browse_screen);
         state->render_flags |= RENDER_FILE_BROWSE;
@@ -47,6 +50,11 @@ bool handle_edit_screen_input(struct editor_input_context *ctx, int input_result
             );
         }
         return true;
+    }
+    else if(ch == CTRL('n')){
+        editor_set_screen_state(state,filetree_screen);
+        // 編集領域をツリーの幅だけ右へ寄せる。
+        show_filetree(ctx);
     }
     else if(ch == CTRL(' ')){
        lsp_send_completion(ctx->lsp_data->to_server_fd,state);

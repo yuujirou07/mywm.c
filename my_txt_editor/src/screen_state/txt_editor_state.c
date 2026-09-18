@@ -4,7 +4,7 @@
 // 引数: ctx=描画対象や共有状態をまとめた入力context、input_result=get_wch()の結果、ch=入力文字またはKEY_*。
 // 返り値: 入力ループを続けるならtrue、終了要求ならfalse。
 bool editor_handle_screen_input(struct editor_input_context *ctx, int input_result, wint_t ch){
-    switch (editor_get_screen_state(ctx->state)) {
+    switch (editor_get_screen_state(ctx->state)){
         case start_menu_screen:
             return handle_start_menu_input(ctx, ch);
         case edit_screen:
@@ -19,6 +19,10 @@ bool editor_handle_screen_input(struct editor_input_context *ctx, int input_resu
             return handle_ask_make_file_mode_input(ctx, input_result, ch);
         case setting_screen:
             return handle_settings_screen_input(ctx,ch,input_result);
+        case filetree_screen:
+            return handle_filetree_screen_input(ctx,ch,input_result);
+            // 未実装。入力を処理せずそのまま継続する。
+            return true;
         case screen_state_log_error:
             return true;
     }
@@ -48,8 +52,13 @@ static long clamp_editor_target_line(struct editor_state *state, long target_lin
 // 返り値: scr_start_numへ設定する表示開始行。
 static int draw_start_line_for_target(struct editor_state *state, long target_line){
     int line_limit = get_line_limit();
-    target_line = ( target_line + state->write_area.h > line_limit ) ? line_limit -  state->write_area.h + 15 : target_line;
-    return (target_line > 15) ? (target_line - 15) : 0;
+    int context_lines = state->write_area.h - 1;
+    if(context_lines > 15) context_lines = 15;
+    if(context_lines < 0) context_lines = 0;
+
+    target_line = (target_line + state->write_area.h > line_limit)
+        ? line_limit - state->write_area.h + context_lines : target_line;
+    return (target_line > context_lines) ? (target_line - context_lines) : 0;
 }
 
 // redraw_edit_screen(): 編集画面の再描画を要求する。
@@ -148,15 +157,15 @@ int update_screen_ratio(struct editor_input_context *ctx){
         case file_browse_screen: {
             // 枠を作り直すと縮小時に古い枠が残る。start menu側のロゴを消さないよう、
             // clear()ではなく「前の枠+上のパス表示2行」の範囲だけを消去予約する。
-            struct box old_box = ctx->file_browse_screen.box;
+            struct box old_box = state->file_browse.box;
 
-            resize_file_browser(ctx);
+            resize_file_browser(state);
 
             struct box clear_area = clamp_box_to_screen(state, browser_clear_area(old_box));
-            bool is_box_moved = (old_box.pos.x != ctx->file_browse_screen.box.pos.x ||
-                                 old_box.pos.y != ctx->file_browse_screen.box.pos.y ||
-                                 old_box.w     != ctx->file_browse_screen.box.w ||
-                                 old_box.h     != ctx->file_browse_screen.box.h);
+            bool is_box_moved = (old_box.pos.x != state->file_browse.box.pos.x ||
+                                 old_box.pos.y != state->file_browse.box.pos.y ||
+                                 old_box.w     != state->file_browse.box.w ||
+                                 old_box.h     != state->file_browse.box.h);
 
             if(is_box_moved && clear_area.w > 0 && clear_area.h > 0){
                 request_clear_box(state, clear_area);
@@ -183,8 +192,8 @@ int update_screen_ratio(struct editor_input_context *ctx){
             break;
         case error_screen:
             // エラー文言を保持していないため描き直せない。表示位置の基準になる
-            // file_browser_areaだけ新サイズへ合わせ、戻ったときにずれないようにする。
-            resize_file_browser(ctx);
+            // file_browse.areaだけ新サイズへ合わせ、戻ったときにずれないようにする。
+            resize_file_browser(state);
             break;
         case start_menu_screen:
             // start menu pluginが次のループで新しい画面サイズを見て描き直す
@@ -209,6 +218,14 @@ int update_screen_ratio(struct editor_input_context *ctx){
             state->render_flags |= RENDER_SETTINGS;
             break;
         }
+        case filetree_screen:
+            // ツリーの枠を新しい画面幅の比率で作り直し、編集領域の左端も作り直す。
+            // show_filetree()が編集画面ごと描き直しを要求するので、
+            // リサイズで残る古い枠は先に消しておく。
+            clear();
+            show_filetree(ctx);
+            editor_sync_cursor(state);
+            break;
         case edit_screen:
         default: {
             // 高さが縮むとカーソル行が編集領域の外へ出るため、はみ出したときだけ

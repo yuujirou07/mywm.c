@@ -132,25 +132,29 @@ int main(int argc, char *argv[])
     state.str.chr_file_all_str_data = NULL;
 
     input_context.ask_make_file_mode.screen_center_y =  state.scr.scr_size.y / 2;
-    input_context.file_browse_screen.box.w = state.scr.scr_size.x / 3;
-    input_context.file_browse_screen.box.h = input_context.ask_make_file_mode.screen_center_y;
-    input_context.file_browse_screen.box.pos.x = (state.scr.scr_size.x / 2) - input_context.file_browse_screen.box.w / 2;
-    input_context.file_browse_screen.box.pos.y = state.scr.scr_size.y / 4;
+    state.file_browse.box.w = state.scr.scr_size.x / 3;
+    state.file_browse.box.h = input_context.ask_make_file_mode.screen_center_y;
+    state.file_browse.box.pos.x = (state.scr.scr_size.x / 2) - state.file_browse.box.w / 2;
+    state.file_browse.box.pos.y = state.scr.scr_size.y / 4;
+
+    state.file_tree_data.file_tree_box = (struct box){(struct pos){0,0},0,0};
+    state.file_tree_data.file_tree_search_box = (struct box){(struct pos){0,0},0,0};
+    state.file_tree_data.now_search_layer_num = 1;
+    state.file_tree_data.root_node = NULL;
+    state.file_tree_data.is_show = false;
 
     my_cur_set(&state,true);
-    state.file_browser_box = &input_context.file_browse_screen.box;
     raw();
     scrollok(win, TRUE);
     mouseinterval(10);
     mousemask(ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION, NULL);  
     
-    char path_name[PATH_MAX]; // getcwd()で取得する、ファイルブラウザ初期ディレクトリの絶対パス。
-
-    if(getcwd(path_name, sizeof(path_name)) == NULL) {
+    // ファイルブラウザ初期ディレクトリの絶対パスを取得する。
+    if(getcwd(state.file_browse.path_name, sizeof(state.file_browse.path_name)) == NULL) {
         perror("getcwd");
         return 1;
     }
-    struct dir_table now_path = {.path_name = path_name};
+    struct dir_table now_path = {.path_name = state.file_browse.path_name};
     if(now_open_path_name(&now_path,set) == NULL)return 0;
     state.file_data.description_line_end = 0;
     state.write_area.x_start = state.settings_data->line_number_space + 1;
@@ -170,14 +174,14 @@ int main(int argc, char *argv[])
         }
     }
     state.status_bar   = &status_bar;
-    state.write_area.w = state.write_area.x_end - state.write_area.x_start;
+    editor_apply_write_area(&state);
     state.write_area.h = state.write_area.y_end - state.write_area.y_start;
     state.file_data.file_str_line_end = 0;
 
-    state.file_browser_area.pos.x = input_context.file_browse_screen.box.pos.x + 1;
-    state.file_browser_area.pos.y = input_context.file_browse_screen.box.pos.y + 1;
-    state.file_browser_area.h = input_context.file_browse_screen.box.h - 2; // 上下の枠線を除く。
-    state.file_browser_area.w = input_context.file_browse_screen.box.w - 2; // 左右の枠線を除く。
+    state.file_browse.area.pos.x = state.file_browse.box.pos.x + 1;
+    state.file_browse.area.pos.y = state.file_browse.box.pos.y + 1;
+    state.file_browse.area.h = state.file_browse.box.h - 2; // 上下の枠線を除く。
+    state.file_browse.area.w = state.file_browse.box.w - 2; // 左右の枠線を除く。
 
     state.make_file_mode_status.is_input_scene        = false;
     state.make_file_mode_status.new_file_name_counter = 0;
@@ -188,9 +192,9 @@ int main(int argc, char *argv[])
 
     memset(&state.write_file_name_area,0,sizeof(struct box));
 
-    state.file_select_line_data.now_line = 0;
-    state.file_select_line_data.previous_line = 0;
-    state.file_select_line_data.now_logical_line = 0;
+    state.file_browse.select_line.now_line = 0;
+    state.file_browse.select_line.previous_line = 0;
+    state.file_browse.select_line.now_logical_line = 0;
     state.file_data.now_open_file = NULL;
     state.file_data.is_open_file = 0;
     state.file_data.file_line_start_num_counter = 0;
@@ -214,23 +218,23 @@ int main(int argc, char *argv[])
     editor_set_screen_state(&state, state.settings_data->show_start_menu ? start_menu_screen : edit_screen);
     // 一覧テーブルは各エントリの名前と種別を保持する。
     // 行数は表示できる件数分だけ確保し、幅の変化では作り直さない。
-    input_context.file_browse_screen.dir_name_table_rows = (state.file_browser_area.h > 0)
-        ? state.file_browser_area.h : 1;
-    input_context.file_browse_screen.dir_name_table =
-        calloc((size_t)input_context.file_browse_screen.dir_name_table_rows,sizeof(*input_context.file_browse_screen.dir_name_table));
+    state.file_browse.dir_name_table_rows = (state.file_browse.area.h > 0)
+        ? state.file_browse.area.h : 1;
+    state.file_browse.dir_name_table =
+        calloc((size_t)state.file_browse.dir_name_table_rows,sizeof(*state.file_browse.dir_name_table));
     int allocate_total_str_size     = state.settings_data->load_buffer_lines;
     state.file_data.file_str_data   = calloc(allocate_total_str_size,sizeof(char*));
-    if(input_context.file_browse_screen.dir_name_table == NULL || state.file_data.file_str_data == NULL){
-        free(input_context.file_browse_screen.dir_name_table);
+    if(state.file_browse.dir_name_table == NULL || state.file_data.file_str_data == NULL){
+        free(state.file_browse.dir_name_table);
         free(state.file_data.file_str_data);
         free(state.file_data.file_line_start_num);
         editor_free_text_buffer(&state);
         return 1;
     }
-    input_context.file_browse_screen.dir_num = 0;
-    input_context.file_browse_screen.dir_name_table_num = 0;
-    load_dir_table(&state,&input_context.file_browse_screen.dir_name_table,&input_context.file_browse_screen.dir_name_table_rows,path_name,0,
-                   &input_context.file_browse_screen.dir_num,&input_context.file_browse_screen.dir_name_table_num);
+    state.file_browse.dir_num = 0;
+    state.file_browse.dir_name_table_num = 0;
+    load_dir_table(&state,&state.file_browse.dir_name_table,&state.file_browse.dir_name_table_rows,state.file_browse.path_name,0,
+                   &state.file_browse.dir_num,&state.file_browse.dir_name_table_num);
 
     input_context.ask_make_file_mode.screen_center_pos.x = state.scr.scr_size.x / 2;
     input_context.ask_make_file_mode.screen_center_pos.y = input_context.ask_make_file_mode.screen_center_y;
@@ -286,7 +290,7 @@ int main(int argc, char *argv[])
         
         initialize_id(&lsp.id_data);
 
-        if(lsp_path_to_file_uri(root_uri, sizeof(root_uri), path_name) == -1){
+        if(lsp_path_to_file_uri(root_uri, sizeof(root_uri), state.file_browse.path_name) == -1){
             error_log_write("cant make lsp root uri :(");
         }
         else if(lsp_start_server(&lsp, "clangd", lsp_argv) == -1){
@@ -295,7 +299,7 @@ int main(int argc, char *argv[])
         else if(lsp_send_initialize(lsp.to_server_fd,lsp.id_data.used_id_history[lsp.id_data.id_storage_counter++], getpid(), root_uri) == -1){
             error_log_write("cant send lsp initialize :(");
             lsp_close_server(&lsp);
-
+           
         }
         else{
             /* epollインスタンスを作成 */
@@ -331,12 +335,11 @@ int main(int argc, char *argv[])
     input_context.edit_screen.line_start_pos.y = state.write_area.y_start;
     input_context.edit_screen.line_end_pos.x = state.write_area.x_start - 1;
     input_context.edit_screen.line_end_pos.y = state.write_area.y_end;
-    input_context.file_browse_screen.search_box.pos.x = input_context.file_browse_screen.box.pos.x;
-    input_context.file_browse_screen.search_box.pos.y = input_context.file_browse_screen.box.pos.y + input_context.file_browse_screen.box.h - 1;
-    input_context.file_browse_screen.search_box.w = input_context.file_browse_screen.box.w;
-    input_context.file_browse_screen.search_box.h = 3;
-    input_context.file_browse_screen.path_name = path_name;
-    input_context.file_browse_screen.path_input_mode = false;
+    state.file_browse.search_box.pos.x = state.file_browse.box.pos.x;
+    state.file_browse.search_box.pos.y = state.file_browse.box.pos.y + state.file_browse.box.h - 1;
+    state.file_browse.search_box.w = state.file_browse.box.w;
+    state.file_browse.search_box.h = 3;
+    state.file_browse.path_input_mode = false;
     input_context.start_menu_screen.open = &open_start_menu;
     input_context.start_menu_screen.has_plugin = (start_menu != NULL);
     input_context.start_menu_screen.plugin = start_menu;
@@ -393,8 +396,8 @@ int main(int argc, char *argv[])
         running = editor_handle_screen_input(&input_context, input_result, ch);
         continue;
     }
-    // resize_file_browser()がreallocした場合、最新のポインタはcontext側にある。
-    free(input_context.file_browse_screen.dir_name_table);
+    // resize_file_browser()がreallocした場合、最新のポインタはstate側にある。
+    free(state.file_browse.dir_name_table);
     free(syntax.syntax_list_data.syntax_data);
     if(handle != NULL)
         dlclose(handle);

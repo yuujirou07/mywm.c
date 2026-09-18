@@ -13,12 +13,12 @@ static int limit = 0;
 // resize_file_browser(): 画面サイズに合わせてファイルブラウザの外枠と内側領域を作り直す。
 // 一覧テーブルは1行DIR_ENTRY_NAME_MAXバイト固定の2次元配列なので、幅が変わっても
 // 既存の内容はそのまま使える。行数が足りなくなったときだけ確保し直して読み直す。
-// 引数: ctx=画面サイズ・ブラウザ枠・一覧テーブルを持つ入力context。
+// 引数: state=画面サイズ・ブラウザ状態・一覧テーブルを持つエディタ状態。
 // 返り値: なし。
-void resize_file_browser(struct editor_input_context *ctx){
-    struct editor_state *state = ctx->state;
+void resize_file_browser(struct editor_state *state){
+    struct file_browse_state *browse = &state->file_browse;
 
-    int old_h = state->file_browser_area.h;
+    int old_h = browse->area.h;
 
     // main.cの初期化と同じ比率で作り直す
     struct box box;
@@ -27,47 +27,43 @@ void resize_file_browser(struct editor_input_context *ctx){
     box.pos.x = (state->scr.scr_size.x / 2) - box.w / 2;
     box.pos.y = state->scr.scr_size.y / 4;
 
-    // 枠の実体はmain.cのローカルで、state->file_browser_boxがそれを指している。
-    // ctx側は値コピーを持っているため、両方を更新しないと表示がずれる。
-    if(state->file_browser_box != NULL){
-        *state->file_browser_box = box;
-    }
-    ctx->file_browse_screen.box = box;
-    ctx->file_browse_screen.search_box = (struct box){
+    // 枠の実体はstateが持つので、ここを書き換えれば描画側にもそのまま反映される。
+    browse->box = box;
+    browse->search_box = (struct box){
         .pos = {box.pos.x, box.pos.y + box.h - 1},
         .w = box.w,
         .h = 3,
     };
 
     //内側は枠の分だけ1セット内へ寄せる
-    state->file_browser_area.pos.x = box.pos.x + 1;
-    state->file_browser_area.pos.y = box.pos.y + 1;
-    state->file_browser_area.w     = (box.w - 2 > 0) ? box.w - 2 : 0;
-    state->file_browser_area.h     = (box.h - 2 > 0) ? box.h - 2 : 0;
+    browse->area.pos.x = box.pos.x + 1;
+    browse->area.pos.y = box.pos.y + 1;
+    browse->area.w     = (box.w - 2 > 0) ? box.w - 2 : 0;
+    browse->area.h     = (box.h - 2 > 0) ? box.h - 2 : 0;
 
-    if(state->file_browser_area.h > ctx->file_browse_screen.dir_name_table_rows){
+    if(browse->area.h > browse->dir_name_table_rows){
         struct dir_entry *table =
-            realloc(ctx->file_browse_screen.dir_name_table,
-                    (size_t)state->file_browser_area.h * sizeof(*table));
+            realloc(browse->dir_name_table,
+                    (size_t)browse->area.h * sizeof(*table));
         if(table != NULL){
-            ctx->file_browse_screen.dir_name_table      = table;
-            ctx->file_browse_screen.dir_name_table_rows = state->file_browser_area.h;
+            browse->dir_name_table      = table;
+            browse->dir_name_table_rows = browse->area.h;
         }
         else{
             // 確保できないときは既存テーブルに収まる行数まで削って範囲外書き込みを防ぐ
-            state->file_browser_area.h = ctx->file_browse_screen.dir_name_table_rows;
+            browse->area.h = browse->dir_name_table_rows;
         }
     }
 
     // 幅が変わっても行の内容は有効なままなので、表示件数が変わる高さの変化のときだけ
     // ディレクトリを走査し直す(ドラッグ中に毎回走らせない)。
-    if(state->file_browser_area.h != old_h){
-        load_dir_table(state, &ctx->file_browse_screen.dir_name_table,
-            &ctx->file_browse_screen.dir_name_table_rows,
-            ctx->file_browse_screen.path_name,
-            state->file_select_line_data.now_logical_line,
-            &ctx->file_browse_screen.dir_num,
-            &ctx->file_browse_screen.dir_name_table_num);
+    if(browse->area.h != old_h){
+        load_dir_table(state, &browse->dir_name_table,
+            &browse->dir_name_table_rows,
+            browse->path_name,
+            browse->select_line.now_logical_line,
+            &browse->dir_num,
+            &browse->dir_name_table_num);
     }
 }
 
@@ -81,6 +77,8 @@ void handle_resize(WINDOW *win, struct editor_input_context *ctx){
 
     struct editor_state *state = ctx->state;
     bool is_cur_show = state->is_cur_show;
+    int right_margin = state->scr.scr_size.x - state->write_area.x_end;
+    int bottom_margin = state->scr.scr_size.y - state->write_area.y_end;
 
     getmaxyx(win, state->scr.scr_size.y, state->scr.scr_size.x);
 
@@ -110,30 +108,23 @@ void handle_resize(WINDOW *win, struct editor_input_context *ctx){
     }
     my_cur_set(state,is_cur_show);
 
-    state->write_area.y_start = 0;
-    state->write_area.x_end = state->scr.scr_size.x - 1;
-    state->write_area.y_end = state->scr.scr_size.y;
+    state->write_area.x_end = state->scr.scr_size.x - right_margin;
+    state->write_area.y_end = state->scr.scr_size.y - bottom_margin;
     if(state->settings_data->show_status_bar){
         state->status_bar->w = state->scr.scr_size.x;
         state->status_bar->h = 1;
         if(state->settings_data->bar_side_state == top){
-            state->status_bar->pos = (struct pos){0, 1};
-            state->write_area.y_start = state->status_bar->pos.y + state->status_bar->h;
+            state->status_bar->pos.y = state->write_area.y_start - state->status_bar->h;
         }
         else{
-            state->status_bar->pos = (struct pos){0, state->scr.scr_size.y - 1};
-            state->write_area.y_end = state->status_bar->pos.y;
+            state->status_bar->pos.y = state->write_area.y_end;
         }
     }
-    state->write_area.w = state->write_area.x_end - state->write_area.x_start;
+    // ファイルツリーを表示中なら、新しい画面幅でも寄せた左端を保つ。
+    editor_apply_write_area(state);
     state->write_area.h = state->write_area.y_end - state->write_area.y_start;
 
-    ctx->edit_screen.line_start_pos = (struct pos){
-        state->write_area.x_start-1,state->write_area.y_start
-    };
-    ctx->edit_screen.line_end_pos = (struct pos){
-        state->write_area.x_start-1,state->write_area.y_end
-    };
+    editor_sync_split_line(ctx);
 
     // 幅が縮むと桁が可視範囲外へ出るため、新しい可視幅で丸め直す。
     // 行番号は変わらないので、行方向はupdate_screen_ratio()側の判定に任せる。
@@ -666,15 +657,15 @@ void file_browse_screen_mouse_event(WINDOW *win, MEVENT *event, struct editor_st
     if(state->settings_data->file_select_scene_lighting){
         if(event->bstate & BUTTON4_PRESSED){
              // next_lineはハイライトを移す先。端では上下に循環させる。
-            int next_line = (state->file_select_line_data.now_line <= 0) 
-                ? dir_num - 1:state->file_select_line_data.now_line - 1;
+            int next_line = (state->file_browse.select_line.now_line <= 0) 
+                ? dir_num - 1:state->file_browse.select_line.now_line - 1;
             set_file_select_line(state, dir_num, next_line);
             
         }  
         if(event->bstate & BUTTON5_PRESSED){
             // next_lineはハイライトを移す先。端では上下に循環させる。
-            int next_line = (state->file_select_line_data.now_line  >= dir_num - 1)
-                ?0:state->file_select_line_data.now_line + 1;
+            int next_line = (state->file_browse.select_line.now_line  >= dir_num - 1)
+                ?0:state->file_browse.select_line.now_line + 1;
             set_file_select_line(state, dir_num, next_line);
         }      
     }
@@ -682,19 +673,19 @@ void file_browse_screen_mouse_event(WINDOW *win, MEVENT *event, struct editor_st
 
 
 // set_file_browse_path_input_mode(): ファイルブラウザのパス入力モードを設定する。
-// 引数: file_browser_screen_context=更新対象、flag=設定する有効状態。
-// 返り値: なし。contextがNULLなら何もしない。
-void set_file_browse_path_input_mode(struct file_browse_screen_context *file_browser_screen_context,bool flag){
-    if(file_browser_screen_context == NULL)return;
-    file_browser_screen_context->path_input_mode = flag;
+// 引数: file_browse=更新対象、flag=設定する有効状態。
+// 返り値: なし。file_browseがNULLなら何もしない。
+void set_file_browse_path_input_mode(struct file_browse_state *file_browse,bool flag){
+    if(file_browse == NULL)return;
+    file_browse->path_input_mode = flag;
 }
 
 // get_file_browse_path_input_mode(): ファイルブラウザのパス入力モードを取得する。
-// 引数: file_browser_screen_context=取得元。
-// 返り値: 現在の有効状態。contextがNULLならfalse。
-bool get_file_browse_path_input_mode(struct file_browse_screen_context *file_browser_screen_context){
-    if(file_browser_screen_context == NULL)return 0;
-    return file_browser_screen_context->path_input_mode;
+// 引数: file_browse=取得元。
+// 返り値: 現在の有効状態。file_browseがNULLならfalse。
+bool get_file_browse_path_input_mode(struct file_browse_state *file_browse){
+    if(file_browse == NULL)return 0;
+    return file_browse->path_input_mode;
 }
 
 // my_cur_set(): エディタ状態とncursesのカーソル表示状態を同時に更新する。
