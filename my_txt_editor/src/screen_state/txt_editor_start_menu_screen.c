@@ -55,6 +55,8 @@ bool handle_start_menu_input(struct editor_input_context *ctx, wint_t ch){
         my_cur_set(state,true);
         clear();
         state->scr.scr_start_num = 0;
+
+        state->file_data.now_open_path_name[0] = '\0';
         editor_set_cursor(state, 0, 0);
         editor_sync_cursor(state);
         state->render_flags |= RENDER_EDIT_SCREEN_BASE;

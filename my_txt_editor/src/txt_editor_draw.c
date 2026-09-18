@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
+#include "settings_screen.h"
 #include "txt_editor.h"
 #include"txt_editor_syntax.h"
 #include"error_log.h"
@@ -12,11 +13,8 @@
 #define SETTINGS_EXPLATAION_BOX_MIN_W 12
 
 static void draw_search_box(struct box search_box,WINDOW *win);
-// 設定項目名の画面上の表示幅を返す。
 static int settings_item_name_width(const char *name);
-// 設定画面の枠上辺へタイトルを描画する。
 static void draw_settings_title(struct box box,WINDOW *win);
-// 設定画面の枠・タイトル・項目を描画する。
 static void draw_settings_screen(struct editor_input_context *ctx);
 static void draw_settings_explanation_box(struct editor_input_context *ctx);
 static int draw_settings_search_box(struct editor_input_context *ctx);
@@ -236,6 +234,9 @@ void draw_box(struct box box, WINDOW *win){
 
 }
 
+// request_draw_box(): 次回更新で描く枠を描画要求配列へ追加する。
+// 引数: state=描画要求の保存先、box=枠線を含む描画領域。
+// 返り値: なし。要求配列が満杯なら追加しない。
 void request_draw_box(struct editor_state *state,struct box box){
     if(state->draw_box_count >= DRAW_BOX_REQUEST_MAX)return;
     state->draw_box_data[state->draw_box_count++] = box;
@@ -475,10 +476,12 @@ void draw_status_bar_line(struct editor_state *state,struct box status_bar,WINDO
 // 引数: state=ファイルパスとステータスバー設定、win=描画先ウィンドウ。
 // 返り値: なし。
 void draw_status_bar_path(struct editor_state *state, WINDOW *win){
-    if(state->file_data.now_open_path_name[0] == '\0' || !state->settings_data->show_status_bar){
+    if(!state->settings_data->show_status_bar){
         return;
     }
-
+    if(state->file_data.now_open_path_name[0] == '\0' ){
+        memcpy(state->file_data.now_open_path_name,"Unknown file",sizeof("Unknown file"));
+    }
     int status_y = (state->settings_data->bar_side_state == top)
         ? state->status_bar->pos.y - 1 : state->status_bar->pos.y;
     char *draw_path = strrchr(state->file_data.now_open_path_name, '/');
@@ -508,6 +511,9 @@ void draw_status_bar_path(struct editor_state *state, WINDOW *win){
     mvaddnstr(status_y, draw_x, draw_path, draw_len);
 }
 
+// clear_box(): 登録済み矩形を空白で消し、消去要求件数を0へ戻す。
+// 引数: clear_box=消去対象の矩形配列と件数。
+// 返り値: なし。ncursesの描画失敗は通知しない。
 void clear_box(struct clear_box_data *clear_box){
     for(int f = 0;f < clear_box->clear_box_counter;f++){
         struct box box = clear_box->clear_box[f];
@@ -520,7 +526,9 @@ void clear_box(struct clear_box_data *clear_box){
     clear_box->clear_box_counter = 0;
 }
 
-//ステータスバーに現在の行数と終端行を記述する
+// draw_line_status(): ステータスバー右端へ現在行と総行数を描画する。
+// 引数: state=カーソル・行数・ステータスバー設定、win=描画先。現在は標準画面へ描くため未使用。
+// 返り値: なし。ステータスバー非表示時は何もしない。
 void draw_line_status(struct editor_state *state,WINDOW *win){
     if(!state->settings_data->show_status_bar){
         return;
@@ -547,6 +555,9 @@ void draw_line_status(struct editor_state *state,WINDOW *win){
     mvaddnstr(write_start_pos.y, write_start_pos.x, line_status_str, total_line_len);
 }
 
+// draw_make_file_dialog(): 新規作成の確認画面またはファイル名入力画面を描画する。
+// 引数: ctx=画面状態・配置基準・描画先を持つ入力context。
+// 返り値: なし。入力画面ではカーソル反映位置と入力欄の矩形も更新する。
 static void draw_make_file_dialog(struct editor_input_context *ctx){
     struct editor_state *state = ctx->state;
     WINDOW *win = ctx->win;
@@ -582,7 +593,7 @@ static void draw_make_file_dialog(struct editor_input_context *ctx){
         .h = state->ask_make_file_box.h + 2,
     };
     struct box input_box = {
-        .pos = {write_box.pos.x + 1, write_box.pos.y + write_box.h - 3},
+        .pos = {write_box.pos.x + 1, write_box.pos.y + write_box.h - 4},
         .w = write_box.w - 2,
         .h = 3,
     };
@@ -602,11 +613,14 @@ static void draw_make_file_dialog(struct editor_input_context *ctx){
                state->make_file_mode_status.new_file_name,
                state->make_file_mode_status.new_file_name_counter);
     state->write_file_name_area = input_box;
-    move(input_box.pos.y + 1, input_box.pos.x + 1 +
-         state->make_file_mode_status.new_file_name_counter);
+    cur_pos_push((struct pos){input_box.pos.x + 1 + state->make_file_mode_status.new_file_name_counter,
+                 input_box.pos.y + 1},state);
     my_cur_set(state,true);
 }
 
+// update_screen(): render_flagsに登録された描画要求を順に処理する。
+// 引数: ctx=画面状態・各画面の配置・描画先を持つ入力context。
+// 返り値: なし。処理後はrender_flagsをRENDER_NONEへ戻す。
 void update_screen(struct editor_input_context *ctx){
     unsigned int flags = ctx->state->render_flags;
     struct editor_state *state = ctx->state;
@@ -637,7 +651,7 @@ void update_screen(struct editor_input_context *ctx){
                 is_cur_move = true;
             }
             draw_settings_explanation_box(ctx);
-            if(is_cur_move)move(mouse_pos.y,mouse_pos.x);
+            if(is_cur_move)cur_pos_push(mouse_pos,state);
         }
 
         if(flags & RENDER_LINE){
@@ -691,6 +705,10 @@ void update_screen(struct editor_input_context *ctx){
                 }
                 
                 mvaddwstr(cur_line,col,str_start_ptr);
+                int x;
+                int y;
+                getyx(ctx->win,y,x);
+                cur_pos_push((struct pos){x,y},state);
             }
         }
         if(flags & RENDER_BOX){
@@ -706,11 +724,14 @@ void update_screen(struct editor_input_context *ctx){
             draw_make_file_dialog(ctx);
         }
     }
-
+    set_cur_pos(state);
     ctx->state->render_flags = RENDER_NONE;
     if(editor_get_screen_state(state) != edit_screen)refresh();
 }
 
+// request_clear_box(): 次回更新で消す矩形を消去要求配列へ追加する。
+// 引数: state=消去要求の保存先、box=消去対象領域。
+// 返り値: なし。要求配列が満杯ならエラー画面へ遷移する。
 void request_clear_box(struct editor_state *state, struct box box){
     if(state->clear_box_data.clear_box_counter >= box_retention_max){
         editor_error_screen(state,"clear box over flow ");
@@ -722,6 +743,9 @@ void request_clear_box(struct editor_state *state, struct box box){
 }
 
 
+// draw_line_jump(): 行ジャンプの入力欄と入力済み行番号を描画する。
+// 引数: state=入力値・ステータスバー配置・カーソル反映待ち位置を持つ状態。
+// 返り値: なし。
 void draw_line_jump(struct editor_state *state){
      struct pos prompt_pos = {0, state->write_area.y_start};
 
@@ -736,10 +760,13 @@ void draw_line_jump(struct editor_state *state){
     mvaddnstr(prompt_pos.y, prompt_pos.x + 1 + (int)strlen("JMP_LINE "),
                 state->jump_mode_data.jump_line_num,
                 state->jump_mode_data.jump_line_num_counter);
-    move(prompt_pos.y, prompt_pos.x + 1 + (int)strlen("JMP_LINE ") +
-            state->jump_mode_data.jump_line_num_counter);
+    cur_pos_push((struct pos){prompt_pos.x + 1 + (int)strlen("JMP_LINE ") +
+                 state->jump_mode_data.jump_line_num_counter,prompt_pos.y},state);
 }
 
+// set_clear_box(): 消去対象の矩形をclear_box_dataの末尾へ追加する。
+// 引数: clear_box_data=追加先、box=消去対象領域。
+// 返り値: 成功時0、引数がNULLまたは配列が満杯なら-1。
 int set_clear_box(struct clear_box_data *clear_box_data,struct box box){
         if(clear_box_data == NULL){
             return -1;
@@ -752,6 +779,9 @@ int set_clear_box(struct clear_box_data *clear_box_data,struct box box){
         return 0;
 }
 
+// draw_search_box(): ファイルブラウザのパス入力枠を描画する。
+// 引数: search_box=枠線を含む描画領域、win=描画先ウィンドウ。
+// 返り値: なし。winがNULLなら何もしない。
 static void draw_search_box(struct box search_box,WINDOW *win){
     if(win == NULL)return;
     draw_box(search_box,win);
@@ -930,6 +960,9 @@ static void draw_settings_screen(struct editor_input_context *ctx){
 }
 
 
+// draw_settings_search_box(): 選択項目の型名と入力中の値を設定画面上部へ描画する。
+// 引数: ctx=設定画面状態と描画先を持つ入力context。
+// 返り値: 成功時0、入力枠を配置できない場合は-1。
 static int draw_settings_search_box(struct editor_input_context *ctx){
 
     struct editor_state *state = ctx->state;
@@ -944,16 +977,39 @@ static int draw_settings_search_box(struct editor_input_context *ctx){
     if(input_w <= 0)return -1;
 
     mvhline(search_box.pos.y + 1,search_box.pos.x + 1,' ',input_w);
+
+    settinge_value_type value_type = st_scr_data.item_data[st_scr_data.select_line].value_type;
+    wchar_t value_type_str[32];
+    switch(value_type){
+        case VALUE_TYPE_BOOL:
+            wcscpy(value_type_str,L"BOOL:");
+            break;
+        case VALUE_TYPE_INT:
+            wcscpy(value_type_str,L"INT:");
+            break;
+        case VALUE_TYPE_STR:
+            wcscpy(value_type_str,L"STR:");
+            break;
+        case VALUE_TYPE_UNKNOWN:
+            wcscpy(value_type_str,L"UNKNOWN:");
+            break;
+    }
+
     int input_start = st_scr_data.input_value_len - input_w;
     if(input_start < 0)input_start = 0;
+    int value_type_str_len = wcslen(value_type_str);
+    mvaddwstr(search_box.pos.y + 1,search_box.pos.x + 1,value_type_str);
     if(st_scr_data.input_value_len > input_start){
-        mvaddnwstr(search_box.pos.y + 1,search_box.pos.x + 1,
+        mvaddnwstr(search_box.pos.y + 1,search_box.pos.x + 1 + value_type_str_len,
                    &st_scr_data.input_value[input_start],input_w);
     }
     return 0;
 }
 
 
+// draw_settings_explanation_box(): 選択中設定項目の説明枠を設定画面の右側へ描画する。
+// 引数: ctx=設定項目・画面寸法・描画先を持つ入力context。
+// 返り値: なし。必要な幅または説明文が無い場合は描画しない。
 static void draw_settings_explanation_box(struct editor_input_context *ctx){
     struct editor_state *state = ctx->state;
     settings_screen_data st_scr_data = state->settings_screen_data;
@@ -999,13 +1055,14 @@ static void draw_settings_explanation_box(struct editor_input_context *ctx){
 
     struct box explanation_box = {explanation_pos,area_w,area_h};
     draw_box(explanation_box,ctx->win);
-    draw_explanation_str(st_scr_data.item_data[st_scr_data.select_line].explanation,explanation_box);
+    draw_explanation_str(st_scr_data.item_data[st_scr_data.select_line].explanation,
+        explanation_box);
     move(set_mouse_pos_y,set_mouse_pos_x);
     if(is_cur_showed)my_cur_set(state,true);
 }
-
-
-
+// draw_explanation_str(): 説明文をboxの内側幅で分割し、上から順に描画する。
+// 引数: str=描画するNUL終端文字列、box=枠線を含む描画領域。
+// 返り値: なし。空文字列なら何も描画しない。strがNULLまたはbox.wが2以下の場合の動作は未定義。
 static void draw_explanation_str(const char *str,struct box box){
     int str_len = strlen(str);
     if(str_len <= 0)return;

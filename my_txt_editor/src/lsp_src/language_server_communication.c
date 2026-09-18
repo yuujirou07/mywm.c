@@ -531,6 +531,9 @@ void lsp_handle_message(struct lsp_process *lsp, char *msg){
     cJSON_Delete(root);
 }
 
+// initialize_id(): LSP要求ID履歴を1始まりの連番で初期化する。
+// 引数: id_data=ID配列と現在位置を持つ送受信状態。
+// 返り値: なし。id_dataがNULLの場合の動作は未定義。
 void initialize_id(struct lsp_send_receve_id_data *id_data){
     int size = sizeof(id_data->used_id_history);
     int arry_size = size/sizeof(int);
@@ -540,6 +543,9 @@ void initialize_id(struct lsp_send_receve_id_data *id_data){
     id_data->id_storage_counter = 0;
 }
 
+// set_lsp_use_language(): LSPへ通知する言語IDをプロセス状態へコピーする。
+// 引数: lsp=設定先、language=NUL終端された言語ID。
+// 返り値: なし。languageがNULLまたは格納先より長い場合は変更しない。
 void set_lsp_use_language(struct lsp_process *lsp,char *language){
     if(language == NULL)return;
     
@@ -554,6 +560,9 @@ void set_lsp_use_language(struct lsp_process *lsp,char *language){
          "%s", language);
 }
 
+// lsp_send_did_open(): 文書を開いたことと全文をLSPサーバへ通知する。
+// 引数: fd=書き込みfd、uri=文書URI、language_id=言語ID、text=UTF-8の全文。
+// 返り値: 送信成功時0、引数不正・JSON生成・送信失敗時-1。
 int lsp_send_did_open(int fd, const char *uri,
                       const char *language_id, const char *text)
 {
@@ -590,6 +599,9 @@ int lsp_send_did_open(int fd, const char *uri,
 }
 
 
+// lsp_send_did_change(): 文書の新しい版と全文をLSPサーバへ通知する。
+// 引数: fd=書き込みfd、uri=文書URI、version=1以上の版番号、text=UTF-8の全文。
+// 返り値: 送信成功時0、引数不正・JSON生成・送信失敗時-1。
 int lsp_send_did_change(int fd, const char *uri, int version, const char *text)
 {
     int result = -1;
@@ -656,7 +668,10 @@ int lsp_send_did_change(int fd, const char *uri, int version, const char *text)
     return result;
 }
 
-/* 成功時は*msgに生成したJSONを返す。呼び出し側がfree()する。 */
+// lsp_make_msg(): 要求データからLSP用JSON文字列を生成する。
+// 引数: msg_data=要求ID・method・URI・位置、msg=生成文字列の返却先。
+// 返り値: 成功時0、引数不正またはJSON生成失敗時-1。失敗時の*msgはNULL。
+// 所有権: 成功時の*msgは呼び出し側がfree()する。
 int lsp_make_msg(lsp_send_msg_data msg_data, char **msg){
     cJSON *root;
     cJSON *params;
@@ -729,6 +744,10 @@ int lsp_make_msg(lsp_send_msg_data msg_data, char **msg){
     return 0;
 }
 
+// lsp_send_completion(): 現在のファイルパスとカーソル位置で補完要求を生成して送信する。
+// 引数: lsp_fd=LSPサーバへの書き込みfd、state=ファイルパスとカーソル位置。
+// 返り値: 送信成功時0、JSON生成または送信失敗時-1。
+// 所有権: 生成したJSON文字列は送信後にこの関数が解放する。
 int lsp_send_completion(int lsp_fd,struct editor_state *state){
     lsp_send_msg_data msg_data = {0};
     msg_data.id = 3;

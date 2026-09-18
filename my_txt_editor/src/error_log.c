@@ -3,6 +3,11 @@
 #include<stdio.h>
 #include <string.h>
 static FILE *file = NULL;
+
+// set_error_log_file(): エラーログの出力先を初回だけ開く。
+// 引数: file_path=作成または上書きするログファイルのパス。
+// 返り値: なし。既に開いている場合またはfopen()失敗時は状態を変更しない。
+// 所有権: 開いたFILEはこのモジュールが保持し、close_error_log_file()が閉じる。
 void set_error_log_file(char *file_path){
         if(file != NULL){
                 return;
@@ -15,11 +20,16 @@ void set_error_log_file(char *file_path){
         }
 }
 
+// close_error_log_file(): このモジュールが保持するログファイルを閉じる。
+// 引数: なし。
+// 返り値: なし。ログファイルが未設定なら何もしない。
 void close_error_log_file(){
         if(file != NULL)fclose(file);
 }
 
-
+// error_log_write(): 設定済みログへ最大ERROR_MSG_SIZE_MAXバイトを書き込む。
+// 引数: error_comment=NUL終端された出力文字列。
+// 返り値: なし。ログファイルが未設定なら何もしない。
 void error_log_write(char *error_comment){
         if(file == NULL)return; 
 

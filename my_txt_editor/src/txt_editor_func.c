@@ -386,9 +386,8 @@ void handle_mouse(struct editor_input_context *ctx,int dir_num) {
 void handle_input_allow(struct editor_input_context *ctx,wchar_t ch){
     struct editor_state *state = ctx->state;
     int line_limit = get_line_limit();
-    if(line_limit <= 0){
-        return;
-    }
+    if(line_limit <= 0)return;
+    
 
     // 画面内に留まったまま動けるかどうかの判定。画面座標ではなく
     // 「カーソル行が表示範囲のどこにいるか」で決める。
@@ -438,9 +437,16 @@ void handle_input_allow(struct editor_input_context *ctx,wchar_t ch){
     state->render_flags |= RENDER_LINE_STATUS;
 }
 
+// set_line_limit(): カーソル移動などが参照する共有行数上限を更新する。
+// 引数: line_limit=新しい行数上限。
+// 返り値: なし。
 void set_line_limit(int line_limit){
     limit = line_limit;
 }
+
+// get_line_limit(): 共有されている行数上限を返す。
+// 引数: なし。
+// 返り値: set_line_limit()で最後に設定した値。
 int get_line_limit(){
     return limit;
 }
@@ -650,6 +656,9 @@ void editor_screen_mouse_event(struct editor_input_context *ctx){
     state->is_cur_show = editor_cursor_is_visible(state);
 }
 
+// file_browse_screen_mouse_event(): ホイール入力でファイルブラウザの選択行を循環移動する。
+// 引数: win=描画先。現在は未使用、event=マウスイベント、state=選択状態、dir_num=表示項目数。
+// 返り値: なし。選択行の強調表示が無効なら何もしない。
 void file_browse_screen_mouse_event(WINDOW *win, MEVENT *event, struct editor_state *state,int dir_num){
     //ホイールで選択行を動かすだけなので描画先ウィンドウは使わない
     (void)win;
@@ -672,18 +681,43 @@ void file_browse_screen_mouse_event(WINDOW *win, MEVENT *event, struct editor_st
 }
 
 
+// set_file_browse_path_input_mode(): ファイルブラウザのパス入力モードを設定する。
+// 引数: file_browser_screen_context=更新対象、flag=設定する有効状態。
+// 返り値: なし。contextがNULLなら何もしない。
 void set_file_browse_path_input_mode(struct file_browse_screen_context *file_browser_screen_context,bool flag){
     if(file_browser_screen_context == NULL)return;
     file_browser_screen_context->path_input_mode = flag;
 }
 
+// get_file_browse_path_input_mode(): ファイルブラウザのパス入力モードを取得する。
+// 引数: file_browser_screen_context=取得元。
+// 返り値: 現在の有効状態。contextがNULLならfalse。
 bool get_file_browse_path_input_mode(struct file_browse_screen_context *file_browser_screen_context){
     if(file_browser_screen_context == NULL)return 0;
     return file_browser_screen_context->path_input_mode;
 }
 
+// my_cur_set(): エディタ状態とncursesのカーソル表示状態を同時に更新する。
+// 引数: state=更新対象、set=trueで表示、falseで非表示。
+// 返り値: なし。stateがNULLなら何もしない。curs_set()の失敗は通知しない。
 void my_cur_set(struct editor_state *state,bool set){
     if(state == NULL)return;
     state->is_cur_show = set;
     curs_set(set);
+}
+
+// cur_pos_push(): 次回ncursesへ反映する画面カーソル座標をstateへ保存する。
+// 引数: pos=保存する画面座標、state=保存先のエディタ状態。posは値コピーされる。
+// 返り値: 常に0。stateがNULLの場合の動作は未定義。
+int cur_pos_push(struct pos pos, struct editor_state *state){
+    state->cursor.show_cur_pos_queue = pos;
+    return 0;
+}
+
+// set_cur_pos(): stateに保存された画面カーソル座標をncursesへ反映する。
+// 引数: state=反映する座標を持つエディタ状態。
+// 返り値: 常に0。move()の失敗は呼び出し元へ通知しない。
+int set_cur_pos(struct editor_state *state){
+    move(state->cursor.show_cur_pos_queue.y,state->cursor.show_cur_pos_queue.x);
+    return 0;
 }

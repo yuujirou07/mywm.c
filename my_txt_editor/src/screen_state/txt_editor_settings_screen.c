@@ -34,9 +34,6 @@ bool handle_settings_screen_input(struct editor_input_context *ctx,wint_t ch,int
 
     if(screen_data->value_input_mode){
 
-        int x;
-        int y;
-
         if(ch == KEY_ENTER || ch == '\n' || ch == '\r'){
             screen_data->value_input_mode = false;
             my_cur_set(state,false);
@@ -45,18 +42,28 @@ bool handle_settings_screen_input(struct editor_input_context *ctx,wint_t ch,int
             if(screen_data->input_value_len > 0){
                 screen_data->input_value[--screen_data->input_value_len] = L'\0';
             }
-            getyx(ctx->win,y, x);
-            move(y,x-1);
         }
         else if(input_result == OK && iswprint(ch) &&
-                screen_data->input_value_len < SETTINGS_INPUT_MAX - 1){
+            screen_data->input_value_len < SETTINGS_INPUT_MAX - 1){
+
             screen_data->input_value[screen_data->input_value_len++] = ch;
             screen_data->input_value[screen_data->input_value_len] = L'\0';
-            getyx(ctx->win,y,x);
-            move(y,x+1);
         }
         state->render_flags |= RENDER_SETTINGS;
         return true;
+    }
+    else if(input_result == OK && iswprint(ch)){
+        for(int i = 0;i < screen_data->settings_item_data_num;i++){
+            if(screen_data->item_data[i].key_code == ch){
+                screen_data->value_input_mode = true;
+                screen_data->input_value_len = 0;
+                screen_data->input_value[0] = L'\0';
+                my_cur_set(state,true);
+                state->render_flags |= RENDER_SETTINGS;
+                int select_item_delta = i - screen_data->select_line;
+                move_settings_select_line(screen_data,select_item_delta);
+            }
+        }
     }
 
     if(ch == 'q')return false;
@@ -101,6 +108,10 @@ void move_settings_select_line(settings_screen_data *settings_screen_data,int de
 }
 
 
+// add_settings_screen_item(): 設定項目配列を必要に応じて拡張し、末尾へ1項目追加する。
+// 引数: settings_screen_data=追加先、item_data=値コピーする項目。
+// 返り値: 成功時0、malloc()またはrealloc()失敗時-1。
+// 所有権: item_data内の文字列ポインタは複製せず、成功後はsettings_screen_dataが保持する。
 int add_settings_screen_item(settings_screen_data *settings_screen_data,settings_items_data item_data){
     if(settings_screen_data->item_data == NULL){
         settings_screen_data->settings_item_data_allocate_num = 16; 
@@ -126,6 +137,10 @@ int add_settings_screen_item(settings_screen_data *settings_screen_data,settings
     return 0;
 }
 
+// load_settings_screen_items(): settings_items.jsonを読み込み、設定画面の項目配列へ追加する。
+// 引数: settings_screen_data=項目配列と件数を保持する設定画面データ。
+// 返り値: 成功時0、ファイル・JSON・必須項目・メモリ確保の失敗時-1。
+// 所有権: nameとexplanationを複製し、追加成功後はsettings_screen_dataが所有する。
 int load_settings_screen_items(settings_screen_data *settings_screen_data){
     const char *file_name = "settings_items.json";
     char exe_dir_path[PATH_MAX];
@@ -187,6 +202,10 @@ int load_settings_screen_items(settings_screen_data *settings_screen_data){
     return 0;
 }
 
+// cmb_value_str_to_enum(): JSON文字列の設定値型をsettinge_value_typeへ変換する。
+// 引数: value_type_item=型名を保持するcJSON文字列項目。
+// 返り値: 一致する型。未対応文字列ならVALUE_TYPE_UNKNOWN。
+// 所有権: cJSON内の文字列を借用し、解放しない。
 settinge_value_type cmb_value_str_to_enum(cJSON *value_type_item){
     char *value_type_str = cJSON_GetStringValue(value_type_item);
     for(size_t i = 0;i < sizeof(value_type_str_list)/sizeof(value_type_str_list[0]);i++){
@@ -195,6 +214,9 @@ settinge_value_type cmb_value_str_to_enum(cJSON *value_type_item){
     return VALUE_TYPE_UNKNOWN;
 }
 
+// get_now_select_settings_item(): 現在選択中の設定項目を返す。
+// 引数: screen_data=項目配列と選択位置を持つ設定画面データ。
+// 返り値: 選択項目への借用ポインタ。引数や選択位置が不正な場合の動作は未定義。
 settings_items_data *get_now_select_settings_item(settings_screen_data *screen_data){
     return &screen_data->item_data[screen_data->select_line];
 }

@@ -36,6 +36,7 @@ struct lsp_send_receve_id_data{
 };
 
 struct txt_update_data{
+    // 更新対象ファイルのパス。now_open_path_nameと同じ相対パスまたは絶対パス。
     char path_name[PATH_MAX];
     int file_update_counter;
 };

@@ -29,7 +29,7 @@ static void lsp_poll_events(int *epfd, struct lsp_process *lsp, int timeout_ms);
 
 // main(): ncursesを初期化し、エディタ画面・ファイルブラウザ・エラー画面の
 // 入力ループを切り替えながら各処理関数へイベントを振り分ける。
-// 引数: なし。
+// 引数: argc=コマンドライン引数数、argv=起動時間ログまたはmylsp指定を含む引数列。
 // 返り値: 正常終了なら0、ncurses初期化やメモリ確保に失敗したら1。
 int main(int argc, char *argv[])
 {
@@ -71,7 +71,7 @@ int main(int argc, char *argv[])
     struct ascii_data ascii_data = {0};
     state.settings_data = &settings_data;
     state.mylsp_use = mylsp;
-    struct box file_browse_box;
+    struct editor_input_context input_context = {0};
     struct box status_bar;
     MEVENT mouse_event;
     WINDOW *win;
@@ -131,20 +131,20 @@ int main(int argc, char *argv[])
     }
     state.str.chr_file_all_str_data = NULL;
 
-    int screen_center_y =  state.scr.scr_size.y / 2;
-    file_browse_box.w = state.scr.scr_size.x / 3;
-    file_browse_box.h = screen_center_y;
-    file_browse_box.pos.x = (state.scr.scr_size.x / 2) - file_browse_box.w / 2;
-    file_browse_box.pos.y = state.scr.scr_size.y / 4;
+    input_context.ask_make_file_mode.screen_center_y =  state.scr.scr_size.y / 2;
+    input_context.file_browse_screen.box.w = state.scr.scr_size.x / 3;
+    input_context.file_browse_screen.box.h = input_context.ask_make_file_mode.screen_center_y;
+    input_context.file_browse_screen.box.pos.x = (state.scr.scr_size.x / 2) - input_context.file_browse_screen.box.w / 2;
+    input_context.file_browse_screen.box.pos.y = state.scr.scr_size.y / 4;
 
     my_cur_set(&state,true);
-    state.file_browser_box = &file_browse_box;
+    state.file_browser_box = &input_context.file_browse_screen.box;
     raw();
     scrollok(win, TRUE);
     mouseinterval(10);
     mousemask(ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION, NULL);  
     
-    char path_name[PATH_MAX];
+    char path_name[PATH_MAX]; // getcwd()で取得する、ファイルブラウザ初期ディレクトリの絶対パス。
 
     if(getcwd(path_name, sizeof(path_name)) == NULL) {
         perror("getcwd");
@@ -174,10 +174,10 @@ int main(int argc, char *argv[])
     state.write_area.h = state.write_area.y_end - state.write_area.y_start;
     state.file_data.file_str_line_end = 0;
 
-    state.file_browser_area.pos.x = file_browse_box.pos.x + 1;
-    state.file_browser_area.pos.y = file_browse_box.pos.y + 1;
-    state.file_browser_area.h = file_browse_box.h - 2; // 上下の枠線を除く。
-    state.file_browser_area.w = file_browse_box.w - 2; // 左右の枠線を除く。
+    state.file_browser_area.pos.x = input_context.file_browse_screen.box.pos.x + 1;
+    state.file_browser_area.pos.y = input_context.file_browse_screen.box.pos.y + 1;
+    state.file_browser_area.h = input_context.file_browse_screen.box.h - 2; // 上下の枠線を除く。
+    state.file_browser_area.w = input_context.file_browse_screen.box.w - 2; // 左右の枠線を除く。
 
     state.make_file_mode_status.is_input_scene        = false;
     state.make_file_mode_status.new_file_name_counter = 0;
@@ -214,28 +214,30 @@ int main(int argc, char *argv[])
     editor_set_screen_state(&state, state.settings_data->show_start_menu ? start_menu_screen : edit_screen);
     // 一覧テーブルは各エントリの名前と種別を保持する。
     // 行数は表示できる件数分だけ確保し、幅の変化では作り直さない。
-    int dir_name_table_rows         = (state.file_browser_area.h > 0)
+    input_context.file_browse_screen.dir_name_table_rows = (state.file_browser_area.h > 0)
         ? state.file_browser_area.h : 1;
-    struct dir_entry *dir_name_table =
-        calloc((size_t)dir_name_table_rows,sizeof(*dir_name_table));
+    input_context.file_browse_screen.dir_name_table =
+        calloc((size_t)input_context.file_browse_screen.dir_name_table_rows,sizeof(*input_context.file_browse_screen.dir_name_table));
     int allocate_total_str_size     = state.settings_data->load_buffer_lines;
     state.file_data.file_str_data   = calloc(allocate_total_str_size,sizeof(char*));
-    if(dir_name_table == NULL || state.file_data.file_str_data == NULL){
-        free(dir_name_table);
+    if(input_context.file_browse_screen.dir_name_table == NULL || state.file_data.file_str_data == NULL){
+        free(input_context.file_browse_screen.dir_name_table);
         free(state.file_data.file_str_data);
         free(state.file_data.file_line_start_num);
         editor_free_text_buffer(&state);
         return 1;
     }
-    int dir_num = 0;
-    int dir_name_table_num = 0;
-    load_dir_table(&state,&dir_name_table,&dir_name_table_rows,path_name,0,
-                   &dir_num,&dir_name_table_num);
+    input_context.file_browse_screen.dir_num = 0;
+    input_context.file_browse_screen.dir_name_table_num = 0;
+    load_dir_table(&state,&input_context.file_browse_screen.dir_name_table,&input_context.file_browse_screen.dir_name_table_rows,path_name,0,
+                   &input_context.file_browse_screen.dir_num,&input_context.file_browse_screen.dir_name_table_num);
 
-    struct pos screen_center_pos    = (struct pos){state.scr.scr_size.x/2,screen_center_y};
+    input_context.ask_make_file_mode.screen_center_pos.x = state.scr.scr_size.x / 2;
+    input_context.ask_make_file_mode.screen_center_pos.y = input_context.ask_make_file_mode.screen_center_y;
     
     bkgd(COLOR_PAIR(1));
     editor_sync_cursor(&state);
+    set_cur_pos(&state);
     refresh();
 
 
@@ -321,44 +323,26 @@ int main(int argc, char *argv[])
     init_syntax(&syntax);
     set_syntax_language(C,&syntax);
     
-    struct editor_input_context input_context = {
-            .win = win,
-            .mouse_event = &mouse_event,
-            .state = &state,
-            .lsp_data = &lsp,
-            .edit_screen = {
-                .line_start_pos = {state.write_area.x_start-1, state.write_area.y_start},
-                .line_end_pos   = {state.write_area.x_start-1, state.write_area.y_end},
-            },
-            .file_browse_screen = {
-                .box = file_browse_box,
-                .search_box = {
-                    .pos = {file_browse_box.pos.x,
-                            file_browse_box.pos.y + file_browse_box.h - 1},
-                    .w = file_browse_box.w,
-                    .h = 3,
-                },
-                .dir_name_table = dir_name_table,
-                .dir_name_table_rows = dir_name_table_rows,
-                .dir_num = dir_num,
-                .dir_name_table_num = dir_name_table_num,
-                .path_name = path_name,
-                .path_input_mode = false,
-            },
-            .ask_make_file_mode = {
-                .screen_center_y = screen_center_y,
-                .screen_center_pos = screen_center_pos,
-            },
-            .start_menu_screen = {
-                .open = &open_start_menu,
-                .has_plugin = (start_menu != NULL),
-                .plugin = start_menu,
-                .ascii_data = &ascii_data,
-                 .startup_start_time = startup_timer ? &startup_start_time : NULL,
-                .startup_log_path = startup_timer ? startuptime_log_file_path_name : NULL,
-            },
-        
-    };
+    input_context.win = win;
+    input_context.mouse_event = &mouse_event;
+    input_context.state = &state;
+    input_context.lsp_data = &lsp;
+    input_context.edit_screen.line_start_pos.x = state.write_area.x_start - 1;
+    input_context.edit_screen.line_start_pos.y = state.write_area.y_start;
+    input_context.edit_screen.line_end_pos.x = state.write_area.x_start - 1;
+    input_context.edit_screen.line_end_pos.y = state.write_area.y_end;
+    input_context.file_browse_screen.search_box.pos.x = input_context.file_browse_screen.box.pos.x;
+    input_context.file_browse_screen.search_box.pos.y = input_context.file_browse_screen.box.pos.y + input_context.file_browse_screen.box.h - 1;
+    input_context.file_browse_screen.search_box.w = input_context.file_browse_screen.box.w;
+    input_context.file_browse_screen.search_box.h = 3;
+    input_context.file_browse_screen.path_name = path_name;
+    input_context.file_browse_screen.path_input_mode = false;
+    input_context.start_menu_screen.open = &open_start_menu;
+    input_context.start_menu_screen.has_plugin = (start_menu != NULL);
+    input_context.start_menu_screen.plugin = start_menu;
+    input_context.start_menu_screen.ascii_data = &ascii_data;
+    input_context.start_menu_screen.startup_start_time = startup_timer ? &startup_start_time : NULL;
+    input_context.start_menu_screen.startup_log_path = startup_timer ? startuptime_log_file_path_name : NULL;
 
     // 部分更新とスクロール処理から参照するsyntaxを借用ポインタとして登録する。
     now_usint_syntax_ptr_ctl(&syntax,set);
@@ -389,6 +373,7 @@ int main(int argc, char *argv[])
                 apply_syntax_color(&input_context,syntax);
             }
             editor_sync_cursor(&state);
+            set_cur_pos(&state);
             refresh();
             my_cur_set(&state,show_cursor);
         }
@@ -476,6 +461,9 @@ static void lsp_poll_events(int *epfd, struct lsp_process *lsp, int timeout_ms)
     }
 }
 
+// my_mvaddstr(): 指定した画面座標へNUL終端文字列を描画する。
+// 引数: pos=描画開始座標、str=描画する文字列。
+// 返り値: なし。ncursesの描画失敗は呼び出し元へ通知しない。
 void my_mvaddstr(struct pos pos,char * str){
     mvaddstr(pos.y,pos.x,str);
 }

@@ -63,7 +63,6 @@ extern const wchar_t *comment_ev_str;
 
 // 各関数の引数・戻り値・前提条件は実装側の定義直前に記載。
 int set_syntax_language(language lang,syntax *syntax);
-// posで単語が一致すればその長さ、非一致なら0。lineはNUL終端不要。
 int find_syntax_word(const wint_t *line,int line_len,int pos,
                      const wchar_t *const words[],size_t word_count);
 int set_syntax_data(syntax *syntax,struct editor_input_context *ctx);

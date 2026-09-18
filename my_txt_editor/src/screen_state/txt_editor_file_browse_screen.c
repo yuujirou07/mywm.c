@@ -60,8 +60,10 @@ bool handle_file_browse_screen_input(struct editor_input_context *ctx, int input
                     editor_set_screen_state(state, start_menu_screen);
                     *ctx->start_menu_screen.open = true;
 
-                    set_file_browse_path_input_mode(file_browse_screen,
-                        false);
+                    set_file_browse_path_input_mode(
+                        file_browse_screen,
+                        false
+                    );
                 }
                 else{
                     editor_set_screen_state(state, edit_screen);

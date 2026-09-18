@@ -33,10 +33,10 @@ static int garbage_collection_allocate_num = 256;
 static int collection_count = 0;
 
 
-/* 構文用の色ペア4以降を黒背景で登録する。引数・返り値なし。
- * ncursesとstart_color()の初期化後に呼ぶ。色非対応なら何もしない。
- * COLOR_PAIRSの範囲内だけ登録し、init_pairの失敗は通知しない。
- */
+// init_syntax_colors(): 構文用の色ペア4以降を黒背景で登録する。
+// ncursesとstart_color()の初期化後に呼び、COLOR_PAIRSの範囲内だけ登録する。
+// 引数: なし。
+// 返り値: なし。色非対応なら何もせず、init_pair()の失敗は通知しない。
 void init_syntax_colors(void){
     if(!has_colors())return;
     for(size_t i = 0;i < sizeof(syntax_colors) / sizeof(syntax_colors[0]);i++){

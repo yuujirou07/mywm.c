@@ -1,5 +1,6 @@
 #include <string.h>
 #include <wctype.h>
+#include "txt_editor.h"
 #include "txt_editor_screen.h"
 
 // handle_ask_make_file_mode_input(): 未保存ファイル作成確認と新規ファイル名入力を処理する。
@@ -41,6 +42,8 @@ bool handle_ask_make_file_mode_input(struct editor_input_context *ctx, int input
 
             save_file(state);
 
+            if(editor_get_screen_state(state) == error_screen)return true;
+
             state->make_file_mode_status.new_file_name_counter = 0;
             state->make_file_mode_status.is_input_scene = false;
             memset(state->make_file_mode_status.new_file_name,
@@ -48,6 +51,7 @@ bool handle_ask_make_file_mode_input(struct editor_input_context *ctx, int input
                 sizeof(state->make_file_mode_status.new_file_name));
 
             clear();
+            editor_set_screen_state(state,edit_screen);
             state->render_flags |= RENDER_EDIT_SCREEN_BASE;
             state->render_flags |= RENDER_FILE_DATA;
             editor_sync_cursor(state);

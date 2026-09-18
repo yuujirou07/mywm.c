@@ -26,8 +26,10 @@
 // ファイルブラウザ表示用テーブルへ全エントリの名前と種別を保持する。
 // 表示幅に合わせた切り詰めはdraw_box_inside_dir()が描画時に行う。
 // tableは必要ならrealloc()で拡張し、更新後のポインタと行数を呼び出し元へ書き戻す。
-// start_numは表示開始添字で、dir_numには全件数、table_numには画面に表示できる件数を返す。
+// 引数: state=表示領域、table/table_rows=一覧配列と容量、path_name=対象ディレクトリ、
+//       start_num=表示開始添字、dir_num=全件数、table_num=表示可能件数の返却先。
 // 返り値: 成功時は0。引数不正、ディレクトリを開けない、再確保失敗時は-1。
+// 所有権: tableは呼び出し側所有のまま。再確保時は更新したポインタを*tableへ返す。
 int load_dir_table(struct editor_state *state,struct dir_entry **table,int *table_rows,char *path_name,int start_num,int *dir_num,int *table_num){
     if(table == NULL || table_rows == NULL || dir_num == NULL || table_num == NULL)return -1;
     *dir_num = 0;
@@ -84,7 +86,8 @@ int load_dir_table(struct editor_state *state,struct dir_entry **table,int *tabl
 // tableがNULLの場合はpath_nameを完成済みのパスとして直接読み込む。
 // 返り値: なし。結果はselect_stateに格納する。
 // 所有権: ファイル選択成功時は先に開いていたFILE*を閉じ、新しいFILE*をstateが保持する。
-void load_file(struct editor_state *state,struct dir_entry *table,int table_num,char *path_name,struct file_browse_select_state *select_state){
+void load_file(struct editor_state *state,struct dir_entry *table,int table_num,
+                    char *path_name,struct file_browse_select_state *select_state){
     select_state->select_name[0] = '\0';
     select_state->select_state = error;
     if(path_name == NULL || path_name[0] == '\0'){
@@ -300,8 +303,8 @@ bool editor_ensure_row_capacity(struct editor_state *state, int need_rows){
     }
 
     int  *line        = realloc(state->str.line, (size_t)new_cap * sizeof(int));
-    long *line_offset  = realloc(state->str.line_offset, (size_t)new_cap * sizeof(long));
-    int  *line_cap     = realloc(state->str.line_cap, (size_t)new_cap * sizeof(int));
+    long *line_offset = realloc(state->str.line_offset, (size_t)new_cap * sizeof(long));
+    int  *line_cap    = realloc(state->str.line_cap, (size_t)new_cap * sizeof(int));
     // reallocは失敗しても元のポインタを解放しないため、成功した分だけでも
     // state側へ反映させておく(そうしないと古いポインタのままfreeし損ねる/二重解放になる)。
     if(line != NULL)        state->str.line        = line;
@@ -598,7 +601,8 @@ char *editor_buffer_to_utf8(struct editor_state *state)
 // 引数: state=保存先パスと編集バッファを持つエディタ状態。
 // 返り値: なし。
 void save_file(struct editor_state *state){
-    if(state == NULL || state->file_data.now_open_path_name[0] == '\0'){
+    if(state == NULL)return;
+    if(state->file_data.now_open_path_name[0] == '\0'){
         if(state->settings_data->ask_make_file){
             editor_set_screen_state(state, ask_make_file_mode);
             return;
@@ -963,6 +967,9 @@ int check_dir_mem(struct dir_table *dir_table,int size){
     return dir_mem_counter;
 }
 
+// get_path_state(): パスの実体をstat()で調べ、ファイルまたはディレクトリへ分類する。
+// 引数: path=判定するNUL終端パス。
+// 返り値: 通常ファイルならfile、ディレクトリならfolder、その他はunkown、NULLならerror。
 enum select_state get_path_state(const char *path){
     if(path == NULL)return error;
     struct stat stat_state = {0};
@@ -983,6 +990,9 @@ enum select_state get_path_state(const char *path){
     else return unkown;
 }
 
+// now_input_path_open(): パス入力欄の完成済みパスを開き、種類に応じて画面状態を更新する。
+// 引数: state=読込先の編集状態、ctx=ファイルブラウザと描画状態を持つ入力context。
+// 返り値: 成功時0、引数不正・判定失敗時-1。完成パスが無い場合はtrue。
 int now_input_path_open(struct editor_state *state,struct editor_input_context *ctx){
     if(state == NULL || ctx == NULL)return -1;
     struct dir_table dir_info = {0};
@@ -1029,6 +1039,9 @@ int now_input_path_open(struct editor_state *state,struct editor_input_context *
 }
 
 
+// file_browser_show_mem_start_num(): ファイルブラウザの表示開始位置を保存または取得する。
+// 引数: start_num=set時に保存する位置、flags=getまたはset。
+// 返り値: get時は保存値、それ以外は-1。set時も保存後に-1を返す。
 int file_browser_show_mem_start_num(int start_num,enum flags flags){
     static int static_start_num = 0;
     if(flags == get)return static_start_num;
@@ -1036,6 +1049,10 @@ int file_browser_show_mem_start_num(int start_num,enum flags flags){
     return -1;
 }
 
+// get_icon(): ディレクトリエントリの種類と拡張子に対応するアイコンをiconへ書き込む。
+// 引数: state=アイコン使用設定、entry=対象項目、icon=ワイド文字列の書き込み先。
+// 返り値: 成功時0、引数不正または空の通常ファイル名なら-1。
+// 所有権: iconは呼び出し側所有で、この関数はメモリを確保しない。
 int get_icon(struct editor_state *state,struct dir_entry entry,wchar_t *icon){
     if(state == NULL || icon == NULL)return -1;
 
