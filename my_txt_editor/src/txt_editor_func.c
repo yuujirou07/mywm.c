@@ -736,11 +736,29 @@ int filetree_mouse_event(struct editor_input_context *ctx){
         for(int i = 0;i < state->file_tree_data.open_count_num;i++){
             ft_path_open_check_data *item =
                 &state->file_tree_data.open_check_data[i];
-            if(item->screen_y == y && item->table_ptr->s_data.d_type == DT_DIR){
+            if(item->screen_y != y)continue;
+
+            enum select_state path_state =
+                get_path_state(item->table_ptr->absolute_path);
+            if(path_state == folder){
                 item->is_open = !item->is_open;
                 state->render_flags |= RENDER_EDIT_SCREEN_BASE;
-                break;
             }
+            else if(path_state == file){
+                struct file_browse_select_state select_state;
+                load_file(state,NULL,0,item->table_ptr->absolute_path,&select_state);
+                if(select_state.select_state == file){
+                    load_screen_size(state);
+                    editor_set_cursor(state,0,0);
+                    state->render_flags |= RENDER_FILE_DATA;
+                    state->render_flags |= RENDER_EDIT_SCREEN_BASE;
+                    if(state->settings_data->built_in_syntax){
+                        syntax *syntax_data = now_usint_syntax_ptr_ctl(NULL,get);
+                        if(syntax_data != NULL)set_syntax_data(syntax_data,ctx);
+                    }
+                }
+            }
+            break;
         }
     }
     return 0;

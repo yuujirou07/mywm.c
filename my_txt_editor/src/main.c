@@ -368,7 +368,7 @@ int main(int argc, char *argv[])
     get_root_file_tree_data(&state.file_tree_data,now_dir);
     free(now_dir);
         
-    
+
     // 部分更新とスクロール処理から参照するsyntaxを借用ポインタとして登録する。
     now_usint_syntax_ptr_ctl(&syntax,set);
     int running = true;
@@ -392,7 +392,7 @@ int main(int argc, char *argv[])
         
 
         update_screen(&input_context);
-        if(editor_get_screen_state(&state) == edit_screen){
+        if(editor_get_screen_state(&state) == edit_screen || editor_get_screen_state(&state) == filetree_screen){
             bool show_cursor = state.is_cur_show;
             my_cur_set(&state,false);
             if(state.settings_data->built_in_syntax){
