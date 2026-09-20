@@ -22,6 +22,10 @@ static void draw_settings_screen(struct editor_input_context *ctx);
 static void draw_settings_explanation_box(struct editor_input_context *ctx);
 static int draw_settings_search_box(struct editor_input_context *ctx);
 static int draw_filetree(struct editor_input_context *ctx,file_tree_data *filetree_data);
+static void draw_filetree_items(struct editor_input_context *ctx,
+                                file_tree_data *filetree_data,
+                                struct table *table,int table_num,
+                                int layer,int *file_h);
 
 static void draw_explanation_str(const char *str,struct box box);
 // line_draw_info(): 線の向きから描画範囲・移動量・罫線文字を決める。
@@ -1105,6 +1109,50 @@ static void draw_explanation_str(const char *str,struct box box){
 }
 
 
+static void draw_filetree_items(struct editor_input_context *ctx,
+                                file_tree_data *filetree_data,
+                                struct table *table,int table_num,
+                                int layer,int *file_h){
+    struct box box = filetree_data->ft_box;
+
+    for(int i = 0;i < table_num;i++){
+        if(*file_h >= box.h - 1)return;
+
+        ft_path_open_check_data *item_data =
+            get_filetree_item_data(filetree_data,&table[i]);
+        if(item_data == NULL)return;
+
+        int y = box.pos.y + *file_h;
+        int x = box.pos.x + 1 + layer * 2;
+        item_data->indent_num = layer;
+        item_data->screen_y = y;
+
+        if(table[i].s_data.d_type == DT_DIR && x < box.pos.x + box.w){
+            mvaddstr(y,x,item_data->is_open ? "\u2304" : ">");
+        }
+
+        const char *ext_icon_code = get_file_ext_code(table[i].absolute_path,
+            &ctx->state->settings_data->icon_data);
+        if(x + 1 < box.pos.x + box.w){
+            mvaddnstr(y,x + 1,ext_icon_code,box.pos.x + box.w - x - 1);
+        }
+
+        int name_x = x + 3;
+        int name_len = box.pos.x + box.w - name_x;
+        if(name_len > 0){
+            mvaddnstr(y,name_x,table[i].s_data.d_name,name_len);
+        }
+        (*file_h)++;
+
+        if(table[i].s_data.d_type == DT_DIR && item_data->is_open){
+            if(load_child_dir(&table[i]) == 0){
+                draw_filetree_items(ctx,filetree_data,table[i].c_table,
+                                    table[i].c_table_num,layer + 1,file_h);
+            }
+        }
+    }
+}
+
 // draw_filetree(): ファイルツリーの枠を描画する。
 // 編集領域の左端はshow_filetree()が決めるため、ここでは描画だけを行う。
 // 引数: ctx=描画先ウィンドウを持つ入力context、filetree_data=枠と表示状態を持つツリー状態。
@@ -1112,7 +1160,7 @@ static void draw_explanation_str(const char *str,struct box box){
 static int draw_filetree(struct editor_input_context *ctx,file_tree_data *filetree_data){
     struct box box = filetree_data->ft_box;
 
-    if(box.w <= 2 || box.h <= 2){
+    if(box.w <= 2 || box.h <= 2 || filetree_data->root_node == NULL){
         return 0;
     }
 
@@ -1127,30 +1175,20 @@ static int draw_filetree(struct editor_input_context *ctx,file_tree_data *filetr
             ?(box.pos.x + box.w):box.pos.x;
         
         for(int i = box.pos.y;i < box.pos.y + box.h;i++){
-            mvaddch(i,box.pos.x + box.w,ACS_VLINE);
+            mvaddch(i,wall_pos_x,ACS_VLINE);
         }
     }
     else if(filetree_data->ft_side == FT_BOTTOM || filetree_data->ft_side == FT_TOP){
         //未実装   
     }
 
-    for(int h = 0;h < filetree_data->root_node->c_table_num;h++){
-        struct root_node *node = filetree_data->root_node;
-        const char *ext_icon_code = 
-            get_file_ext_code(node->c_table[h].absolute_path,
-                &ctx->state->settings_data->icon_data);
-        
-        if(node->c_table[h].s_data.d_type == DT_DIR)mvaddch(h,box.pos.x + 1,'>');
-        mvaddstr(h,box.pos.x + 2,ext_icon_code);
-        
-        int d_len = strlen(node->c_table[h].s_data.d_name);
-        if(d_len + 2> box.w - 2)d_len = box.w - 5;
-        char split_d_name[d_len + 1];
-        memcpy(split_d_name,node->c_table[h].s_data.d_name,d_len);
-        split_d_name[d_len] = '\0';
-        mvaddstr(h,box.pos.x + 4,split_d_name);
-
+    for(int i = 0;i < filetree_data->open_count_num;i++){
+        filetree_data->open_check_data[i].screen_y = -1;
     }
+
+    int file_h = 1;
+    draw_filetree_items(ctx,filetree_data,filetree_data->root_node->c_table,
+                        filetree_data->root_node->c_table_num,0,&file_h);
     
     return 0;
 }

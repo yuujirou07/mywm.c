@@ -1,10 +1,13 @@
 #include <limits.h>
 #include <ncurses.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
 #include <wctype.h>
+#include "editor_types.h"
+#include "error_log.h"
 #include "txt_editor.h"
 #include"txt_editor_syntax.h"
 
@@ -365,6 +368,10 @@ void handle_mouse(struct editor_input_context *ctx,int dir_num) {
             file_browse_screen_mouse_event(win,event,state,dir_num);
             break;
         }
+        case filetree_screen:{
+            filetree_mouse_event(ctx);
+            break;
+        }
         default:
             break;
     }
@@ -710,5 +717,31 @@ int cur_pos_push(struct pos pos, struct editor_state *state){
 // 返り値: 常に0。move()の失敗は呼び出し元へ通知しない。
 int set_cur_pos(struct editor_state *state){
     move(state->cursor.show_cur_pos_queue.y,state->cursor.show_cur_pos_queue.x);
+    return 0;
+}
+
+int filetree_mouse_event(struct editor_input_context *ctx){
+    MEVENT *ev = ctx->mouse_event;
+    struct editor_state *state = ctx->state;
+    if(ev->bstate & BUTTON1_PRESSED){
+        int x = ev->x;
+        int y = ev->y;
+
+        struct box ft_box = ctx->state->file_tree_data.ft_box;
+        if(ft_box.pos.x >= x)return 0;
+        else if(ft_box.pos.x + ft_box.w <= x)return 0;
+        if(ft_box.pos.y >= y)return 0;
+        else if(ft_box.pos.y + ft_box.h <= y)return 0;
+
+        for(int i = 0;i < state->file_tree_data.open_count_num;i++){
+            ft_path_open_check_data *item =
+                &state->file_tree_data.open_check_data[i];
+            if(item->screen_y == y && item->table_ptr->s_data.d_type == DT_DIR){
+                item->is_open = !item->is_open;
+                state->render_flags |= RENDER_EDIT_SCREEN_BASE;
+                break;
+            }
+        }
+    }
     return 0;
 }

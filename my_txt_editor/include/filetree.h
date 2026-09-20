@@ -18,17 +18,18 @@ typedef enum{
 struct ft_path_click_data;
 
 typedef struct{
-    struct dirent s_data;
-    struct box click_box;
-    struct ft_path_click_data *ft_path_click_data;
-}ft_path_click_data;
+    struct table *table_ptr;
+    bool is_open;
+    int indent_num;
+    int screen_y;
+}ft_path_open_check_data;
 
 typedef struct{
     struct box ft_search_box;
     struct box ft_box;
     struct root_node *root_node;
-    ft_path_click_data *ft_path_data;
-    int ft_path_click_data_num;
+    ft_path_open_check_data *open_check_data;
+    int open_count_num;
     bool is_show; // ファイルツリーを表示中ならtrue。編集領域を右へ寄せる幅の計算に使う。
     filetree_side ft_side;//ファイルツリーを表示する辺
 
@@ -37,6 +38,9 @@ typedef struct{
 
 
 int get_root_file_tree_data(file_tree_data *file_tree,char *path);
+
+ft_path_open_check_data *get_filetree_item_data(file_tree_data *file_tree,
+                                                struct table *table_ptr);
 
 int set_filetree_box(file_tree_data *filetree_data,struct box filetree_box);
 

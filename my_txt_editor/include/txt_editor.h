@@ -623,4 +623,6 @@ void restore_edit_screen(struct editor_state *state);
 int cur_pos_mg(struct pos mouse_pos,enum flags flags);
 void my_mvaddstr(struct pos pos,char *str);
 
+int filetree_mouse_event(struct editor_input_context *ctx);
+
 #endif
