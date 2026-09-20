@@ -42,5 +42,6 @@ void error_log_write(char *error_comment){
         memmove(error_log, error_comment,sizeof(char ) * len);
         error_log[len] = '\0';
         fputs(error_log,file);
+        fflush(file);
         return;
 }

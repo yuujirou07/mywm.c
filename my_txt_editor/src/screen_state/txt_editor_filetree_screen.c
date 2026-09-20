@@ -5,9 +5,8 @@
 
 
 int get_file_tree_data(file_tree_data *file_tree,char *path){
-    file_tree->root_node = create_tree(path,file_tree->now_search_layer_num);
+    file_tree->root_node = create_tree(path);
     if(file_tree->root_node == NULL)return -1;
-    file_tree->now_search_layer_num++;
     return 0;
 }
 
@@ -40,7 +39,7 @@ void hide_filetree(struct editor_input_context *ctx){
     struct editor_state *state = ctx->state;
 
     state->file_tree_data.is_show = false;
-    state->file_tree_data.file_tree_box = (struct box){(struct pos){0,0},0,0};
+    state->file_tree_data.ft_box = (struct box){(struct pos){0,0},0,0};
     editor_apply_write_area(state);
     editor_sync_split_line(ctx);
 
@@ -66,6 +65,6 @@ bool handle_filetree_screen_input(struct editor_input_context *ctx,wint_t ch,int
 
 
 int set_filetree_box(file_tree_data *filetree_data,struct box filetree_box){
-    filetree_data->file_tree_box = filetree_box;
+    filetree_data->ft_box = filetree_box;
     return 0;
 }

@@ -20,6 +20,7 @@
 #include "txt_editor.h"
 #include"error_log.h"
 #include"path_util.h"
+#include "txt_editor_icon.h"
 #include"txt_editor_syntax.h"
 
 
@@ -65,7 +66,6 @@ int main(int argc, char *argv[])
         }
 
     }
-
     struct editor_settings settings_data = {0};
     struct editor_state state = {0};
     struct ascii_data ascii_data = {0};
@@ -137,9 +137,8 @@ int main(int argc, char *argv[])
     state.file_browse.box.pos.x = (state.scr.scr_size.x / 2) - state.file_browse.box.w / 2;
     state.file_browse.box.pos.y = state.scr.scr_size.y / 4;
 
-    state.file_tree_data.file_tree_box = (struct box){(struct pos){0,0},0,0};
-    state.file_tree_data.file_tree_search_box = (struct box){(struct pos){0,0},0,0};
-    state.file_tree_data.now_search_layer_num = 1;
+    state.file_tree_data.ft_box = (struct box){(struct pos){0,0},0,0};
+    state.file_tree_data.ft_search_box = (struct box){(struct pos){0,0},0,0};
     state.file_tree_data.root_node = NULL;
     state.file_tree_data.is_show = false;
 
@@ -192,13 +191,15 @@ int main(int argc, char *argv[])
 
     memset(&state.write_file_name_area,0,sizeof(struct box));
 
-    state.file_browse.select_line.now_line = 0;
-    state.file_browse.select_line.previous_line = 0;
+    state.file_browse.select_line.now_line         = 0;
+    state.file_browse.select_line.previous_line    = 0;
     state.file_browse.select_line.now_logical_line = 0;
-    state.file_data.now_open_file = NULL;
-    state.file_data.is_open_file = 0;
+    state.file_data.now_open_file  = NULL;
+    state.file_data.is_open_file   = 0;
     state.file_data.file_line_start_num_counter = 0;
     state.file_data.file_line_start_num = calloc(state.settings_data->default_load_line_size, sizeof(long));
+    
+
     if(state.file_data.file_line_start_num == NULL){
         editor_free_text_buffer(&state);
         return 1;
@@ -214,6 +215,8 @@ int main(int argc, char *argv[])
         return 1;
     }
     state.jump_mode_data.jump_line_num_counter = 0;
+
+
 
     editor_set_screen_state(&state, state.settings_data->show_start_menu ? start_menu_screen : edit_screen);
     // 一覧テーブルは各エントリの名前と種別を保持する。
@@ -346,7 +349,17 @@ int main(int argc, char *argv[])
     input_context.start_menu_screen.ascii_data = &ascii_data;
     input_context.start_menu_screen.startup_start_time = startup_timer ? &startup_start_time : NULL;
     input_context.start_menu_screen.startup_log_path = startup_timer ? startuptime_log_file_path_name : NULL;
+    
 
+    
+    int load_icon_rt = 0;
+    load_icon_rt = 
+        load_icon_data("/home/yuujirou07/vscode_proj/mywm_proj/my_txt_editor/editor_settings/editor_icon_settings.json",
+                &settings_data.icon_data);
+
+    if(load_icon_rt != 0){
+        error_log("can not load icon data");
+    }
     // 部分更新とスクロール処理から参照するsyntaxを借用ポインタとして登録する。
     now_usint_syntax_ptr_ctl(&syntax,set);
     int running = true;
@@ -367,6 +380,7 @@ int main(int argc, char *argv[])
             if(running == false)break;
             continue;
         }
+        
         
         update_screen(&input_context);
         if(editor_get_screen_state(&state) == edit_screen){
@@ -425,6 +439,7 @@ static void end_process(struct editor_state *state){
         free((char *)state->settings_screen_data.item_data[i].explanation);
     }
     free(state->settings_screen_data.item_data);
+    destroy_icon_data(&state->settings_data->icon_data);
     editor_free_text_buffer(state);
 
     close_error_log_file();

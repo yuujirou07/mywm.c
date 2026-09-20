@@ -8,13 +8,21 @@
 #define FILETREE_DEFAULT_SIZE_W 10
 
 
+typedef enum{
+    FT_TOP,
+    FT_BOTTOM,
+    FT_LEFT,
+    FT_RIGHT,
+}filetree_side;
+
 
 typedef struct{
-    struct box file_tree_search_box;
-    struct box file_tree_box;
+    struct box ft_search_box;
+    struct box ft_box;
     struct root_node *root_node;
-    int now_search_layer_num;
     bool is_show; // ファイルツリーを表示中ならtrue。編集領域を右へ寄せる幅の計算に使う。
+    filetree_side ft_side;//ファイルツリーを表示する辺
+
 }file_tree_data;
 
 

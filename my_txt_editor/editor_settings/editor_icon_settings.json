@@ -1,0 +1,16 @@
+[
+    {"file_ext":".c","ext_code":"\ue61e"},
+    {"file_ext":".py","ext_code":"\ue606"},
+    {"file_ext":".cpp","ext_code":"\ue61d"},
+    {"file_ext":".cc","ext_code":"\ue61d"},
+    {"file_ext":".cp","ext_code":"\ue61d"},
+    {"file_ext":".cxx","ext_code":"\ue61d"},
+    {"file_ext":".js","ext_code":"\uf2ee"},
+    {"file_ext":".json","ext_code":"\ueb0f"},
+    {"file_ext":".lisp","ext_code":"\ue6b0"},
+    {"file_ext":".ts","ext_code":"\ue8ca"},
+    {"file_ext":".html","ext_code":"\ue736"},
+    {"file_ext":".txt","ext_code":"\uec5e"},
+    {"file_ext":".sh","ext_code":"\ue760"},
+    {"file_ext":".log","ext_code":"\uf4ed"}
+]

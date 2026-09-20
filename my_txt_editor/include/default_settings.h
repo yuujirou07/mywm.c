@@ -1,6 +1,7 @@
 #ifndef DEFALT_SETTINGS_H
 #define DEFALT_SETTINGS_H
 
+#include "txt_editor_icon.h"
 #include<ncurses.h>
 
 #define MAX_LINES    1000
@@ -47,6 +48,6 @@ struct editor_settings{
     bool use_icon;
     bool built_in_syntax;
     struct lsp_settings_data lsp;
-
+    icon_data icon_data;
 };
 #endif 

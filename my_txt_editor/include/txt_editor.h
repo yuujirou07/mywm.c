@@ -15,6 +15,9 @@
 #include "settings_screen.h"
 #include"filetree.h"
 
+
+#define SETTINGS_FILE_EXT ".json"
+
 #define startuptime_log_file_argument_num 1
 #define FDS_N 4
 #define DRAW_BOX_REQUEST_MAX 64
@@ -327,8 +330,8 @@ static inline int editor_filetree_offset(struct editor_state *state){
     if(!state->file_tree_data.is_show){
         return 0;
     }
-    int offset = state->file_tree_data.file_tree_box.pos.x +
-                 state->file_tree_data.file_tree_box.w;
+    int offset = state->file_tree_data.ft_box.pos.x +
+                 state->file_tree_data.ft_box.w;
 
     return (offset > 0) ? offset : 0;
 }
@@ -590,7 +593,6 @@ int check_dir_mem(struct dir_table *dir_table,int size);
 enum select_state get_path_state(const char *path);
 int now_input_path_open(struct editor_state *state,struct editor_input_context *ctx);
 int file_browser_show_mem_start_num(int start_num,enum flags flags);
-int get_icon(struct editor_state *state,struct dir_entry entry,wchar_t *icon);
 
 // txt_editor_func.c
 void resize_file_browser(struct editor_state *state);

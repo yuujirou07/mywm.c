@@ -6,10 +6,12 @@
 #include <string.h>
 #include <wchar.h>
 #include "filetree.h"
+#include "ftj.h"
 #include "settings_screen.h"
 #include "txt_editor.h"
 #include"txt_editor_syntax.h"
 #include"error_log.h"
+#include"txt_editor_icon.h"
 
 #define SETTINGS_EXPLATAION_BOX_MIN_W 12
 
@@ -339,9 +341,11 @@ void draw_box_inside_dir(struct editor_state *state,struct dir_entry *table){
         int draw_x = state->file_browse.area.pos.x + 3;
         int len = (int)strlen(entry->name);
 
-        wchar_t icon_code[2];
-        get_icon(state,*entry,&icon_code[0]);
-        mvaddwstr(draw_y,draw_x - 2,icon_code);
+        
+        const char *icon_code = 
+            get_file_ext_code(entry->name,&state->settings_data->icon_data);
+        
+        mvaddstr(draw_y,draw_x - 2,icon_code);
         if(len <= max_len){
             mvaddstr(draw_y, draw_x, entry->name);
         }
@@ -1106,7 +1110,7 @@ static void draw_explanation_str(const char *str,struct box box){
 // 引数: ctx=描画先ウィンドウを持つ入力context、filetree_data=枠と表示状態を持つツリー状態。
 // 返り値: 常に0。
 static int draw_filetree(struct editor_input_context *ctx,file_tree_data *filetree_data){
-    struct box box = filetree_data->file_tree_box;
+    struct box box = filetree_data->ft_box;
 
     if(box.w <= 2 || box.h <= 2){
         return 0;
@@ -1115,8 +1119,32 @@ static int draw_filetree(struct editor_input_context *ctx,file_tree_data *filetr
     // ツリーは編集画面の上に重ねるため、内側に残った編集画面の罫線や
     // 行番号を消してから枠を描く。
     for(int y = box.pos.y + 1;y < box.pos.y + box.h - 1;y++){
-        mvhline(y,box.pos.x + 1,' ',box.w - 2);
+        mvhline(y,box.pos.x,' ',box.w);
     }
-    draw_box(box,ctx->win);
+    filetree_data->ft_side = FT_LEFT;
+    if(filetree_data->ft_side == FT_LEFT || filetree_data->ft_side == FT_RIGHT){
+        int wall_pos_x = (filetree_data->ft_side == FT_LEFT)
+            ?(box.pos.x + box.w):box.pos.x;
+        
+        for(int i = box.pos.y;i < box.pos.y + box.h;i++){
+            mvaddch(i,box.pos.x + box.w,ACS_VLINE);
+        }
+    }
+    else if(filetree_data->ft_side == FT_BOTTOM || filetree_data->ft_side == FT_TOP){
+        //未実装   
+    }
+
+    for(int h = 0;h < filetree_data->root_node->c_table_num;h++){
+        struct root_node *node = filetree_data->root_node;
+        const char *ext_icon_code = 
+            get_file_ext_code(node->c_table[h].s_data.d_name,
+                &ctx->state->settings_data->icon_data);
+        
+        mvaddstr(h,box.pos.x + 1,"\u2304");
+        mvaddstr(h,box.pos.x + 2,ext_icon_code);
+        mvaddstr(h,box.pos.x + 4,node->c_table[h].s_data.d_name);
+
+    }
+    
     return 0;
 }
