@@ -1137,12 +1137,18 @@ static int draw_filetree(struct editor_input_context *ctx,file_tree_data *filetr
     for(int h = 0;h < filetree_data->root_node->c_table_num;h++){
         struct root_node *node = filetree_data->root_node;
         const char *ext_icon_code = 
-            get_file_ext_code(node->c_table[h].s_data.d_name,
+            get_file_ext_code(node->c_table[h].absolute_path,
                 &ctx->state->settings_data->icon_data);
         
-        mvaddstr(h,box.pos.x + 1,"\u2304");
+        if(node->c_table[h].s_data.d_type == DT_DIR)mvaddch(h,box.pos.x + 1,'>');
         mvaddstr(h,box.pos.x + 2,ext_icon_code);
-        mvaddstr(h,box.pos.x + 4,node->c_table[h].s_data.d_name);
+        
+        int d_len = strlen(node->c_table[h].s_data.d_name);
+        if(d_len + 2> box.w - 2)d_len = box.w - 5;
+        char split_d_name[d_len + 1];
+        memcpy(split_d_name,node->c_table[h].s_data.d_name,d_len);
+        split_d_name[d_len] = '\0';
+        mvaddstr(h,box.pos.x + 4,split_d_name);
 
     }
     

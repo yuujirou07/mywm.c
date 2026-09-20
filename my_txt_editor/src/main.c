@@ -142,6 +142,7 @@ int main(int argc, char *argv[])
     state.file_tree_data.root_node = NULL;
     state.file_tree_data.is_show = false;
 
+
     my_cur_set(&state,true);
     raw();
     scrollok(win, TRUE);
@@ -360,6 +361,14 @@ int main(int argc, char *argv[])
     if(load_icon_rt != 0){
         error_log("can not load icon data");
     }
+
+
+
+     char *now_dir = getcwd(NULL,0);
+    get_root_file_tree_data(&state.file_tree_data,now_dir);
+    free(now_dir);
+        
+    
     // 部分更新とスクロール処理から参照するsyntaxを借用ポインタとして登録する。
     now_usint_syntax_ptr_ctl(&syntax,set);
     int running = true;
@@ -381,7 +390,7 @@ int main(int argc, char *argv[])
             continue;
         }
         
-        
+
         update_screen(&input_context);
         if(editor_get_screen_state(&state) == edit_screen){
             bool show_cursor = state.is_cur_show;

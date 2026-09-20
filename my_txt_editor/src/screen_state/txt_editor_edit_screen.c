@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <wctype.h>
+#include<unistd.h>
 #include "filetree.h"
 #include "txt_editor.h"
 #include "txt_editor_syntax.h"
@@ -53,7 +54,6 @@ bool handle_edit_screen_input(struct editor_input_context *ctx, int input_result
     }
     else if(ch == CTRL('n')){
         editor_set_screen_state(state,filetree_screen);
-        get_file_tree_data(&state->file_tree_data,"/");
         // 編集領域をツリーの幅だけ右へ寄せる。
         show_filetree(ctx);
     }

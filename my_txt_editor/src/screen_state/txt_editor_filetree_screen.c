@@ -1,12 +1,15 @@
 
+#include<stdlib.h>
+#include "editor_types.h"
+#include "error_log.h"
+#include "filetree.h"
 #include "ftj.h"
 #include "txt_editor.h"
 
 
 
-int get_file_tree_data(file_tree_data *file_tree,char *path){
+int get_root_file_tree_data(file_tree_data *file_tree,char *path){
     file_tree->root_node = create_tree(path);
-    if(file_tree->root_node == NULL)return -1;
     return 0;
 }
 
