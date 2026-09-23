@@ -4,8 +4,28 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "codepoint_comb.h"
 #include "pty_make.h"
+
+static int utf8_decode(const unsigned char *s, int max_len, int *out_cp)
+{
+	if (max_len <= 0) { *out_cp = 0; return 0; }
+	unsigned char c = s[0];
+	int need;
+	int cp;
+	if (c < 0x80) { *out_cp = c; return 1; }
+	if ((c & 0xE0) == 0xC0) { need = 1; cp = c & 0x1F; }
+	else if ((c & 0xF0) == 0xE0) { need = 2; cp = c & 0x0F; }
+	else if ((c & 0xF8) == 0xF0) { need = 3; cp = c & 0x07; }
+	else { *out_cp = c; return 1; }
+	if (need >= max_len) { *out_cp = c; return 1; }
+	for (int i = 1; i <= need; i++) {
+		if ((s[i] & 0xC0) != 0x80) { *out_cp = c; return 1; }
+		cp = (cp << 6) | (s[i] & 0x3F);
+	}
+	*out_cp = cp;
+	return need + 1;
+}
+
 //文字セットを保存している関数ポインタを返すので書き換えることができる
 static enum chr_set *chr_data(bool num);
 
@@ -835,7 +855,7 @@ void osc_mode(char *buff, struct term_context *ctx, char *osc_pal_chr){
 			if (new_win_title != NULL) {
 				new_win_title = strchr(new_win_title, '~');
 				if (new_win_title != NULL) {
-					glfwSetWindowTitle(ctx->window, new_win_title);
+					SetWindowTitle(new_win_title);
 				}
 			}
 			break;
@@ -892,7 +912,7 @@ void osc_mode(char *buff, struct term_context *ctx, char *osc_pal_chr){
 		case 52:{
 			char *decode_result = base64_decoder(osc_pal_chr);
 			if (decode_result == NULL) break;
-			glfwSetClipboardString(ctx->window, decode_result);
+			SetClipboardText(decode_result);
 			free(decode_result);
 			break;
 		}

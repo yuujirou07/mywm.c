@@ -1,7 +1,7 @@
 #ifndef PTY_MAKE_H
 #define PTY_MAKE_H
 
-#include <GLFW/glfw3.h>
+#include <raylib.h>
 #include <stdbool.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -14,7 +14,6 @@
 #include <sys/ioctl.h>
 #include <sys/epoll.h>
 #include <sys/wait.h>
-#include<vulkan/vulkan.h>
 
 enum cur_allow_mode{
 	AP_MODE,
@@ -22,23 +21,6 @@ enum cur_allow_mode{
 };
 
 
-
-// raylibのColor型の代替（同じレイアウト・値で定義し、移行時の見た目を変えない）
-typedef struct Color {
-	unsigned char r;
-	unsigned char g;
-	unsigned char b;
-	unsigned char a;
-} Color;
-
-#define WHITE   (Color){255, 255, 255, 255}
-#define BLACK   (Color){0, 0, 0, 255}
-#define RED     (Color){230, 41, 55, 255}
-#define GREEN   (Color){0, 228, 48, 255}
-#define YELLOW  (Color){253, 249, 0, 255}
-#define BLUE    (Color){0, 121, 241, 255}
-#define MAGENTA (Color){255, 0, 255, 255}
-#define SKYBLUE (Color){102, 191, 255, 255}
 
 struct pos {
 	int w;
@@ -184,14 +166,10 @@ struct term_context {
 
 	int *palms;
 	int *palms_counter;
-	int *term_cell_alloc_size;
 	int total_cells;
 	int master_fd;
-	GLFWwindow *window; // クリップボード操作(glfwSetClipboardString等)に使用
 	int cell_w;
 	int cell_h;
-	float display_scale;
-	int render_scale;
 	bool paste_mode;
 	bool insert_mode;
 	bool kbd_insert_mode;
@@ -233,8 +211,6 @@ struct csi_data csi_mode_pal_parse(char *buff, int *i, int size);
 enum parse_state buff_state_check(char buff, enum parse_state now_state);
 
 void cur_allow_write(enum cur_allow_mode mode, int master_fd, int key_code);
-void window_resized_update_memb(GLFWwindow *window, struct pos *screen_pixel, struct pos *term_size, struct term_context *ctx);
-void reflow_terminal_text(struct term_context *ctx, struct pos old_term_size, struct term_cell **temp_term_cell, int term_cell_alloc_size);
 void unicode_utf8_encoder(char *utf8,int unicode, int *len);
 void erase_chr(struct term_context *ctx,int n);
 void char_arry_insert_chr(struct term_context *ctx,int n);

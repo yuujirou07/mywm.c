@@ -1,8 +1,7 @@
-#include <GLFW/glfw3.h>
 #include <fcntl.h>
 #include <limits.h>
-#include <ncurses.h>
 #include <pty.h>
+#include <raylib.h>
 #include <signal.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -16,43 +15,20 @@
 #include <sys/epoll.h>
 #include <errno.h>
 #include <sys/wait.h>
-#include <vulkan/vulkan.h>
 #include "mouse_io.h"
-#include "vulkan_mywrap.h"
-#include "vulkan_otf_draw.h"
+#include "pty_drawing.h"
 #include "keybord.h"
 #include "error_log_output.h"
 #include "pty_make.h"
-#include "codepoint_comb.h"
 
 #define ESC_PAL_MAX 32
 #define cur_font_load_max 32
 #define EVENT_WAIT_MAX 16
-#define DEFAULT_SCREEN_SIZE_W 500
-#define DEFAULT_SCREEN_SIZE_H 500
 #define DEFAULT_KEY_REPEAT_INTERVAL 0.5
 #define DEFAULT_CUR_BLINK_RESTART_TIMEOUT_SEC 0.6
 
 
 
-// =====================================================================
-// main(): プログラム全体の流れ
-//   1. GLFW + Vulkan でウィンドウを初期化し、フレームバッファの物理ピクセル
-//      サイズと文字セルのサイズ(cell_w/cell_h)からターミナルの行数・列数
-//      (term_size)を計算する
-//   2. openpty() で疑似端末(pty)を確保し、fork() した子プロセスの
-//      標準入出力をpty(スレーブ側)に繋ぎ替えて bash -i を起動する
-//   3. 親プロセスはpty(マスター側)の読み込みを epoll + ノンブロッキング
-//      I/O で監視し、GLFWのイベントループ内でbashからの出力を
-//      bash_str_parse() に渡してターミナル画面の状態(term_cell配列、
-//      カーソル位置など)を更新する
-//   4. ウィンドウサイズの変化を検出したら(0.1秒のデバウンス後)、
-//      スワップチェーンとterm_sizeを再計算し、必要ならバッファを
-//      再確保してreflow_terminal_text()で表示内容を組み直す
-//   5. 画面内容が更新された(dirty)場合のみ、term_cellの内容をCPU側で
-//      ピクセルに変換してステージングバッファへ書き込み、Vulkanで
-//      スワップチェーン画像へコピー・提示(present)する
-// =====================================================================
 int main(void) {
 	int master_fd, slave_fd;
 	int total;
@@ -66,31 +42,19 @@ int main(void) {
 
 	char slavename[256];
 
-	// [AI生成] フォント読み込みは未実装のため、セルの実寸は暫定値を使う
-	int cell_w = 8;
-	int cell_h = 16;
-	float content_scale_x = 1.0f;
-	float content_scale_y = 1.0f;
+	int cell_w;
+	int cell_h;
 
-	// ウィンドウ・Vulkanの初期化（screen_pixelの取得に必要なため、ptyのセットアップより先に行う）
-	if(window_init(&wd))
-	{
+	if(window_init()) {
 		error_log_write("window init error");
-		exit(1);
+		return 1;
 	}
-	glfwSetWindowUserPointer(wd.window,&wd);
-	set_kbd_callback(&wd);
-	glfwSetWindowSizeCallback(wd.window, window_size_callback);
-
-	init_mouse(&wd);
-
-
-	// HIGHDPI環境でぼやけるのを防ぐため、論理サイズではなく実際の物理ピクセルサイズを取得する
-	glfwGetFramebufferSize(wd.window, &screen_pixel.w, &screen_pixel.h);
-	glfwGetWindowContentScale(wd.window, &content_scale_x, &content_scale_y);
-
-	term_size.w = (int)((float)screen_pixel.w / content_scale_x) / cell_w;
-	term_size.h = (int)((float)screen_pixel.h / content_scale_y) / cell_h;
+	cell_w = MeasureText("M", TERMINAL_FONT_SIZE);
+	cell_h = TERMINAL_FONT_SIZE;
+    EnableEventWaiting();
+	screen_pixel = (struct pos){GetScreenWidth(), GetScreenHeight()};
+	term_size.w = screen_pixel.w / cell_w;
+	term_size.h = screen_pixel.h / cell_h;
 	if (term_size.w < 1) term_size.w = 1;
 	if (term_size.h < 1) term_size.h = 1;
 	total = term_size.w * term_size.h;
@@ -112,7 +76,7 @@ int main(void) {
 		exit(EXIT_FAILURE);
 	}
 
-	if(tcsetattr(slave_fd, TCSANOW, &term)!=0){ // 設定を即時反映
+	if(term_ptr && tcsetattr(slave_fd, TCSANOW, term_ptr)!=0){ // 設定を即時反映
 		char error_log[128];
 		snprintf(error_log,sizeof(char)*128,"tcsetattr error log=%d: %s\n",errno,strerror(errno));
 		error_log_write(error_log);
@@ -183,27 +147,20 @@ int main(void) {
 		error_log_write("epoll_ctl faild code");
 		return 1;
 	}
-	// 変数の初期化
-	// term_cell_alloc_size: term_cell/alt_term_cell/read_bufなどの確保サイズ(セル数)。
-	// 最初から total の4倍を確保しておき、リサイズ時に必要ならさらに2倍ずつ拡張する。
+	// PTY出力を一度に読むバッファ。
 	int term_cell_alloc_size=total*4;
 	int result=0;
 	int nfds = 0;
 	ssize_t buf_size = 0;
 
 	struct cur_mgr *cur_mg = NULL;
-	struct term_context ctx;
-	struct term_cell *temp_term_cell = NULL;
+	struct term_context ctx = {0};
 	struct line_info *lines = NULL;
 	struct setting_data setting_data;
-	struct pos old_term_cell_size = term_size;
 
-	double last_resize_time = 0;
 	char *read_buf = NULL;
-	bool dirty = true;
 
 	read_buf      = malloc(term_cell_alloc_size);
-	temp_term_cell= calloc(term_cell_alloc_size,sizeof(struct term_cell));
 	lines         = calloc(term_size.h,sizeof(struct line_info));
 	cur_mg        = calloc(1,sizeof(struct cur_mgr));
 
@@ -213,29 +170,31 @@ int main(void) {
 	// パーサの状態(bash_parser_required_memb)などをここに集約する。
 	ctx.term_cell            = calloc(term_cell_alloc_size, sizeof(struct term_cell));
 	ctx.alt_term_cell        = NULL;
-	ctx.cur                  = malloc(sizeof(struct cursor));
-	ctx.save_cur             = malloc(sizeof(struct cursor));
+	ctx.cur                  = calloc(1, sizeof(struct cursor));
+	ctx.save_cur             = calloc(1, sizeof(struct cursor));
 	ctx.term_size            = term_size;
 	ctx.palms                = malloc(sizeof(int) * 16);
 	ctx.palms_counter        = malloc(sizeof(int));
-	*ctx.palms_counter       = 0;
 	ctx.paste_mode           = false;
 	ctx.abs_path_name        = NULL;
 	ctx.total_cells          = total;
 	ctx.insert_mode          = false;
 	ctx.lines                = lines;
 	ctx.master_fd            = master_fd;
-	ctx.window               = wd.window;
-	ctx.term_cell_alloc_size = &term_cell_alloc_size;
+	ctx.bash_pid             = pid_id;
 	ctx.kbd_insert_mode      = false;
 	ctx.cell_w               = cell_w;
 	ctx.cell_h               = cell_h;
-	ctx.display_scale        = content_scale_x;
-	ctx.render_scale         = (int)(content_scale_x + 0.5f);
-	if (ctx.render_scale < 1) ctx.render_scale = 1;
+	if (!read_buf || !lines || !cur_mg ||
+		!ctx.term_cell || !ctx.cur || !ctx.save_cur || !ctx.palms || !ctx.palms_counter) {
+		result = 1;
+		goto cleanup;
+	}
+	*ctx.palms_counter = 0;
 
 	// カーソル初期化
 	ctx.cur->shape = malloc(2);
+	if (!ctx.cur->shape) { result = 1; goto cleanup; }
 	ctx.cur->lighting.blinking = true;
 	ctx.cur->lighting.speed_ms = 500;
 	ctx.cur->lighting.now_right = 0;
@@ -267,16 +226,7 @@ int main(void) {
 	ctx.cur->allow_mode = NORMAL_MODE;
 
 	wd.master_fd = master_fd;
-	wd.nfds = &nfds;
 	wd.ctx = &ctx;
-	wd.kbd_data.clip_bord_chr =NULL;;
-	wd.kbd_data.epoll = epoll_list;
-	wd.kbd_data.write_buff_overflow = false;
-	wd.kbd_data.master_fd_ev_poll = &master_fd_ev_poll;
-	wd.kbd_data.epoll_fd_list = &epoll_fd_list;
-	wd.kbd_data.cftl_c_sig_counter = 0;
-	wd.mouce_data.mouce_button_left_down = false;
-	wd.dirty = &dirty;
 
 	wd.copy_data.copy_cell_counter = 0;
 	wd.copy_data.copy_cell_idx_data.start_idx = 0;
@@ -286,6 +236,10 @@ int main(void) {
 	wd.copy_data.copy_cell = calloc(total,sizeof(struct term_cell *));
 	wd.copy_data.copy_cell_orig_bg = calloc(total,sizeof(Color));
 	wd.copy_data.copy_cell_orig_fg = calloc(total,sizeof(Color));
+	if (!wd.copy_data.copy_cell || !wd.copy_data.copy_cell_orig_bg || !wd.copy_data.copy_cell_orig_fg) {
+		result = 1;
+		goto cleanup;
+	}
 
 	memset(&ctx.fixrd_cur_scr_range,0,sizeof(struct margin));
 
@@ -300,82 +254,44 @@ int main(void) {
 	load_cur_font(cur_mg);
 	cur_font_set(ctx.cur, cur_mg, 1);
 
-	// OTFフォントから全ASCII印刷可能文字のグリフをキャッシュする
-	{
-		struct pos font_size = {cell_w, cell_h};
-		if (load_otf_glyphs("/home/yuujirou07/myfont.otf", font_size,
-												wd.glyphs, &wd.font_ascender) != 0) {
-			error_log_write("フォントグリフの読み込みに失敗しました");
-		}
-	}
+	while (!WindowShouldClose() && !wd.should_close) {
+		process_keyboard(&wd);
+		if (wd.should_close) break;
+		process_mouse(&wd);
 
-	// glfwGetWindowMonitor()はフルスクリーン時しかモニタを返さず、ウィンドウモードでは
-	// 必ずNULLになるためプライマリモニタから取得する。
-	// リフレッシュレートが取れない環境(Wayland等でrefreshRate=0)でも起動は続行し、
-	// epoll_waitの待ち時間は従来値の4msにフォールバックする。
-	GLFWmonitor *monitor = glfwGetPrimaryMonitor();
-	const GLFWvidmode *mode = (monitor != NULL) ? glfwGetVideoMode(monitor) : NULL;
-	int wait_time_ms = 4;
-	if (mode != NULL && mode->refreshRate > 0) {
-		wait_time_ms = 1000 / mode->refreshRate;
-		if (wait_time_ms < 1) wait_time_ms = 1;
-	} else {
-		error_log_write("リフレッシュレートを取得できないため待ち時間を4msに設定しました");
-	}
-	// ===== メインループ =====
-	// 1フレームごとに「入力イベント処理」→「PTY出力の読み取り・パース」→
-	// 「カーソル点滅/リサイズ処理」→「必要なら再描画」を行う。
-	while (!glfwWindowShouldClose(wd.window)){
-		glfwWaitEventsTimeout(wait_time_ms / 1000.0);
-
-		// master_fd(bashの出力)が読めるかどうかを最大1msだけ待って確認する
-		nfds = epoll_wait(epoll_fd_list,epoll_list,EVENT_WAIT_MAX,wait_time_ms);
-
-		while(nfds>0){
-			for(int i=0;i<nfds;i++){
-				//もしfdがmaster_fdだったら
-				if(((struct clientinfo *)epoll_list[i].data.ptr)->fd!=master_fd)
-					continue;
-				if((epoll_list[i].events & EPOLLIN)==false)
+		nfds = epoll_wait(epoll_fd_list, epoll_list, EVENT_WAIT_MAX, 0);
+		for (int i = 0; i < nfds; i++) {
+			if (((struct clientinfo *)epoll_list[i].data.ptr)->fd != master_fd)
+				continue;
+			if (!(epoll_list[i].events & (EPOLLIN | EPOLLHUP | EPOLLERR)))
+				continue;
+			// 大量出力中も入力・描画へ戻る。
+			for (int batch = 0; batch < 64; batch++) {
+				buf_size = read(master_fd, read_buf, term_cell_alloc_size - 1);
+				if (buf_size > 0) {
+					bash_str_parse(read_buf, buf_size, &ctx);
+				} else if (buf_size == 0 || (buf_size < 0 && errno == EIO)) {
+					wd.should_close = true;
 					break;
-
-				// 読めるデータがなくなる(EAGAIN)まで読み続け、その都度パースする
-				while (1){
-					buf_size = read(master_fd, read_buf, term_cell_alloc_size - 1);
-					if (buf_size > 0){
-						// bashからの出力(プレーンテキスト+ANSIエスケープシーケンス)を
-						// 解析し、term_cell配列(画面の文字セル)とカーソル状態を更新する
-						bash_str_parse(read_buf, buf_size, &ctx);
-						dirty = true;
-					}
-					else if(buf_size==0)break;
-					else if (buf_size == -1){
-						// -1 の場合は errno を確認する
-						if (errno == EAGAIN || errno == EWOULDBLOCK){
-							// 受信バッファが空になったので、正常に読み取りループを抜ける
-							break;
-						}
-						else{
-							// それ以外の本当のエラー
-							error_log_write("read error");
-							return 1;
-						}
-					}
+				} else if (errno == EAGAIN || errno == EWOULDBLOCK) {
+					break;
+				} else if (errno != EINTR) {
+					error_log_write("read error");
+					result = 1;
+					wd.should_close = true;
+					break;
 				}
 			}
-			// 直後に追加された出力があれば同じフレームで処理する
-			nfds = epoll_wait(epoll_fd_list,epoll_list,EVENT_WAIT_MAX,wait_time_ms);
 		}
-
 		////マウスカーソル点滅再開処理//////
 		// 文字を書き込んだ直後はカーソルの点滅を一時停止し、一定時間
 		// (cursor_blink_restart_timeout_seconds)経過したら点滅を再開する。
 		// これによりタイプ中はカーソルが常に表示され続け、見失いにくくなる。
 		if( ctx.cur->now_writing == true){
 			if(ctx.cur->writing_st_time <= 0)
-				ctx.cur->writing_st_time = glfwGetTime();
+				ctx.cur->writing_st_time = GetTime();
 
-			ctx.cur->writing_end_time = glfwGetTime();
+			ctx.cur->writing_end_time = GetTime();
 
 			if(ctx.cur->writing_end_time - ctx.cur->writing_st_time < setting_data.cursor_blink_restart_timeout_seconds)
 				goto CUR_RIGTHING_END_POINT;
@@ -390,303 +306,33 @@ int main(void) {
 
 
 
-		// リサイズ検知はwindow_size_callback()からのイベント通知(resize_event_pending)に
-		// 一本化し、毎フレームのglfwGetFramebufferSize()による問い合わせ(ポーリング)は行わない。
-		if (wd.resize_event_pending || wd.font_size_changed) {
-			wd.resize_event_pending = false;
-			last_resize_time = glfwGetTime();
-			wd.font_size_changed = false;
-
-			int current_width, current_height;
-			glfwGetFramebufferSize(wd.window, &current_width, &current_height);
-
-			// ドラッグ中も滑らかに追従させるため、軽い処理だけ毎フレーム行う:
-			// スワップチェーンを即再作成してrenderExtentを新サイズへ合わせ、再描画フラグを立てる。
-			// 重いterm_size再計算/reflow/reallocは下のデバウンス処理に残し、ドラッグ確定時に一度だけ実行する。
-			// (最小化等でサイズが0の間は再作成しない)
-			if (current_width > 0 && current_height > 0) {
-				recreate_swapchain(&wd);
-				dirty = true;
-			}
-		}
-
-		//リサイズ処理（デバウンス: 0.1秒間リサイズが止まってから実行）
-		// ウィンドウサイズ変更中は何度もイベントが発生するため、最後の変更から
-		// 0.1秒操作が無いことを確認してから一度だけ実際のリサイズ処理を行う。
-		// 処理内容: ① スワップチェーン再作成 → ② 新しいterm_size計算 →
-		// ③ pty(TIOCSWINSZ)とbashプロセス(SIGWINCH)へサイズ変更を通知 →
-		// ④ 必要ならセルバッファを拡張 → ⑤ reflow_terminal_textで表示内容を再配置
-
-
-		if(last_resize_time > 0 && glfwGetTime() - last_resize_time > 0.1){
-			old_term_cell_size = term_size;
-
-			// スワップチェーンは上のサイズ変更検知時に毎フレーム即再作成済みのため、
-			// ここではrenderExtentが既に確定している。再作成は行わない。
-
-			// display_scale / render_scale を更新（別モニター対応）
-			float xscale = 1.0f;
-			glfwGetWindowContentScale(wd.window, &xscale, NULL);
-			ctx.display_scale = xscale;
-			ctx.render_scale = (int)(xscale + 0.5f);
-			if (ctx.render_scale < 1) ctx.render_scale = 1;
-
-			// 確定したrenderExtentからterm_sizeを計算
-			screen_pixel.w = (int)wd.renderExtent.width;
-			screen_pixel.h = (int)wd.renderExtent.height;
-			term_size.w = screen_pixel.w / ctx.cell_w;
-			term_size.h = screen_pixel.h / ctx.cell_h;
-			if (term_size.w < 1) term_size.w = 1;
-			if (term_size.h < 1) term_size.h = 1;
-
-			total=term_size.h*term_size.w;
-			ctx.term_size=term_size;
-			ctx.total_cells=total;
-
-			// term_cellの再確保でポインタが移動する/セル数が変わるため、
-			// マウス選択状態とそれに対応するバッファも作り直す
-			wd.copy_data.copy_cell_counter = 0;
-			wd.copy_data.copy_cell = realloc(wd.copy_data.copy_cell, sizeof(struct term_cell *) * total);
-			wd.copy_data.copy_cell_orig_bg = realloc(wd.copy_data.copy_cell_orig_bg, sizeof(Color) * total);
-			wd.copy_data.copy_cell_orig_fg = realloc(wd.copy_data.copy_cell_orig_fg, sizeof(Color) * total);
-			memset(wd.copy_data.copy_cell, 0, sizeof(struct term_cell *) * total);
-			wd.copy_data.copy_cell_idx_data.start_idx_block = false;
-
-			ws.ws_col = term_size.w;
-			ws.ws_row = term_size.h;
-			ws.ws_xpixel = (unsigned short)screen_pixel.w;
-			ws.ws_ypixel = (unsigned short)screen_pixel.h;
-
-			ioctl(master_fd, TIOCSWINSZ, &ws);
-			kill(pid_id, SIGWINCH);
-
-			// セル数が現在の確保サイズを超えた場合、必要なサイズになるまで2倍ずつ
-			// 拡張し、term_cell/alt_term_cell/temp_term_cell/read_bufを再確保する
-			if(total>term_cell_alloc_size){
-				int old_alloc_size = term_cell_alloc_size;
-
-				while(total>term_cell_alloc_size){
-					term_cell_alloc_size*=2;
-				}
-				char *read_buff_temp = calloc(term_cell_alloc_size,sizeof(char));
-				struct term_cell *main_term_cell_temp = realloc(ctx.term_cell,sizeof(struct term_cell)*term_cell_alloc_size);
-				struct term_cell *temp_temp_term_cell=calloc(term_cell_alloc_size,sizeof(struct term_cell));
-				struct term_cell *temp_alt_term_cell = calloc(term_cell_alloc_size,sizeof(struct term_cell));
-
-				if(read_buff_temp==NULL || main_term_cell_temp==NULL || temp_temp_term_cell==NULL || temp_alt_term_cell==NULL){
-					char buff[128];
-					snprintf(buff,128,"read buff or main_term_cell_temp realloc error code=%d\n",errno);
-					error_log_write(buff);
-					free(read_buf);
-					return 1;
-				}
-
-				memcpy(read_buff_temp,read_buf,old_alloc_size);
-				memset(read_buff_temp + old_alloc_size, 0, term_cell_alloc_size - old_alloc_size);
-
-				ctx.term_cell=main_term_cell_temp;
-				if(temp_term_cell!=NULL){
-					free(temp_term_cell);
-				}
-				if(ctx.alt_term_cell!=NULL){
-					free(ctx.alt_term_cell);
-				}
-				ctx.alt_term_cell=temp_alt_term_cell;
-				temp_term_cell=temp_temp_term_cell;
-
-				for(int i=old_alloc_size;i<term_cell_alloc_size;i++){
-					ctx.term_cell[i].bg_color=ctx.bash_parser_required_memb.now_bg_color;
-					ctx.term_cell[i].fg_color=ctx.bash_parser_required_memb.now_fg_color;
-					ctx.term_cell[i].character=' ';
-					ctx.term_cell[i].is_bold=false;
-					ctx.term_cell[i].is_real_chr=false;
-				}
-
-				free(read_buf);
-				read_buf = read_buff_temp;
-			}
-
-			// 古いterm_size(old_term_cell_size)の内容を新しいterm_sizeに合わせて
-			// 詰め直す（行の折り返し位置を再計算しつつ文字を移し替える）
-			reflow_terminal_text(&ctx, old_term_cell_size, &temp_term_cell, term_cell_alloc_size);
-
-			struct line_info *new_lines = calloc(term_size.h, sizeof(struct line_info));
-			if (new_lines != NULL) {
-				free(ctx.lines);
-				ctx.lines = new_lines;
-			}
-
-			dirty = true;
-			last_resize_time = 0;
-		}
-
-
-		// dirty(画面内容が更新された)時だけ描画する。Vulkanでは
-		// term_cell配列の内容をCPU側でピクセル(BGRA)に変換してステージング
-		// バッファへ書き込み、それをスワップチェーン画像にコピーして提示する。
-		if(dirty){
-			// recreate_swapchain()がステージングバッファの再確保に失敗していると
-			// stagingMappedがNULLのままになり、commandBuffersも解放済みで無効。
-			// 次のリサイズで再作成が成功するまで、このフレームの描画は諦めて待つ。
-			if (wd.stagingMapped == NULL) {
-				goto FRAME_END;
-			}
-
-			// 前のフレームが完全に終わるのをCPU側で待つ
-				// 第2引数の TRUE は「フェンスがシグナル状態になるまで待つ」という意味
-				// 最後の引数はタイムアウト時間（UINT64_MAX = 無限に待つ）
-				vkWaitForFences(wd.device, 1, &wd.inFlightFence, VK_TRUE, UINT64_MAX);
-				// 次のフレームのために、フェンスを非シグナル状態（未完了）にリセットしておく
-				vkResetFences(wd.device, 1, &wd.inFlightFence);
-
-				uint32_t imageIndex;
-				VkResult acquireResult = vkAcquireNextImageKHR(wd.device, wd.swapchain, UINT64_MAX,
-						wd.imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
-				if (acquireResult == VK_ERROR_OUT_OF_DATE_KHR) {
-						recreate_swapchain(&wd);
-						dirty = true;
-						goto FRAME_END;
-				} else if (acquireResult != VK_SUCCESS && acquireResult != VK_SUBOPTIMAL_KHR) {
-						fprintf(stderr, "vkAcquireNextImageKHR に失敗しました: %d\n", acquireResult);
-						break;
-				}
-
-				VkCommandBuffer commandBuffer = wd.commandBuffers[imageIndex];
-
-				// CPUでterm_cellをBGRAピクセルとしてステージングバッファに描画
-				render_cells_to_buffer(&wd);
-
-				// コマンドバッファの録音開始
-				vkResetCommandBuffer(commandBuffer, 0);
-				VkCommandBufferBeginInfo beginInfo = {0};
-				beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-				vkBeginCommandBuffer(commandBuffer, &beginInfo);
-
-				//UNDEFINED → TRANSFER_DST_OPTIMAL
-				VkImageMemoryBarrier toTransferDst = {0};
-				toTransferDst.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-				toTransferDst.oldLayout           = VK_IMAGE_LAYOUT_UNDEFINED;
-				toTransferDst.newLayout           = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-				toTransferDst.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-				toTransferDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-				toTransferDst.image               = wd.swapchainImages[imageIndex];
-				toTransferDst.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-				toTransferDst.subresourceRange.levelCount = 1;
-				toTransferDst.subresourceRange.layerCount = 1;
-				toTransferDst.srcAccessMask       = 0;
-				toTransferDst.dstAccessMask       = VK_ACCESS_TRANSFER_WRITE_BIT;
-				vkCmdPipelineBarrier(commandBuffer,
-						VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-						0, 0, NULL, 0, NULL, 1, &toTransferDst);
-
-				// ステージングバッファ → スワップチェーン画像へコピー
-				VkBufferImageCopy region = {0};
-				region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-				region.imageSubresource.layerCount = 1;
-				region.imageExtent.width           = wd.chosenExtent.width;
-				region.imageExtent.height          = wd.chosenExtent.height;
-				region.imageExtent.depth           = 1;
-				vkCmdCopyBufferToImage(commandBuffer, wd.stagingBuffer,
-						wd.swapchainImages[imageIndex],
-						VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-
-				// バリア②: TRANSFER_DST_OPTIMAL → PRESENT_SRC_KHR
-				VkImageMemoryBarrier toPresent = {0};
-				toPresent.sType               = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-				toPresent.oldLayout           = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-				toPresent.newLayout           = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-				toPresent.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-				toPresent.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-				toPresent.image               = wd.swapchainImages[imageIndex];
-				toPresent.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-				toPresent.subresourceRange.levelCount = 1;
-				toPresent.subresourceRange.layerCount = 1;
-				toPresent.srcAccessMask       = VK_ACCESS_TRANSFER_WRITE_BIT;
-				toPresent.dstAccessMask       = 0;
-				vkCmdPipelineBarrier(commandBuffer,
-						VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-						0, 0, NULL, 0, NULL, 1, &toPresent);
-
-				// 録音終了
-				if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
-						fprintf(stderr, "コマンドバッファの録音に失敗しました。\n");
-						break;
-				}
-
-				VkSubmitInfo submitInfo = {0};
-				submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-				VkSemaphore waitSemaphores[] = {wd.imageAvailableSemaphore};
-				// 転送ステージでセマフォを待つ
-				VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_TRANSFER_BIT};
-				submitInfo.waitSemaphoreCount = 1;
-				submitInfo.pWaitSemaphores = waitSemaphores;
-				submitInfo.pWaitDstStageMask = waitStages;
-
-				// 送信するコマンドバッファを指定
-				submitInfo.commandBufferCount = 1;
-				submitInfo.pCommandBuffers = &commandBuffer;
-
-				// 処理がすべて終わったらシグナル状態にするセマフォ
-				VkSemaphore signalSemaphores[] = {wd.renderFinishedSemaphore};
-				submitInfo.signalSemaphoreCount = 1;
-				submitInfo.pSignalSemaphores = signalSemaphores;
-
-				// 第3引数に inFlightFence を渡すことで、GPUの全処理が終わった瞬間にフェンスが自動でシグナル状態になります
-				if (vkQueueSubmit(wd.graphicsQueue, 1, &submitInfo, wd.inFlightFence) != VK_SUCCESS) {
-						fprintf(stderr, "コマンドバッファの送信に失敗しました。\n");
-						break;
-				}
-
-				//描き終わったキャンバスを OS（Wayland）に提出（Present）して画面に映す
-				VkPresentInfoKHR presentInfo = {0};
-				presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-
-				// 提出する前に、GPUの描画が完全に終わる（renderFinishedSemaphoreがシグナルされる）のを待つ
-				presentInfo.waitSemaphoreCount = 1;
-				presentInfo.pWaitSemaphores = signalSemaphores;
-
-				VkSwapchainKHR swapchains[] = {wd.swapchain};
-				presentInfo.swapchainCount = 1;
-				presentInfo.pSwapchains = swapchains;
-				presentInfo.pImageIndices = &imageIndex;
-
-				// 画面への提示を実行
-				VkResult presentResult = vkQueuePresentKHR(wd.graphicsQueue, &presentInfo);
-
-				if (presentResult == VK_ERROR_OUT_OF_DATE_KHR || presentResult == VK_SUBOPTIMAL_KHR) {
-						// サーフェスとスワップチェーンのサイズが食い違っている(リサイズ中など)。
-						// 再作成して次フレームで描き直す。
-						recreate_swapchain(&wd);
-						dirty = true;
-				} else {
-						dirty = false;
-				}
-		}
-		FRAME_END:;
+		render_cells(&wd);
 	}
 
-
-
-	free_otf_glyphs(wd.glyphs);
-	
-	// ctxのクリーンアップ
-	if (ctx.term_cell) free(ctx.term_cell);
-	if (ctx.alt_term_cell) free(ctx.alt_term_cell);
+cleanup:
+	free(ctx.term_cell);
+	free(ctx.alt_term_cell);
+	free(ctx.lines);
 	if (ctx.cur) {
-		if (ctx.cur->shape) free(ctx.cur->shape);
+		free(ctx.cur->shape);
 		free(ctx.cur);
 	}
-	if (ctx.save_cur) free(ctx.save_cur);
-	if (ctx.palms) free(ctx.palms);
-	if (ctx.palms_counter) free(ctx.palms_counter);
-	if (read_buf) free(read_buf);
-
+	free(ctx.save_cur);
+	free(ctx.palms);
+	free(ctx.palms_counter);
+	free(ctx.abs_path_name);
+	free(read_buf);
+	if (cur_mg) {
+		free(cur_mg->cur_font);
+		free(cur_mg);
+	}
 	free(master_fd_ev_poll.data.ptr);
 	close(master_fd);
-	glfwDestroyWindow(wd.window);
-	destroy_data(&wd);
-	glfwTerminate();
 	close(epoll_fd_list);
+	kill(pid_id, SIGHUP);
+	while (waitpid(pid_id, NULL, 0) < 0 && errno == EINTR) {}
+	destroy_data(&wd);
+	return result;
 }
 
 // scroll_region_up(): スクロール領域(DECSTBMで設定、未設定なら画面全体)を
@@ -862,32 +508,6 @@ void erase_chr(struct term_context *ctx,int n){
 		ctx->term_cell[idx+i].is_real_chr = false;
 	}
 }
-// window_resized_update_memb(): ウィンドウのフレームバッファサイズと
-// コンテンツスケールを取得し直し、それに基づいてterm_size(行数・列数)を
-// 再計算する。main()内のリサイズ処理は同様の計算を直接行っているため、
-// 現在この関数を呼び出している箇所は無い(未使用のユーティリティ)。
-void window_resized_update_memb(GLFWwindow *window, struct pos *screen_pixel,struct pos *term_size,struct term_context *ctx){
-	glfwGetFramebufferSize(window, &screen_pixel->w, &screen_pixel->h);
-
-	// [改善] 別解像度モニタへ移動した場合に備え、拡大率を取り直す
-	float xscale = 1.0f, yscale = 1.0f;
-	glfwGetWindowContentScale(window, &xscale, &yscale);
-	ctx->display_scale = xscale;
-
-	int rs = (int)(xscale + 0.5f);
-	if (rs < 1) rs = 1;
-	ctx->render_scale = rs;
-
-	int virtual_w = screen_pixel->w / ctx->display_scale;
-	int virtual_h = screen_pixel->h / ctx->display_scale;
-
-	// [改善] 1セルの実寸 cell*render_scale で割って桁数・行数を求める
-	term_size->w = virtual_w / (ctx->cell_w * ctx->render_scale);
-	term_size->h = virtual_h / (ctx->cell_h * ctx->render_scale);
-	if (term_size->w <= 0) term_size->w = 1;
-	if (term_size->h <= 0) term_size->h = 1;
-}
-
 // unicode_utf8_encoder(): UnicodeコードポイントをUTF-8バイト列へ変換する。
 void unicode_utf8_encoder(char *utf8,int unicode, int *len){
 	// [AI生成] UTF-8エンコード規則:
@@ -918,63 +538,6 @@ void unicode_utf8_encoder(char *utf8,int unicode, int *len){
 				*len = 4;
 		}
 }
-
-// reflow_terminal_text(): ウィンドウサイズ変更時に呼ばれる。
-// old_term_size(変更前の行数・列数)で格納されていたterm_cellの内容を、
-// ctx->term_size(変更後の行数・列数)に合わせて詰め直す(リフロー)。
-// 各論理行(is_wrappedで繋がった行の集まり)の末尾の空白を除いた実文字だけを
-// 取り出し、新しい列数で改行しながらtemp(一時バッファ)に詰めていく。
-// 最後にctx->term_cellとtempを入れ替える(ポインタswap)ことで、
-// 呼び出し元が持つtemp_term_cellは「次にリフローで使う旧バッファ」になる。
-void reflow_terminal_text(struct term_context *ctx, struct pos old_term_size, struct term_cell **temp_term_cell_ptr, int term_cell_alloc_size) {
-	struct term_cell *temp = *temp_term_cell_ptr;
-	int new_w = ctx->term_size.w;
-	int new_h = ctx->term_size.h;
-
-	for (int i = 0; i < new_h * new_w; i++) {
-		temp[i].character   = ' ';
-		temp[i].fg_color    = ctx->bash_parser_required_memb.now_fg_color;
-		temp[i].bg_color    = ctx->bash_parser_required_memb.now_bg_color;
-		temp[i].is_bold     = false;
-		temp[i].is_real_chr = false;
-	}
-
-	int now_w = 0;
-	int now_h = 0;
-
-	for (int h = 0; h < old_term_size.h && now_h < new_h; h++) {
-		// 旧行の最後の実文字を探す（末尾の空白は無視）
-		int last_real = -1;
-		for (int w = old_term_size.w - 1; w >= 0; w--) {
-			if (ctx->term_cell[h * old_term_size.w + w].is_real_chr) {
-				last_real = w;
-				break;
-			}
-		}
-
-		for (int w = 0; w <= last_real; w++) {
-			if (now_w >= new_w) {
-				now_h++;
-				now_w = 0;
-				if (now_h >= new_h) goto reflow_done;
-			}
-			temp[now_h * new_w + now_w] = ctx->term_cell[h * old_term_size.w + w];
-			now_w++;
-		}
-
-		// 論理行の末尾（折り返しでない行）なら新バッファでも改行
-		if (!ctx->lines[h].is_wrapped && now_w > 0) {
-			now_h++;
-			now_w = 0;
-		}
-	}
-
-reflow_done:;
-	struct term_cell *swap = ctx->term_cell;
-	ctx->term_cell = temp;
-	*temp_term_cell_ptr = swap;
-}
-
 
 // load_settings(): "pty_make_settings.json" から設定を読み込む。
 // ファイルが開けない場合はエラーログを出してset_default_settings()で
@@ -1015,39 +578,20 @@ void cur_allow_write(enum cur_allow_mode mode, int master_fd, int key_code) {
 	const char *seq = NULL;
 	if (mode == AP_MODE) {
 		switch (key_code) {
-			case GLFW_KEY_UP:    seq = "\x1bOA"; break;
-			case GLFW_KEY_DOWN:  seq = "\x1bOB"; break;
-			case GLFW_KEY_RIGHT: seq = "\x1bOC"; break;
-			case GLFW_KEY_LEFT:  seq = "\x1bOD"; break;
+			case KEY_UP:    seq = "\x1bOA"; break;
+			case KEY_DOWN:  seq = "\x1bOB"; break;
+			case KEY_RIGHT: seq = "\x1bOC"; break;
+			case KEY_LEFT:  seq = "\x1bOD"; break;
 			default: return;
 		}
 	} else {
 		switch (key_code) {
-			case GLFW_KEY_UP:    seq = "\x1b[A"; break;
-			case GLFW_KEY_DOWN:  seq = "\x1b[B"; break;
-			case GLFW_KEY_RIGHT: seq = "\x1b[C"; break;
-			case GLFW_KEY_LEFT:  seq = "\x1b[D"; break;
+			case KEY_UP:    seq = "\x1b[A"; break;
+			case KEY_DOWN:  seq = "\x1b[B"; break;
+			case KEY_RIGHT: seq = "\x1b[C"; break;
+			case KEY_LEFT:  seq = "\x1b[D"; break;
 			default: return;
 		}
 	}
 	write(master_fd, seq, strlen(seq));
 }
-
-
-
-// window_size_callback(): GLFWがウィンドウサイズ変更を検知した時に呼ばれる。
-// メインループ側は毎フレームglfwGetFramebufferSize()を問い合わせる代わりに
-// wd->resize_event_pendingを見るだけで済むようにする(ポーリング→イベント駆動)。
-// 実際のピクセルサイズ(HiDPI考慮)はイベント発生時にメインループ側で
-// glfwGetFramebufferSize()を使って取得するため、ここではwidth/heightは使わない。
-void window_size_callback(GLFWwindow* window, int width, int height){
-	(void)width;
-	(void)height;
-	struct windata *wd = (struct windata *)glfwGetWindowUserPointer(window);
-	if (wd == NULL) return;
-
-	wd->resize_event_pending = true;
-	wd->resize_event_time = glfwGetTime();
-}
-
-

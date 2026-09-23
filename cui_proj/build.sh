@@ -3,9 +3,19 @@ set -e
 
 cd "$(dirname "$0")"
 
-gcc src/pty_make_v1.c src/escape_sequence_parser.c src/mouse_io.c src/pty_drawing.c src/kbd_io.c src/error_log_opt.c src/vulkan_otf_draw.c src/codepoint_comb.c \
-    -I include $(pkg-config --cflags freetype2) \
-    -o pty_make_v1 \
-    -lglfw -lvulkan -lGL -lm -lpthread -ldl -lrt -lX11 \
-    -lwayland-client -lwayland-cursor -lwayland-egl -lxkbcommon \
-    -lfreetype
+entry=src/pty_make_v1.c
+output=pty_make_v1
+if [ "${1:-}" = "--test" ]; then
+    entry=test_raylib.c
+    output=$(mktemp /tmp/cui-raylib-test.XXXXXX)
+    trap 'rm -f "$output"' EXIT
+fi
+
+gcc "$entry" src/escape_sequence_parser.c src/mouse_io.c src/pty_drawing.c src/kbd_io.c src/error_log_opt.c \
+    -I include $(pkg-config --cflags raylib) \
+    -o "$output" \
+    $(pkg-config --libs raylib) -lm
+
+if [ "${1:-}" = "--test" ]; then
+    "$output"
+fi

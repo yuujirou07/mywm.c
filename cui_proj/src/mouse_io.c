@@ -1,6 +1,5 @@
-#include <GLFW/glfw3.h>
 #include <string.h>
-#include "vulkan_mywrap.h"
+#include "pty_drawing.h"
 #include "mouse_io.h"
 #include"pty_make.h"
 
@@ -22,11 +21,11 @@ static void restore_copy_cells(struct windata *wd)
 // 現在セルまでの範囲をコピー選択として白黒反転する。
 static void update_copy_selection(struct windata *wd, double xpos, double ypos)
 {
+	if (xpos < 0 || ypos < 0) return;
 	struct pos on_cell_mouse_pos;
-	double scale = wd->ctx->display_scale;
 
-	on_cell_mouse_pos.h = (ypos * scale)/wd->ctx->cell_h;
-	on_cell_mouse_pos.w = (xpos * scale)/wd->ctx->cell_w;
+	on_cell_mouse_pos.h = ypos/wd->ctx->cell_h;
+	on_cell_mouse_pos.w = xpos/wd->ctx->cell_w;
 
 	if(!(on_cell_mouse_pos.h >= 0 && on_cell_mouse_pos.h < wd->ctx->term_size.h &&
 	   on_cell_mouse_pos.w >= 0 && on_cell_mouse_pos.w < wd->ctx->term_size.w))
@@ -70,66 +69,22 @@ static void update_copy_selection(struct windata *wd, double xpos, double ypos)
 		}
 	}
 
-	*wd->dirty = true;
 }
 
-// init_mouse(): GLFWにマウスボタンとカーソル移動のコールバックを登録する。
-void init_mouse(struct windata *wd)
-{
-	glfwSetMouseButtonCallback(wd->window, mouse_button_callback);
-	glfwSetCursorPosCallback(wd->window,cursor_position_callback);
-
-}
-
-// mouse_button_callback(): 左クリックでコピー選択の開始/解除を切り替える。
-// 押下時は現在位置のセルを選択範囲の起点として初期化する。
-void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
-{
-	struct windata *wd = (struct windata *)glfwGetWindowUserPointer(window);
-
-	if (button == GLFW_MOUSE_BUTTON_LEFT)
-	{
-		if(action == GLFW_PRESS)
-		{
-			if(wd->copy_data.start_copy)
-			{
-				restore_copy_cells(wd);
-				*wd->dirty = true;
-				wd->copy_data.start_copy = false;
-				wd->copy_data.copy_cell_idx_data.start_idx_block = false;
-			}
-			else
-			{
-				wd->copy_data.start_copy = true;
-				wd->copy_data.copy_cell_idx_data.start_idx = 0;
-				wd->copy_data.copy_cell_idx_data.end_idx = 0;
-				wd->copy_data.copy_cell_idx_data.start_idx_block = false;
-			}
-			wd->mouce_data.mouce_button_left_down = true;
-
-			if(wd->copy_data.start_copy)
-			{
-				double xpos;
-				double ypos;
-				glfwGetCursorPos(window, &xpos, &ypos);
-				update_copy_selection(wd, xpos, ypos);
-			}
+void process_mouse(struct windata *wd) {
+	if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+		if (wd->copy_data.start_copy) {
+			restore_copy_cells(wd);
+			wd->copy_data.start_copy = false;
+		} else {
+			wd->copy_data.start_copy = true;
+			wd->copy_data.copy_cell_idx_data.start_idx = 0;
+			wd->copy_data.copy_cell_idx_data.end_idx = 0;
 		}
-		else
-		{
-			wd->mouce_data.mouce_button_left_down = false;
-		}
+		wd->copy_data.copy_cell_idx_data.start_idx_block = false;
 	}
-}
-
-// cursor_position_callback(): 左ドラッグ中だけ選択範囲を現在のマウス位置まで更新する。
-static void cursor_position_callback(GLFWwindow* window, double xpos, double ypos)
-{
-
-	struct windata *wd = (struct windata *)glfwGetWindowUserPointer(window);
-
-	if(wd->copy_data.start_copy && wd->mouce_data.mouce_button_left_down)
-	{
-		update_copy_selection(wd, xpos, ypos);
+	if (wd->copy_data.start_copy && IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+		Vector2 position = GetMousePosition();
+		update_copy_selection(wd, position.x, position.y);
 	}
 }

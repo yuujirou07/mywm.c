@@ -3,7 +3,6 @@
 
 #include <stdbool.h>
 #include"editor_types.h"
-#include"ftj.h"
 
 #define FILETREE_DEFAULT_SIZE_W 10
 

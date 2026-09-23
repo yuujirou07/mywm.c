@@ -49,10 +49,14 @@ void new_output(struct wl_listener *listener, void *data) {
 //描画関数
 void output_frame(struct wl_listener *listener, void *data) {
 	struct server *server = wl_container_of(listener, server, frame);
-	wlr_scene_output_commit(server->scene_output, NULL);
+	if(!wlr_scene_output_needs_frame(server->scene_output))return;
+
+    wlr_scene_output_commit(server->scene_output,NULL);
+    
 	//現在時刻の取得
 	struct timespec now;
 	// 描画が終わった時刻をアプリ（Waylandクライアント）に通知する
 	clock_gettime(CLOCK_MONOTONIC, &now);
 	wlr_scene_output_send_frame_done(server->scene_output, &now);
 }
+

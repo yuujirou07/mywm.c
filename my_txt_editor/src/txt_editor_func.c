@@ -8,6 +8,7 @@
 #include <wctype.h>
 #include "editor_types.h"
 #include "error_log.h"
+#include "ftj.h"
 #include "txt_editor.h"
 #include"txt_editor_syntax.h"
 
