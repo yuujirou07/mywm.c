@@ -2,9 +2,10 @@
 #include "pty_drawing.h"
 
 int window_init(void) {
-	SetConfigFlags(FLAG_WINDOW_HIGHDPI);
+	SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_WINDOW_HIGHDPI);
 	InitWindow(800, 600, "cui");
 	if (!IsWindowReady()) return -1;
+	SetWindowMinSize(64, 48);
 	SetExitKey(KEY_NULL);
 	int refresh_rate = GetMonitorRefreshRate(GetCurrentMonitor());
 	SetTargetFPS(refresh_rate > 0 ? refresh_rate : 60);

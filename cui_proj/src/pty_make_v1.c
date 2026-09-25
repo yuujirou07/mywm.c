@@ -27,6 +27,97 @@
 #define DEFAULT_KEY_REPEAT_INTERVAL 0.5
 #define DEFAULT_CUR_BLINK_RESTART_TIMEOUT_SEC 0.6
 
+static int resize_terminal(struct term_context *ctx, struct windata *wd, struct pos screen_size) {
+	if (screen_size.w <= 0 || screen_size.h <= 0) return -1;
+	if (ctx->cell_w <= 0 || ctx->cell_h <= 0) return -1;
+	struct pos new_size = {
+		screen_size.w / ctx->cell_w,
+		screen_size.h / ctx->cell_h
+	};
+	if (new_size.w < 1) new_size.w = 1;
+	if (new_size.h < 1) new_size.h = 1;
+	if (new_size.w != ctx->term_size.w || new_size.h != ctx->term_size.h) {
+		if (new_size.w > INT_MAX / new_size.h) return -1;
+		int new_total = new_size.w * new_size.h;
+		struct term_cell *cells = calloc((size_t)new_total, sizeof(*cells));
+		struct term_cell *alt_cells = ctx->alt_term_cell
+			? calloc((size_t)new_total, sizeof(*alt_cells)) : NULL;
+		struct line_info *lines = calloc((size_t)new_size.h, sizeof(*lines));
+		struct term_cell **copy_cells = calloc((size_t)new_total, sizeof(*copy_cells));
+		Color *copy_bg = calloc((size_t)new_total, sizeof(*copy_bg));
+		Color *copy_fg = calloc((size_t)new_total, sizeof(*copy_fg));
+		if (!cells || (ctx->alt_term_cell && !alt_cells) || !lines ||
+			!copy_cells || !copy_bg || !copy_fg) {
+			free(cells);
+			free(alt_cells);
+			free(lines);
+			free(copy_cells);
+			free(copy_bg);
+			free(copy_fg);
+			return -1;
+		}
+
+		struct term_cell blank = {
+			.character = ' ',
+			.fg_color = ctx->bash_parser_required_memb.now_fg_color,
+			.bg_color = ctx->bash_parser_required_memb.now_bg_color
+		};
+		for (int i = 0; i < new_total; i++) {
+			cells[i] = blank;
+			if (alt_cells) alt_cells[i] = blank;
+		}
+		for (int i = 0; i < wd->copy_data.copy_cell_counter; i++) {
+			wd->copy_data.copy_cell[i]->bg_color = wd->copy_data.copy_cell_orig_bg[i];
+			wd->copy_data.copy_cell[i]->fg_color = wd->copy_data.copy_cell_orig_fg[i];
+		}
+
+		int copy_h = ctx->term_size.h < new_size.h ? ctx->term_size.h : new_size.h;
+		int copy_w = ctx->term_size.w < new_size.w ? ctx->term_size.w : new_size.w;
+		for (int row = 0; row < copy_h; row++) {
+			memcpy(cells + row * new_size.w, ctx->term_cell + row * ctx->term_size.w,
+				(size_t)copy_w * sizeof(*cells));
+			if (alt_cells)
+				memcpy(alt_cells + row * new_size.w, ctx->alt_term_cell + row * ctx->term_size.w,
+					(size_t)copy_w * sizeof(*alt_cells));
+			lines[row] = ctx->lines[row];
+		}
+
+		free(ctx->term_cell);
+		free(ctx->alt_term_cell);
+		free(ctx->lines);
+		free(wd->copy_data.copy_cell);
+		free(wd->copy_data.copy_cell_orig_bg);
+		free(wd->copy_data.copy_cell_orig_fg);
+		ctx->term_cell = cells;
+		ctx->alt_term_cell = alt_cells;
+		ctx->lines = lines;
+		ctx->term_size = new_size;
+		ctx->total_cells = new_total;
+		wd->copy_data.copy_cell = copy_cells;
+		wd->copy_data.copy_cell_orig_bg = copy_bg;
+		wd->copy_data.copy_cell_orig_fg = copy_fg;
+		wd->copy_data.copy_cell_counter = 0;
+		wd->copy_data.start_copy = false;
+		wd->copy_data.copy_cell_idx_data.start_idx_block = false;
+		wd->copy_data.copy_cell_idx_data.start_idx = 0;
+		wd->copy_data.copy_cell_idx_data.end_idx = 0;
+		if (ctx->cur->cur_pos.w >= new_size.w) ctx->cur->cur_pos.w = new_size.w - 1;
+		if (ctx->cur->cur_pos.h >= new_size.h) ctx->cur->cur_pos.h = new_size.h - 1;
+		if (ctx->save_cur->cur_pos.w >= new_size.w) ctx->save_cur->cur_pos.w = new_size.w - 1;
+		if (ctx->save_cur->cur_pos.h >= new_size.h) ctx->save_cur->cur_pos.h = new_size.h - 1;
+		ctx->fixrd_cur_scr_range.decstbm_state = false;
+	}
+
+	struct winsize ws = {
+		.ws_col = (unsigned short)new_size.w,
+		.ws_row = (unsigned short)new_size.h,
+		.ws_xpixel = (unsigned short)screen_size.w,
+		.ws_ypixel = (unsigned short)screen_size.h
+	};
+	ioctl(ctx->master_fd, TIOCSWINSZ, &ws);
+	kill(ctx->bash_pid, SIGWINCH);
+	return 0;
+}
 
 
 int main(void) {
@@ -35,6 +126,8 @@ int main(void) {
 
 	struct pos screen_pixel;
 	struct pos term_size;
+	double last_resize_time = 0;
+	bool resize_pending = false;
 	struct termios term;
 	struct termios *term_ptr = NULL;
 	struct winsize ws;
@@ -148,7 +241,7 @@ int main(void) {
 		return 1;
 	}
 	// PTY出力を一度に読むバッファ。
-	int term_cell_alloc_size=total*4;
+	int read_buf_size=total*4;
 	int result=0;
 	int nfds = 0;
 	ssize_t buf_size = 0;
@@ -160,7 +253,7 @@ int main(void) {
 
 	char *read_buf = NULL;
 
-	read_buf      = malloc(term_cell_alloc_size);
+	read_buf      = malloc(read_buf_size);
 	lines         = calloc(term_size.h,sizeof(struct line_info));
 	cur_mg        = calloc(1,sizeof(struct cur_mgr));
 
@@ -168,7 +261,7 @@ int main(void) {
 	// ctx(term_context)はターミナルの全状態を保持する中心的な構造体。
 	// 画面の各文字セル(term_cell配列)、カーソル位置、エスケープシーケンス
 	// パーサの状態(bash_parser_required_memb)などをここに集約する。
-	ctx.term_cell            = calloc(term_cell_alloc_size, sizeof(struct term_cell));
+	ctx.term_cell            = calloc((size_t)total, sizeof(struct term_cell));
 	ctx.alt_term_cell        = NULL;
 	ctx.cur                  = calloc(1, sizeof(struct cursor));
 	ctx.save_cur             = calloc(1, sizeof(struct cursor));
@@ -267,7 +360,7 @@ int main(void) {
 				continue;
 			// 大量出力中も入力・描画へ戻る。
 			for (int batch = 0; batch < 64; batch++) {
-				buf_size = read(master_fd, read_buf, term_cell_alloc_size - 1);
+				buf_size = read(master_fd, read_buf, read_buf_size - 1);
 				if (buf_size > 0) {
 					bash_str_parse(read_buf, buf_size, &ctx);
 				} else if (buf_size == 0 || (buf_size < 0 && errno == EIO)) {
@@ -305,6 +398,23 @@ int main(void) {
 		CUR_RIGTHING_END_POINT:{};
 
 
+
+		int screen_w = GetScreenWidth();
+		int screen_h = GetScreenHeight();
+		if (screen_w != screen_pixel.w || screen_h != screen_pixel.h) {
+			screen_pixel = (struct pos){screen_w, screen_h};
+			last_resize_time = GetTime();
+			resize_pending = true;
+		}
+		if (resize_pending && GetTime() - last_resize_time > 0.1 &&
+			screen_pixel.w > 0 && screen_pixel.h > 0) {
+			if (resize_terminal(&ctx, &wd, screen_pixel) != 0) {
+				error_log_write("terminal resize failed");
+				result = 1;
+				goto cleanup;
+			}
+			resize_pending = false;
+		}
 
 		render_cells(&wd);
 	}
