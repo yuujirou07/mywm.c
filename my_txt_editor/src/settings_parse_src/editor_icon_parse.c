@@ -136,7 +136,7 @@ const char *get_file_ext_code(char *file_ext,icon_data *icon_data_ptr){
     stat(file_ext,&state);
     if(S_ISDIR(state.st_mode))return "\U0001F4C2";
     
-    const char *return_code = "\u2753";
+    const char *return_code = "\uef4c";
     for(int i = 0;i < icon_data_ptr->icon_lib_num;i++){
         char *ext_dot_ptr = strrchr(file_ext,'.');
         if(ext_dot_ptr == NULL){
