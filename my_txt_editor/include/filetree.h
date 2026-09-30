@@ -15,6 +15,7 @@ typedef enum{
 }filetree_side;
 
 struct ft_path_click_data;
+struct editor_input_context;
 
 typedef struct{
     struct table *table_ptr;
@@ -40,6 +41,8 @@ ft_path_open_check_data *get_filetree_item_data(file_tree_data *file_tree,
                                                 struct table *table_ptr);
 
 int set_filetree_box(file_tree_data *filetree_data,struct box filetree_box);
+
+int change_file_tree_width(struct editor_input_context *ctx,int width);
 
 
 #endif

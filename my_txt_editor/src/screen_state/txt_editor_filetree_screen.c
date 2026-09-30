@@ -63,15 +63,10 @@ ft_path_open_check_data *get_filetree_item_data(file_tree_data *file_tree,
 // show_filetree(): 画面左端にファイルツリーの枠を作り、編集領域をその幅だけ右へ寄せる。
 // 引数: ctx=画面サイズ・編集領域・ファイルツリーを持つ入力context。
 // 返り値: なし。
-void show_filetree(struct editor_input_context *ctx){
+void show_filetree(struct editor_input_context *ctx,struct box ft_box){
     struct editor_state *state = ctx->state;
 
-    struct box tree_box = (struct box){
-        .pos = {0,0},
-        .w = state->scr.scr_size.x / FILETREE_DEFAULT_SIZE_W,
-        .h = state->scr.scr_size.y,
-    };
-    set_filetree_box(&state->file_tree_data,tree_box);
+    set_filetree_box(&state->file_tree_data,ft_box);
     state->file_tree_data.is_show = true;
 
     // 編集領域と区切り線を新しい左端へ合わせ、新しい位置で描き直す。
@@ -111,6 +106,11 @@ bool handle_filetree_screen_input(struct editor_input_context *ctx,wint_t ch,int
     if(ch == KEY_MOUSE){
         handle_mouse(ctx,0);
     }
+    if(ch == '>' || ch == '<'){
+        int size_fiff = (ch == '<')?-1:1;
+        int ft_w = ctx->state->file_tree_data.ft_box.w + size_fiff;
+        change_file_tree_width(ctx,ft_w);
+    }
 
     return true;
 }
@@ -130,5 +130,18 @@ int set_tree_item(struct box filetree_box,int layer,int pos_y,struct table *tree
     for(int i = 0; i < tree_table->c_table_num;i++){
         mvaddstr(y,x,tree_table->c_table[i].s_data.d_name);
     }
+    return 0;
+}
+
+
+int change_file_tree_width(struct editor_input_context *ctx,int width){
+    int x = getmaxx(stdscr);
+    
+    file_tree_data *tmp_ft_data = &ctx->state->file_tree_data;
+    if(tmp_ft_data->ft_box.w <= 0 || x <= tmp_ft_data->ft_box.w){
+        return -1;
+    }
+    tmp_ft_data->ft_box.w = width;
+    show_filetree(ctx,tmp_ft_data->ft_box);
     return 0;
 }

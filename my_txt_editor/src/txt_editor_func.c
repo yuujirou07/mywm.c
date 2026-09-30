@@ -8,6 +8,7 @@
 #include <wctype.h>
 #include "editor_types.h"
 #include "error_log.h"
+#include "filetree.h"
 #include "ftj.h"
 #include "txt_editor.h"
 #include"txt_editor_syntax.h"
@@ -627,19 +628,46 @@ void editor_screen_mouse_event(struct editor_input_context *ctx){
     bool can_scroll_down = state->scr.scr_start_num + state->write_area.h < line_limit;
 
     //エディター画面下スクロール処理
-    if (event->bstate & BUTTON5_PRESSED && can_scroll_down) {
-        state->scr.scr_start_num++;
-        if(state->settings_data->built_in_syntax){
-            scroll_syntax_pos_data(ctx->syntax_data,-1,state->write_area.h);
-            update_line_syntax_data(ctx,state->write_area.h - 1);
+    if (event->bstate & BUTTON5_PRESSED && can_scroll_down){
+        
+        bool is_cur_on_edit_screen = true;
+        //ファイルツリーが表示されている場合
+        // スクロール時のマウスポインターがファイルツリー上にあるか判断する
+        if(state->file_tree_data.is_show){
+            struct box tmp_write_area_box = 
+                {(struct pos){state->write_area.x_start,state->write_area.y_start},
+                    state->write_area.w,state->write_area.h};    
+            if(!box_contains_point(tmp_write_area_box,(struct pos){event->x,event->y})){
+                editor_set_screen_state(state,filetree_screen);
+                is_cur_on_edit_screen = false;
+            }
+        }
+        if(is_cur_on_edit_screen){
+            state->scr.scr_start_num++;
+            if(state->settings_data->built_in_syntax){
+                scroll_syntax_pos_data(ctx->syntax_data,-1,state->write_area.h);
+                update_line_syntax_data(ctx,state->write_area.h - 1);
+            }
         }
         
     //エディター画面上スクロール処理
-    } else if ((event->bstate & BUTTON4_PRESSED) && state->scr.scr_start_num > 0) {
-        state->scr.scr_start_num--;
-        if(state->settings_data->built_in_syntax){
-            scroll_syntax_pos_data(ctx->syntax_data,+1,state->write_area.h);
-            update_line_syntax_data(ctx,0);
+    }else if ((event->bstate & BUTTON4_PRESSED) && state->scr.scr_start_num > 0) {
+        bool is_cur_on_edit_screen = true;
+         if(state->file_tree_data.is_show){
+            struct box tmp_write_area_box = 
+                {(struct pos){state->write_area.x_start,state->write_area.y_start},
+                    state->write_area.w,state->write_area.h};    
+            if(!box_contains_point(tmp_write_area_box,(struct pos){event->x,event->y})){
+                editor_set_screen_state(state,filetree_screen);
+                is_cur_on_edit_screen = false;
+            }
+        }
+        if(is_cur_on_edit_screen){ 
+            state->scr.scr_start_num--;
+            if(state->settings_data->built_in_syntax){
+                scroll_syntax_pos_data(ctx->syntax_data,+1,state->write_area.h);
+                update_line_syntax_data(ctx,0);
+            }
         }
     }
     else if(event->bstate & BUTTON1_PRESSED){
@@ -779,6 +807,16 @@ int filetree_mouse_event(struct editor_input_context *ctx){
             if(box_contains_point(tmp_write_area_box,(struct pos){ev->x,ev->y})){
                 editor_set_screen_state(state,edit_screen);
             }
+        }
+    }
+    //スクロール判定
+    else if(ev->bstate == BUTTON5_PRESSED || ev->bstate == BUTTON4_PRESSED){
+        struct box tmp_write_area_box = 
+            {(struct pos){state->write_area.x_start,state->write_area.y_start},
+                state->write_area.w,state->write_area.h};
+
+        if(box_contains_point(tmp_write_area_box,(struct pos){ev->x,ev->y})){
+            editor_set_screen_state(state,edit_screen);
         }
     }
     return 0;

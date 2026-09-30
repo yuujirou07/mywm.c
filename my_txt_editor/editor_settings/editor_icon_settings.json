@@ -12,5 +12,7 @@
     {"file_ext":".html","ext_code":"\ue736"},
     {"file_ext":".txt","ext_code":"\uec5e"},
     {"file_ext":".sh","ext_code":"\ue760"},
-    {"file_ext":".log","ext_code":"\uf4ed"}
+    {"file_ext":".log","ext_code":"\uf4ed"},
+    {"file_ext":".md","ext_code":"\ue609"},
+    {"file_ext":".h","ext_code":"\ue649"}
 ]

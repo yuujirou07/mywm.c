@@ -223,7 +223,7 @@ int update_screen_ratio(struct editor_input_context *ctx){
             // show_filetree()が編集画面ごと描き直しを要求するので、
             // リサイズで残る古い枠は先に消しておく。
             clear();
-            show_filetree(ctx);
+            show_filetree(ctx,state->file_tree_data.ft_box);
             editor_sync_cursor(state);
             break;
         case edit_screen:
