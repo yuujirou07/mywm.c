@@ -5,6 +5,8 @@
 #include <wchar.h>
 #include "editor_types.h"
 
+struct editor_state;
+
 // 設定画面のキーとタイトルの色ペア。1〜3は本文・選択・エラー、4以降は構文色が
 // 使うため、それと重ならない15を割り当てる。
 #define SETTINGS_ACCENT_COLOR_PAIR 15
@@ -54,5 +56,6 @@ typedef struct{
 int add_settings_screen_item(settings_screen_data *settings_screen_data,settings_items_data item_data);
 int load_settings_screen_items(settings_screen_data *settings_screen_data);
 void move_settings_select_line(settings_screen_data *settings_screen_data,int delta);
+void set_settings_screen_box(struct editor_state *state);
 
 #endif

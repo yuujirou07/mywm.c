@@ -67,6 +67,9 @@ static const wchar_t *const reserved_words[] = {
     L"continue",
     L"else",
     L"#include",
+    L"#define",
+    L"#ifndef",
+    L"#endif",
 };
 
 static const wchar_t *const declaration_words[] = {
@@ -218,8 +221,8 @@ int init_syntax(syntax *syntax){
 }
 
 /* 言語を保存し、その言語の行コメント開始文字列をcomment_ev_strへ設定する。
- * 引数: langはC/CPP/PY/TSのいずれか、syntaxは設定先。
- * C、CPP、TSは"//"、PYは"#"を使用する。
+ * 引数: langはC/CPP/PY/TS/UNKNOWNのいずれか、syntaxは設定先。
+ * C、CPP、TSは"//"、PYは"#"を使用する。UNKNOWNでは現在値を変更しない。
  * 返り値: 成功0、syntaxがNULLまたはlangが範囲外なら-1。既存の解析結果は変更しない。
  */
 int set_syntax_language(language lang,syntax *syntax){
@@ -232,6 +235,8 @@ int set_syntax_language(language lang,syntax *syntax){
             break;
         case PY:
             comment_ev_str = L"#";
+            break;
+        case UNKNOWN:
             break;
         default:
             return -1;
@@ -347,6 +352,8 @@ int apply_syntax_color(struct editor_input_context *ctx,syntax syntax){
             mvchgat(state->write_area.y_start + h,state->write_area.x_start,
                 state->write_area.w,A_NORMAL,1,NULL);
     }
+    if(syntax.lang == UNKNOWN)return 0;
+
     for(int i = 0;i < syntax_num;i++){
         syntax_data *data = &syntax.syntax_list_data.syntax_data[i];
         syntax_area *area = &data->area;

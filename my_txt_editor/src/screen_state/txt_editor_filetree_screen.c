@@ -6,6 +6,7 @@
 #include "filetree.h"
 #include "ftj.h"
 #include "txt_editor.h"
+#include "txt_editor_screen.h"
 
 
 
@@ -18,6 +19,7 @@ int get_root_file_tree_data(file_tree_data *file_tree,char *path){
     int mem_num = file_tree->root_node->c_table_num;
     file_tree->open_check_data = NULL;
     file_tree->open_count_num = 0;
+    file_tree->is_grabed = false;
     if(mem_num == 0)return 0;
 
     file_tree->open_check_data = malloc(sizeof(ft_path_open_check_data) * mem_num);
@@ -69,6 +71,19 @@ void show_filetree(struct editor_input_context *ctx,struct box ft_box){
     set_filetree_box(&state->file_tree_data,ft_box);
     state->file_tree_data.is_show = true;
 
+    if(state->settings_data->show_status_bar){
+        if(state->settings_data->bar_side_state == top ||
+            state->settings_data->bar_side_state == bottom){
+            int x = getmaxx(stdscr);
+            struct box tmp_status_bar_box =
+                {(struct pos){ft_box.pos.x + ft_box.w,state->status_bar->pos.y},
+                x - (ft_box.pos.x + ft_box.w),
+                state->status_bar->h};
+            clear_status_bar_outline(state);
+            set_status_bar_size(ctx,tmp_status_bar_box);
+            state->render_flags |= RENDER_STATUS_BAR_LINE;
+        }
+    }
     // 編集領域と区切り線を新しい左端へ合わせ、新しい位置で描き直す。
     editor_apply_write_area(state);
     editor_sync_split_line(ctx);
@@ -96,7 +111,9 @@ void hide_filetree(struct editor_input_context *ctx){
 
 bool handle_filetree_screen_input(struct editor_input_context *ctx,wint_t ch,int input_result){
     (void)input_result;
-
+    struct editor_state *state = ctx->state;
+    if(state->is_cur_show)my_cur_set(state,false);
+    
     if(ch == CTRL('n')){
         // ツリーを出したキーと同じキーで閉じる。
         hide_filetree(ctx);
@@ -105,7 +122,17 @@ bool handle_filetree_screen_input(struct editor_input_context *ctx,wint_t ch,int
     if(ch == 'q')return false;
     if(ch == KEY_MOUSE){
         handle_mouse(ctx,0);
+
+        if(state->file_tree_data.is_grabed){
+            MEVENT me = *ctx->mouse_event;
+            int ft_w = me.x - state->file_tree_data.ft_box.pos.x;
+
+            if(ft_w >= 3 && ft_w < getmaxx(ctx->win)){
+                change_file_tree_width(ctx,ft_w);
+            }
+        }
     }
+
     if(ch == '>' || ch == '<'){
         int size_fiff = (ch == '<')?-1:1;
         int ft_w = ctx->state->file_tree_data.ft_box.w + size_fiff;

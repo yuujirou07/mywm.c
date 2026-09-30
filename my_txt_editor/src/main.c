@@ -18,6 +18,7 @@
 #include "ascii_art_comb.h"
 #include "lsp_src/language_server_communication.h"
 #include "txt_editor.h"
+#include "txt_editor_screen.h"
 #include"error_log.h"
 #include"path_util.h"
 #include "txt_editor_icon.h"
@@ -148,7 +149,7 @@ int main(int argc, char *argv[])
     my_cur_set(&state,true);
     raw();
     scrollok(win, TRUE);
-    mouseinterval(10);
+    mouseinterval(0);
     mousemask(ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION, NULL);  
     
     // ファイルブラウザ初期ディレクトリの絶対パスを取得する。
@@ -367,7 +368,7 @@ int main(int argc, char *argv[])
 
 
 
-     char *now_dir = getcwd(NULL,0);
+    char *now_dir = getcwd(NULL,0);
     get_root_file_tree_data(&state.file_tree_data,now_dir);
     free(now_dir);
         
@@ -495,5 +496,4 @@ static void lsp_poll_events(int *epfd, struct lsp_process *lsp, int timeout_ms)
 void my_mvaddstr(struct pos pos,char * str){
     mvaddstr(pos.y,pos.x,str);
 }
-
 

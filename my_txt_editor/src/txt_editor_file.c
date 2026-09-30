@@ -15,6 +15,7 @@
 #include<sys/stat.h>
 #include "error_log.h"
 #include "txt_editor.h"
+#include "txt_editor_screen.h"
 #include "json_read.h"
 #include"default_settings.h"
 #include"txt_editor_syntax.h"

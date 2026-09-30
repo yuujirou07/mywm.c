@@ -173,3 +173,9 @@ static void send_lsp_did_change(struct editor_input_context *ctx){
 
     free(text);
 }
+
+
+int set_status_bar_size(struct editor_input_context *ctx,struct box box){
+    *ctx->state->status_bar = box;
+    return 0;
+}

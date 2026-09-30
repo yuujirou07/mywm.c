@@ -11,6 +11,7 @@ typedef enum{
     CPP,
     PY,
     TS,
+    UNKNOWN,
 }language;
 
 // 着色の分類。現在は予約語、リテラル、ヘッダー名、コメント、メソッド、型、変数を解析で生成する。
@@ -62,8 +63,8 @@ extern const wchar_t *comment_ev_str;
 
 
 // 解析言語と行コメント開始文字列を切り替える。
-// 引数: langはC/CPP/PY/TS、syntaxは設定先。
-// 戻り値: 成功時0、NULLまたは未定義の言語なら-1。既存の解析結果は変更しない。
+// 引数: langはC/CPP/PY/TS/UNKNOWN、syntaxは設定先。
+// 戻り値: 成功時0、NULLまたは範囲外の言語なら-1。既存の解析結果は変更しない。
 int set_syntax_language(language lang,syntax *syntax);
 
 // 行のposから辞書内の単語を単語境界付きで照合する。

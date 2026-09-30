@@ -7,12 +7,11 @@
 #include <wctype.h>
 #include <dirent.h>
 #include <limits.h>
-#include <time.h>
-#include "ascii_art_comb.h"
 #include"default_settings.h"
 #include"lsp_src/language_server_communication.h"
 #include "editor_types.h"
 #include "settings_screen.h"
+#include "start_menu.h"
 #include"filetree.h"
 
 
@@ -60,13 +59,6 @@ enum render_flags {
 #endif
 #define CTRL(x) ((x) & 0x1f)// 0x1fはCtrl
 
-typedef int (*Start_Menu)(int screen_w, int screen_h, struct ascii_data *ascii_data,
-                          const struct timespec *startup_start_time,
-                          const char *startup_log_path);
-
-
-
-
 // ステータスバーを画面上端か下端のどちらに出すか。
 enum status_bar_side{
     top,
@@ -96,7 +88,7 @@ struct file_data{
     bool    is_open_file; // ファイルを開いて編集しているならtrue。
 };
 
-// ファイルブラウザで選択中の項目種別。
+//データの項目種別。
 enum select_state{
     file,
     folder,
@@ -302,15 +294,6 @@ struct edit_screen_context {
 struct ask_make_file_mode_context {
     int screen_center_y;
     struct pos screen_center_pos;
-};
-
-struct start_menu_screen_context {
-    bool *open;
-    bool has_plugin;
-    Start_Menu plugin;
-    struct ascii_data *ascii_data;
-    const struct timespec *startup_start_time;
-    const char *startup_log_path;
 };
 
 struct syntax;
@@ -571,7 +554,6 @@ void update_screen(struct editor_input_context *ctx);
 void request_clear_box(struct editor_state *state, struct box box);
 void draw_line_jump(struct editor_state *state);
 int set_clear_box(struct clear_box_data *clear_box_data,struct box box);
-void set_settings_screen_box(struct editor_state *state);
 
 // txt_editor_file.c
 int load_dir_table(struct editor_state *state,struct dir_entry **table,int *table_rows,char *path_name,int start_num,int *dir_num,int *table_num);
@@ -615,20 +597,14 @@ void set_file_browse_path_input_mode(struct file_browse_state *file_browse,bool 
 bool get_file_browse_path_input_mode(struct file_browse_state *file_browse);
 void my_cur_set(struct editor_state *state,bool set);
 
-// txt_editor_state.c
-bool editor_handle_screen_input(struct editor_input_context *ctx, int input_result, wint_t ch);
-void move_view_to_line(struct editor_state *state, long target_line, int col);
-int update_screen_ratio(struct editor_input_context *ctx);
-void restore_edit_screen(struct editor_state *state);
-
 // main.c
 int cur_pos_mg(struct pos mouse_pos,enum flags flags);
 void my_mvaddstr(struct pos pos,char *str);
 
-int filetree_mouse_event(struct editor_input_context *ctx);
-
-
-
 bool box_contains_point(struct box b,struct pos p);
 
+int clear_status_bar_outline(struct editor_state *state);
+
+struct pos editor_mouse_to_buffer_pos(struct editor_state *state,
+                        struct pos mouse_pos);
 #endif

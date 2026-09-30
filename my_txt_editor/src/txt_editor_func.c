@@ -6,11 +6,13 @@
 #include <string.h>
 #include <wchar.h>
 #include <wctype.h>
+#include "default_settings.h"
 #include "editor_types.h"
 #include "error_log.h"
 #include "filetree.h"
 #include "ftj.h"
 #include "txt_editor.h"
+#include "txt_editor_screen.h"
 #include"txt_editor_syntax.h"
 
 static int limit = 0;
@@ -670,7 +672,8 @@ void editor_screen_mouse_event(struct editor_input_context *ctx){
             }
         }
     }
-    else if(event->bstate & BUTTON1_PRESSED){
+    else if(event->bstate &
+            (BUTTON1_PRESSED | BUTTON1_CLICKED | BUTTON1_DOUBLE_CLICKED)){
         int x = event->x;
         int y = event->y;
 
@@ -765,8 +768,12 @@ int set_cur_pos(struct editor_state *state){
 int filetree_mouse_event(struct editor_input_context *ctx){
     MEVENT *ev = ctx->mouse_event;
     struct editor_state *state = ctx->state;
-    if(ev->bstate & BUTTON1_PRESSED){
+    //左クリック
+    if(ev->bstate & (BUTTON1_PRESSED | BUTTON1_CLICKED)){
         struct box ft_box = ctx->state->file_tree_data.ft_box;
+        //ファイルツリーボックスは枠線も含むサイズのため、枠線のクリックで
+        //ファイルなどが開かないよう横幅を−1する
+        ft_box.w--;
         // ファイルツリー内クリック時の処理
         if(box_contains_point(ft_box,(struct pos){ev->x,ev->y})){
             for(int i = 0;i < state->file_tree_data.open_count_num;i++){
@@ -806,7 +813,15 @@ int filetree_mouse_event(struct editor_input_context *ctx){
 
             if(box_contains_point(tmp_write_area_box,(struct pos){ev->x,ev->y})){
                 editor_set_screen_state(state,edit_screen);
+                my_cur_set(state,true);
             }
+        }
+    }
+    //ファイルツリーの枠線を右クリックするとファイルツリーサイズを変更する
+    if(ev->bstate & BUTTON1_DOUBLE_CLICKED ){
+        //枠線クリック判定
+        if(state->file_tree_data.ft_box.pos.x + state->file_tree_data.ft_box.w == ev->x){
+            state->file_tree_data.is_grabed = true;
         }
     }
     //スクロール判定
@@ -817,6 +832,9 @@ int filetree_mouse_event(struct editor_input_context *ctx){
 
         if(box_contains_point(tmp_write_area_box,(struct pos){ev->x,ev->y})){
             editor_set_screen_state(state,edit_screen);
+            struct pos cur_pos = editor_cursor_screen_pos(state);
+            
+            my_cur_set(state,true);
         }
     }
     return 0;
@@ -827,4 +845,15 @@ bool box_contains_point(struct box b,struct pos p){
     if(b.pos.x <= p.x && b.pos.x + b.w >= p.x && 
         b.pos.y <= p.y && b.pos.y + b.h >= p.y)return true;
     return false;
+}
+
+struct pos editor_mouse_to_buffer_pos(struct editor_state *state,
+                                    struct pos mouse_pos){
+    struct box write_area = 
+        (struct box){(struct pos){state->write_area.x_start,
+            state->write_area.y_start},
+            state->write_area.w,
+            state->write_area.h};
+    
+                                          
 }

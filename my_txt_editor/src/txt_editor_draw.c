@@ -486,6 +486,7 @@ void draw_file_data(struct editor_state *state){
 // 返り値: なし。
 void draw_status_bar_line(struct editor_state *state,struct box status_bar,WINDOW *win){
     struct pos end_pos = (struct pos){status_bar.pos.x + status_bar.w - 1,status_bar.pos.y};
+    clear_status_bar_outline(state);
     draw_line(status_bar.pos,end_pos,win,all_draw_mode);
     mvaddch(status_bar.pos.y,state->write_area.x_start-1,ACS_TTEE);
 }
@@ -1161,9 +1162,8 @@ static int draw_filetree(struct editor_input_context *ctx,file_tree_data *filetr
         return 0;
     }
 
-    // ツリーは編集画面の上に重ねるため、内側に残った編集画面の罫線や
-    // 行番号を消してから枠を描く。
-    for(int y = box.pos.y + 1;y < box.pos.y + box.h - 1;y++){
+    // ツリーは編集画面の上に重ねるため、移動前の境界線も含めて消す。
+    for(int y = box.pos.y;y < box.pos.y + box.h;y++){
         mvhline(y,box.pos.x,' ',box.w);
     }
     filetree_data->ft_side = FT_LEFT;
@@ -1187,5 +1187,30 @@ static int draw_filetree(struct editor_input_context *ctx,file_tree_data *filetr
     draw_filetree_items(ctx,filetree_data,filetree_data->root_node->c_table,
                         filetree_data->root_node->c_table_num,0,&file_h);
     
+    return 0;
+}
+
+int clear_status_bar_outline(struct editor_state *state){
+    struct box tmp_status_bar_box = *state->status_bar;
+    char outline_str[tmp_status_bar_box.w + 1];
+    memset(outline_str,' ',tmp_status_bar_box.w);
+    outline_str[tmp_status_bar_box.w] = '\0';
+    for(int i = 0;i < tmp_status_bar_box.h;i++){
+        if(i == 0 || i == tmp_status_bar_box.h){
+            mvaddnstr(tmp_status_bar_box.pos.y + i,
+                tmp_status_bar_box.pos.x,
+                outline_str,
+                tmp_status_bar_box.w);
+        }
+        else{
+            char wall_outline[2] = {' ','\0'};
+            mvaddnstr(tmp_status_bar_box.pos.y + i,
+                tmp_status_bar_box.pos.x,
+                wall_outline,sizeof(wall_outline));
+             mvaddnstr(tmp_status_bar_box.pos.y + i,
+                tmp_status_bar_box.pos.x + tmp_status_bar_box.w,
+                wall_outline,sizeof(wall_outline));
+        }
+    }
     return 0;
 }

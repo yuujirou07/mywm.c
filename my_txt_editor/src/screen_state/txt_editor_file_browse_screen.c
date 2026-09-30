@@ -113,7 +113,7 @@ bool handle_file_browse_screen_input(struct editor_input_context *ctx, int input
             load_file(state, file_browse->dir_name_table,
                     file_browse->dir_name_table_num,
                     file_browse->path_name, &select_state);
-
+            
             if(select_state.select_name[0] != '\0' && select_state.select_state == folder){
                 struct dir_table now_path = {
                     .path_name = file_browse->path_name,
@@ -137,8 +137,10 @@ bool handle_file_browse_screen_input(struct editor_input_context *ctx, int input
                         &file_browse->dir_num,
                         &file_browse->dir_name_table_num);
 
+                
                 state->render_flags |= RENDER_FILE_BROWSE;
                 file_browse->path_input_mode = false;
+
             }
             if(state->file_data.now_open_file != NULL && select_state.select_state == file){
                 load_screen_size(state);
@@ -162,6 +164,7 @@ bool handle_file_browse_screen_input(struct editor_input_context *ctx, int input
                 editor_set_cursor(state, 0, 0);
                 restore_edit_screen(state);
                 set_syntax_data(ctx->syntax_data,ctx);
+                
             }
         }
     }
