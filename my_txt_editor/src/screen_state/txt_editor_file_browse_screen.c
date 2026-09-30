@@ -2,9 +2,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <wchar.h>
 #include <wctype.h>
 #include "error_log.h"
 #include "txt_editor_screen.h"
+#include "txt_editor_syntax.h"
 
 // handle_file_browse_screen_input(): ファイルブラウザ画面の移動・選択・復帰を処理する。
 // 引数: ctx=入力context(state->file_browseにファイル一覧・現在パスが入っている)、input_result=get_wch()の結果、ch=入力文字またはKEY_*。
@@ -159,7 +161,7 @@ bool handle_file_browse_screen_input(struct editor_input_context *ctx, int input
                 // 読み込み直後は先頭行の行頭から編集を始める。
                 editor_set_cursor(state, 0, 0);
                 restore_edit_screen(state);
-
+                set_syntax_data(ctx->syntax_data,ctx);
             }
         }
     }

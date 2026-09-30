@@ -22,7 +22,12 @@ bool handle_edit_screen_input(struct editor_input_context *ctx, int input_result
     }
     if (input_result == KEY_CODE_YES && ch == KEY_BACKSPACE && state->is_cur_show) {
         handle_backspace(ctx);
-        send_lsp_did_change(ctx);
+        if(state->settings_data->lsp.lsp_use){
+            send_lsp_did_change(ctx);
+        }
+        if(state->settings_data->built_in_syntax){
+            set_syntax_data(ctx->syntax_data,ctx);
+        }
         return true;
     }
     else if(ch == CTRL('h')){
@@ -80,11 +85,16 @@ bool handle_edit_screen_input(struct editor_input_context *ctx, int input_result
 
             }
             handle_char_input(win, (wchar_t)ch, state);
-            send_lsp_did_change(ctx);
+            if(state->settings_data->lsp.lsp_use){
+                send_lsp_did_change(ctx);
+            }
         }
-        struct pos write_area_pos = editor_cursor_write_area_pos(state);
-        update_line_syntax_data(ctx,write_area_pos.y);
+        //struct pos write_area_pos = editor_cursor_write_area_pos(state);
+        if(state->settings_data->built_in_syntax){
+            set_syntax_data(ctx->syntax_data,ctx);
+        }
         state->render_flags |= RENDER_LINE_STATUS;
+        
     } else {
         if (input_result == OK && iswprint((wint_t)ch)) {
             // カーソル非表示中は、論理行を見える位置へ戻してから入力する。
@@ -94,20 +104,22 @@ bool handle_edit_screen_input(struct editor_input_context *ctx, int input_result
             move_view_to_line(state, state->cursor.file_pos.y, state->cursor.file_pos.x);
             my_cur_set(state,true);
             handle_char_input(win, (wchar_t)ch, state);
-            send_lsp_did_change(ctx);
-
+            if(state->settings_data->lsp.lsp_use){
+                send_lsp_did_change(ctx);
+            }
+            if(state->settings_data->built_in_syntax){
+                set_syntax_data(ctx->syntax_data,ctx);
+            }
             state->render_flags |= RENDER_LINE_STATUS;
         }
         if (ch == KEY_LEFT || ch == KEY_RIGHT || ch == KEY_UP || ch == KEY_DOWN){
             // nは現在の論理行。move_view_to_line()がstateを書き換える前に保持する。
             int n = editor_cursor_logical_line_pos(state);
             my_cur_set(state,true);
-            syntax syntax_data = {0};
             move_view_to_line(state, n - 1, 0);
 
             if(state->settings_data->built_in_syntax){
-                now_usint_syntax_ptr_ctl(&syntax_data,get);
-                set_syntax_data(&syntax_data,ctx);
+                set_syntax_data(ctx->syntax_data,ctx);
             }
         }
     }

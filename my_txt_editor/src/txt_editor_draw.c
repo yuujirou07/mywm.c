@@ -435,7 +435,7 @@ void editor_screen_move_line(struct editor_input_context *ctx,int num){
     state->scr.scr_start_num = next_scr_start;
 
     if(state->settings_data->built_in_syntax){
-        scroll_syntax_pos_data(-num,state->write_area.h);
+        scroll_syntax_pos_data(ctx->syntax_data,-num,state->write_area.h);
         int update_line = num > 0 ? state->write_area.h - 1 : 0;
         update_line_syntax_data(ctx,update_line);
     }
@@ -718,22 +718,19 @@ void update_screen(struct editor_input_context *ctx){
                 int col = search_box.pos.x + 1;
 
                 const wchar_t *path = now_open_path_name(NULL,get);
-                size_t path_len = wcslen(path);
-
                 //マウスカーソル分を確保するため両サイド合わせて-3する
-                size_t show_path_size = search_box.w - 3;
-                const wchar_t *str_start_ptr = path;
-                if(path_len > show_path_size){
-                    str_start_ptr = &path[path_len - show_path_size];
+                int show_path_size = search_box.w - 3;
+                size_t path_start = wcslen(path);
+                int path_width = 0;
+                while(path_start > 0){
+                    int char_width = wcwidth(path[path_start - 1]);
+                    if(char_width < 0 || path_width + char_width > show_path_size)break;
+                    path_width += char_width;
+                    path_start--;
                 }
-                else{
-                    char clear_area[show_path_size - path_len+1];
-                    memset(clear_area,' ',sizeof(char)*(show_path_size - path_len));
-                    clear_area[show_path_size - path_len] = '\0';
-                    mvaddnstr(cur_line,col + path_len,clear_area,show_path_size);
-                }
-                
-                mvaddwstr(cur_line,col,str_start_ptr);
+
+                mvhline(cur_line,col,' ',show_path_size);
+                mvaddwstr(cur_line,col,&path[path_start]);
                 int x;
                 int y;
                 getyx(ctx->win,y,x);

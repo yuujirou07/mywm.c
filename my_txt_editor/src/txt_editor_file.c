@@ -890,8 +890,7 @@ int now_input_path_open(struct editor_state *state,struct editor_input_context *
         restore_edit_screen(state);
         set_file_browse_path_input_mode(&state->file_browse,false);
         if(state->settings_data->built_in_syntax){
-            syntax *syntax = now_usint_syntax_ptr_ctl(NULL,get);
-            if(syntax != NULL)set_syntax_data(syntax,ctx);
+            if(ctx->syntax_data != NULL)set_syntax_data(ctx->syntax_data,ctx);
         }
     }
     return 0;

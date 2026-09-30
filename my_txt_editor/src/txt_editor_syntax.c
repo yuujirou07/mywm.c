@@ -259,34 +259,43 @@ int set_syntax_data(syntax *syntax,struct editor_input_context *ctx){
     for(int h = 0;h < ctx->state->write_area.h;h++){
         int now_file_line_num = ctx->state->scr.scr_start_num + h;
         if(now_file_line_num < 0 || now_file_line_num >= editor_line_limit(ctx->state))break;
-        int line_str_len = editor_line_len(ctx->state,now_file_line_num);
+        int line_str_len    = editor_line_len(ctx->state,now_file_line_num);
         wint_t *line_st_ptr = editor_line_cells(ctx->state,now_file_line_num);
         if(line_st_ptr == NULL)continue;
         int view_cols = editor_view_cols(ctx->state);
+
         if(scan_syntax_words(syntax,line_st_ptr,line_str_len,view_cols,h,
-            reserved_words,sizeof(reserved_words) / sizeof(reserved_words[0]),reserved_word) < 0)return -1;
+            reserved_words,
+            sizeof(reserved_words) / sizeof(reserved_words[0]),reserved_word) < 0)return -1;
         if(scan_syntax_words(syntax,line_st_ptr,line_str_len,view_cols,h,
-            type_words,sizeof(type_words) / sizeof(type_words[0]),type) < 0)return -1;
+            type_words,
+            sizeof(type_words) / sizeof(type_words[0]),type) < 0)return -1;
         if(scan_syntax_words(syntax,line_st_ptr,line_str_len,view_cols,h,
-            declaration_words,sizeof(declaration_words) / sizeof(declaration_words[0]),declaration_keyword) < 0)return -1;
-        if(scan_syntax_method(syntax,line_st_ptr,line_str_len,view_cols,h,Method) < 0)return -1;
-        if(scan_syntax_comment(syntax,line_st_ptr,line_str_len,view_cols,h,comment) < 0)return -1;
-        if(scan_syntax_variable(syntax,line_st_ptr,line_str_len,view_cols,h,variable) < 0)return -1;
-        if(scan_syntax_literal(syntax,line_st_ptr,line_str_len,view_cols,h,literal) < 0)return -1;
-        if(scan_syntax_header_name(syntax,line_st_ptr,line_str_len,view_cols,h,header_name) < 0)return -1;
+            declaration_words,sizeof(declaration_words) / sizeof(declaration_words[0]),
+            declaration_keyword) < 0)return -1;
+        if(scan_syntax_method(syntax,line_st_ptr,
+            line_str_len,view_cols,h,Method) < 0)return -1;
+        if(scan_syntax_comment(syntax,line_st_ptr,
+            line_str_len,view_cols,h,comment) < 0)return -1;
+        if(scan_syntax_variable(syntax,line_st_ptr,
+            line_str_len,view_cols,h,variable) < 0)return -1;
+        if(scan_syntax_literal(syntax,line_st_ptr,
+            line_str_len,view_cols,h,literal) < 0)return -1;
+        if(scan_syntax_header_name(syntax,line_st_ptr,
+            line_str_len,view_cols,h,header_name) < 0)return -1;
     }
     return syntax->syntax_list_data.syntax_list_num;
 }
 
 /* 現在表示中の1行にある古い着色情報を削除し、その行を再解析する。
  * 引数: ctxは有効なstateを持つ入力コンテキスト、lineは表示領域先頭を0とする画面相対行。
- * now_usint_syntax_ptr_ctl()で事前にsyntaxを登録し、syntax_dataを確保しておく必要がある。
+ * ctxのsyntax_dataを設定し、配列を確保しておく必要がある。
  * 返り値: 更新後の登録件数。ctx/state、登録syntax、配列、対象ファイル行が無効、または追加失敗なら-1。
  * 対象行以外の着色情報と確保済み配列は保持する。
  */
 int update_line_syntax_data(struct editor_input_context *ctx,int line){
     if(ctx == NULL || ctx->state == NULL)return -1;
-    syntax *syntax = now_usint_syntax_ptr_ctl(NULL,get);
+    syntax *syntax = ctx->syntax_data;
     if(syntax == NULL)return -1;
     if(syntax->syntax_list_data.syntax_data == NULL)return -1;
 
@@ -349,6 +358,7 @@ int apply_syntax_color(struct editor_input_context *ctx,syntax syntax){
             state->write_area.x_start + area->st_x,
             area->end_x - area->st_x + 1,A_NORMAL,syntax_color,NULL);
     }
+    refresh();
     return 0;
 }
 
@@ -500,30 +510,11 @@ int add_garbage_collection(syntax_data *syntax_data_ptr){
     return 0;
 }
 
-/* 現在使用中のsyntaxへの借用ポインタを保存または取得する。
- * 引数: flagsがsetならnow_using_syntaxを保存し、getなら引数を参照せず現在値を取得する。
- * 保存したsyntaxは利用中、有効でなければならない。所有権は移動しない。
- * 返り値: set/get成功時は現在値。setへNULLを渡した場合、未登録のget、その他のflagsではNULL。
+/* syntaxの全着色範囲を画面上で移動し、画面外の範囲を削除する。
+ * 引数: syntaxは更新対象、yは各範囲へ加算する行数。正なら下、負なら上へ移動する。view_rowsは表示行数。
+ * 返り値: syntaxがNULL、またはview_rowsが0以下なら-1。それ以外は0。
  */
-syntax* now_usint_syntax_ptr_ctl(syntax *now_using_syntax,enum flags flags){
-    if(now_using_syntax == NULL && flags == set)return NULL;
-    static syntax *now_using_syntax_ptr = NULL;
-    if(flags == set){
-        now_using_syntax_ptr = now_using_syntax;
-        return now_using_syntax_ptr;
-    }
-    else if(flags == get){
-        return now_using_syntax_ptr;
-    }
-    return NULL;
-}
-
-/* 登録済みsyntaxの全着色範囲を画面上で移動し、画面外の範囲を削除する。
- * 引数: yは各範囲へ加算する行数。正なら下、負なら上へ移動する。view_rowsは表示行数。
- * 返り値: syntaxが未登録、またはview_rowsが0以下なら-1。それ以外は0。
- */
-int scroll_syntax_pos_data(int y,int view_rows){
-    syntax *syntax_ptr = now_usint_syntax_ptr_ctl(NULL,get);
+int scroll_syntax_pos_data(syntax *syntax_ptr,int y,int view_rows){
     if(syntax_ptr == NULL || view_rows <= 0)return -1;
     if(move_syntax_pos_data(syntax_ptr,y) < 0)return -1;
 

@@ -605,6 +605,15 @@ int make_new_line_space(struct editor_state *state,long make_space_line_num){
 }
 
 
+
+
+
+
+
+
+
+
+
 // editor_screen_mouse_event(): ホイールで表示開始行だけを動かす。
 // スクロールは編集位置を変えないため、cursorは書き換えない。カーソルの画面座標は
 // scr_start_numから自動的にずれるので、表示可否だけを取り直す。
@@ -621,7 +630,7 @@ void editor_screen_mouse_event(struct editor_input_context *ctx){
     if (event->bstate & BUTTON5_PRESSED && can_scroll_down) {
         state->scr.scr_start_num++;
         if(state->settings_data->built_in_syntax){
-            scroll_syntax_pos_data(-1,state->write_area.h);
+            scroll_syntax_pos_data(ctx->syntax_data,-1,state->write_area.h);
             update_line_syntax_data(ctx,state->write_area.h - 1);
         }
         
@@ -629,7 +638,7 @@ void editor_screen_mouse_event(struct editor_input_context *ctx){
     } else if ((event->bstate & BUTTON4_PRESSED) && state->scr.scr_start_num > 0) {
         state->scr.scr_start_num--;
         if(state->settings_data->built_in_syntax){
-            scroll_syntax_pos_data(+1,state->write_area.h);
+            scroll_syntax_pos_data(ctx->syntax_data,+1,state->write_area.h);
             update_line_syntax_data(ctx,0);
         }
     }
@@ -639,6 +648,10 @@ void editor_screen_mouse_event(struct editor_input_context *ctx){
 
         if(y < state->write_area.y_start || y >= state->write_area.y_end ||
             x < state->write_area.x_start || x >= state->write_area.x_end){
+            if(box_contains_point(ctx->state->file_tree_data.ft_box,(struct pos){event->x,event->y})){
+                editor_set_screen_state(state,filetree_screen);
+                filetree_mouse_event(ctx);
+            }
             return;
         }
         struct pos write_area_pos;
@@ -725,42 +738,55 @@ int filetree_mouse_event(struct editor_input_context *ctx){
     MEVENT *ev = ctx->mouse_event;
     struct editor_state *state = ctx->state;
     if(ev->bstate & BUTTON1_PRESSED){
-        int x = ev->x;
-        int y = ev->y;
-
         struct box ft_box = ctx->state->file_tree_data.ft_box;
-        if(ft_box.pos.x >= x)return 0;
-        else if(ft_box.pos.x + ft_box.w <= x)return 0;
-        if(ft_box.pos.y >= y)return 0;
-        else if(ft_box.pos.y + ft_box.h <= y)return 0;
+        // ファイルツリー内クリック時の処理
+        if(box_contains_point(ft_box,(struct pos){ev->x,ev->y})){
+            for(int i = 0;i < state->file_tree_data.open_count_num;i++){
+                ft_path_open_check_data *item =
+                    &state->file_tree_data.open_check_data[i];
+                if(item->screen_y != ev->y)continue;
 
-        for(int i = 0;i < state->file_tree_data.open_count_num;i++){
-            ft_path_open_check_data *item =
-                &state->file_tree_data.open_check_data[i];
-            if(item->screen_y != y)continue;
-
-            enum select_state path_state =
-                get_path_state(item->table_ptr->absolute_path);
-            if(path_state == folder){
-                item->is_open = !item->is_open;
-                state->render_flags |= RENDER_EDIT_SCREEN_BASE;
-            }
-            else if(path_state == file){
-                struct file_browse_select_state select_state;
-                load_file(state,NULL,0,item->table_ptr->absolute_path,&select_state);
-                if(select_state.select_state == file){
-                    load_screen_size(state);
-                    editor_set_cursor(state,0,0);
-                    state->render_flags |= RENDER_FILE_DATA;
+                enum select_state path_state =
+                    get_path_state(item->table_ptr->absolute_path);
+                if(path_state == folder){
+                    item->is_open = !item->is_open;
                     state->render_flags |= RENDER_EDIT_SCREEN_BASE;
-                    if(state->settings_data->built_in_syntax){
-                        syntax *syntax_data = now_usint_syntax_ptr_ctl(NULL,get);
-                        if(syntax_data != NULL)set_syntax_data(syntax_data,ctx);
+                }
+                else if(path_state == file){
+                    struct file_browse_select_state select_state;
+                    load_file(state,NULL,0
+                        ,item->table_ptr->absolute_path,
+                        &select_state);
+                    
+                    if(select_state.select_state == file){
+                        load_screen_size(state);
+                        editor_set_cursor(state,0,0);
+                        state->render_flags |= RENDER_FILE_DATA;
+                        state->render_flags |= RENDER_EDIT_SCREEN_BASE;
+                        if(state->settings_data->built_in_syntax){
+                            if(ctx->syntax_data != NULL)set_syntax_data(ctx->syntax_data,ctx);
+                        }
                     }
                 }
+                break;
             }
-            break;
+        }
+        else{
+            struct box tmp_write_area_box = 
+                {(struct pos){state->write_area.x_start,state->write_area.y_start},
+                    state->write_area.w,state->write_area.h};
+
+            if(box_contains_point(tmp_write_area_box,(struct pos){ev->x,ev->y})){
+                editor_set_screen_state(state,edit_screen);
+            }
         }
     }
     return 0;
+}
+
+
+bool box_contains_point(struct box b,struct pos p){
+    if(b.pos.x <= p.x && b.pos.x + b.w >= p.x && 
+        b.pos.y <= p.y && b.pos.y + b.h >= p.y)return true;
+    return false;
 }

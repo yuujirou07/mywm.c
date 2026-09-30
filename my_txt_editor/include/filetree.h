@@ -31,8 +31,6 @@ typedef struct{
     int open_count_num;
     bool is_show; // ファイルツリーを表示中ならtrue。編集領域を右へ寄せる幅の計算に使う。
     filetree_side ft_side;//ファイルツリーを表示する辺
-
-
 }file_tree_data;
 
 

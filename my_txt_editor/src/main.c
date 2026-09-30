@@ -67,10 +67,12 @@ int main(int argc, char *argv[])
 
     }
     struct editor_settings settings_data = {0};
-    struct editor_state state = {0};
-    struct ascii_data ascii_data = {0};
+    struct editor_state state      = {0};
+    struct ascii_data   ascii_data = {0};
+
     state.settings_data = &settings_data;
-    state.mylsp_use = mylsp;
+    state.mylsp_use     = mylsp;
+
     struct editor_input_context input_context = {0};
     struct box status_bar;
     MEVENT mouse_event;
@@ -278,9 +280,9 @@ int main(int argc, char *argv[])
             return 1;
         }
     }
-
     
-      /* ファイルディスクリプタと紐付けるイベント情報 */
+    
+    /* ファイルディスクリプタと紐付けるイベント情報 */
     struct epoll_event  ev;
     int epfd = -1;
 
@@ -335,6 +337,7 @@ int main(int argc, char *argv[])
     input_context.mouse_event = &mouse_event;
     input_context.state = &state;
     input_context.lsp_data = &lsp;
+    input_context.syntax_data = &syntax;
     input_context.edit_screen.line_start_pos.x = state.write_area.x_start - 1;
     input_context.edit_screen.line_start_pos.y = state.write_area.y_start;
     input_context.edit_screen.line_end_pos.x = state.write_area.x_start - 1;
@@ -369,8 +372,6 @@ int main(int argc, char *argv[])
     free(now_dir);
         
 
-    // 部分更新とスクロール処理から参照するsyntaxを借用ポインタとして登録する。
-    now_usint_syntax_ptr_ctl(&syntax,set);
     int running = true;
     while (running) {
         
@@ -400,7 +401,6 @@ int main(int argc, char *argv[])
             }
             editor_sync_cursor(&state);
             set_cur_pos(&state);
-            refresh();
             my_cur_set(&state,show_cursor);
         }
 
@@ -495,3 +495,5 @@ static void lsp_poll_events(int *epfd, struct lsp_process *lsp, int timeout_ms)
 void my_mvaddstr(struct pos pos,char * str){
     mvaddstr(pos.y,pos.x,str);
 }
+
+

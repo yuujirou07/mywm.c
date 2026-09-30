@@ -42,9 +42,8 @@ bool handle_line_jump_mode_input(struct editor_input_context *ctx, wint_t ch){
         reset_jump_mode(state);
         editor_set_screen_state(state, edit_screen);
         if(state->settings_data->built_in_syntax){
-            syntax *syntax = now_usint_syntax_ptr_ctl(NULL,get);
-            if(syntax != NULL){
-                set_syntax_data(syntax,ctx);
+            if(ctx->syntax_data != NULL){
+                set_syntax_data(ctx->syntax_data,ctx);
             }
         }
     }

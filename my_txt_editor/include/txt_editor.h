@@ -313,11 +313,13 @@ struct start_menu_screen_context {
     const char *startup_log_path;
 };
 
+struct syntax;
 struct editor_input_context {
     WINDOW *win;
     MEVENT *mouse_event;
     struct editor_state *state;
     struct lsp_process *lsp_data;
+    struct syntax *syntax_data;
     struct edit_screen_context edit_screen;
     struct ask_make_file_mode_context ask_make_file_mode;
     struct start_menu_screen_context start_menu_screen;
@@ -624,5 +626,9 @@ int cur_pos_mg(struct pos mouse_pos,enum flags flags);
 void my_mvaddstr(struct pos pos,char *str);
 
 int filetree_mouse_event(struct editor_input_context *ctx);
+
+
+
+bool box_contains_point(struct box b,struct pos p);
 
 #endif
