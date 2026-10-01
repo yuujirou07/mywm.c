@@ -812,6 +812,9 @@ int filetree_mouse_event(struct editor_input_context *ctx){
                     state->write_area.w,state->write_area.h};
 
             if(box_contains_point(tmp_write_area_box,(struct pos){ev->x,ev->y})){
+                struct pos write_area_cur_pos = 
+                    editor_mouse_to_buffer_pos(state,(struct pos){ev->x,ev->y});
+                
                 editor_set_screen_state(state,edit_screen);
                 my_cur_set(state,true);
             }
@@ -832,8 +835,6 @@ int filetree_mouse_event(struct editor_input_context *ctx){
 
         if(box_contains_point(tmp_write_area_box,(struct pos){ev->x,ev->y})){
             editor_set_screen_state(state,edit_screen);
-            struct pos cur_pos = editor_cursor_screen_pos(state);
-            
             my_cur_set(state,true);
         }
     }
@@ -854,6 +855,16 @@ struct pos editor_mouse_to_buffer_pos(struct editor_state *state,
             state->write_area.y_start},
             state->write_area.w,
             state->write_area.h};
-    
-                                          
+    struct pos tmp_pos = (struct pos){-1,-1};  
+    if(screen_pos_to_box_pos(write_area,mouse_pos,&tmp_pos)){
+        error_log("error");
+        return tmp_pos;
+    }
+    return tmp_pos;  
+}
+
+bool screen_pos_to_box_pos(struct box b1,struct pos p1,struct pos *rt1){
+    if(!box_contains_point(b1,p1))return 1;
+    *rt1 = (struct pos){p1.x - b1.pos.x,p1.y - b1.pos.y};
+    return 0;
 }
