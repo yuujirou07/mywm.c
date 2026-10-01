@@ -138,6 +138,7 @@ executable(
     'txt_editor',
     [
         'my_txt_editor/src/main.c',
+        'my_txt_editor/src/ftj.c',
         'my_txt_editor/src/screen_state/txt_editor_state.c',
         'my_txt_editor/src/screen_state/txt_editor_edit_screen.c',
         'my_txt_editor/src/screen_state/txt_editor_file_browse_screen.c',
