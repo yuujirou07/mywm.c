@@ -608,6 +608,10 @@ int clear_status_bar_outline(struct editor_state *state);
 struct pos editor_mouse_to_buffer_pos(struct editor_state *state,
                         struct pos mouse_pos);
 
+struct pos editor_pos_to_buffer_pos(
+                struct editor_state *state,
+                struct pos editor_pos);
+
 
 bool screen_pos_to_box_pos(struct box b1,struct pos p1,struct pos *rt1);
 #endif

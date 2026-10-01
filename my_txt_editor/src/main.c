@@ -149,7 +149,7 @@ int main(int argc, char *argv[])
     my_cur_set(&state,true);
     raw();
     scrollok(win, TRUE);
-    mouseinterval(0);
+    mouseinterval(1);
     mousemask(ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION, NULL);  
     
     // ファイルブラウザ初期ディレクトリの絶対パスを取得する。

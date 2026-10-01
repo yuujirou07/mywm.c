@@ -685,10 +685,14 @@ void editor_screen_mouse_event(struct editor_input_context *ctx){
             }
             return;
         }
+        
         struct pos write_area_pos;
         write_area_pos.y = y - state->write_area.y_start;
         write_area_pos.x = x - state->write_area.x_start;
         int line_num = state->scr.scr_start_num + write_area_pos.y;
+        if(*state->str.line < line_num){
+            line_num = *state->str.line;
+        }
         editor_set_cursor(state,line_num,write_area_pos.x);
     }
     else{
@@ -814,7 +818,14 @@ int filetree_mouse_event(struct editor_input_context *ctx){
             if(box_contains_point(tmp_write_area_box,(struct pos){ev->x,ev->y})){
                 struct pos write_area_cur_pos = 
                     editor_mouse_to_buffer_pos(state,(struct pos){ev->x,ev->y});
-                
+                //カーソル論理座標
+                struct pos cur_logical_pos = 
+                    editor_pos_to_buffer_pos(state,write_area_cur_pos);
+                //表示されている行数内に収める
+                if(*state->str.line <= cur_logical_pos.y){
+                    cur_logical_pos.y = *state->str.line;
+                }
+                editor_set_cursor(state,cur_logical_pos.x,cur_logical_pos.y);
                 editor_set_screen_state(state,edit_screen);
                 my_cur_set(state,true);
             }
@@ -832,7 +843,6 @@ int filetree_mouse_event(struct editor_input_context *ctx){
         struct box tmp_write_area_box = 
             {(struct pos){state->write_area.x_start,state->write_area.y_start},
                 state->write_area.w,state->write_area.h};
-
         if(box_contains_point(tmp_write_area_box,(struct pos){ev->x,ev->y})){
             editor_set_screen_state(state,edit_screen);
             my_cur_set(state,true);
@@ -842,12 +852,19 @@ int filetree_mouse_event(struct editor_input_context *ctx){
 }
 
 
+// box_contains_point(): 指定座標がボックスの範囲内か判定する。
+// 引数: b=画面座標と幅・高さを持つボックス、p=判定する画面座標。
+// 返り値: pが左上から右下の境界を含む範囲内ならtrue、それ以外はfalse。
 bool box_contains_point(struct box b,struct pos p){
     if(b.pos.x <= p.x && b.pos.x + b.w >= p.x && 
         b.pos.y <= p.y && b.pos.y + b.h >= p.y)return true;
     return false;
 }
 
+// editor_mouse_to_buffer_pos(): マウスの画面座標を編集領域の左上基準の座標へ変換する。
+// 引数: state=編集領域の画面上の位置と大きさ、mouse_pos=変換する画面座標。
+// 返り値: 編集領域内なら領域左上を(0,0)とする座標、範囲外なら(-1,-1)。
+// スクロール開始行は加算しない。
 struct pos editor_mouse_to_buffer_pos(struct editor_state *state,
                                     struct pos mouse_pos){
     struct box write_area = 
@@ -863,8 +880,18 @@ struct pos editor_mouse_to_buffer_pos(struct editor_state *state,
     return tmp_pos;  
 }
 
-bool screen_pos_to_box_pos(struct box b1,struct pos p1,struct pos *rt1){
+// screen_pos_to_box_pos(): 画面座標を指定ボックスの左上基準の座標へ変換する。
+// 引数: b1=変換先ボックス、p1=画面座標、rt1=変換結果の格納先。
+// 返り値: 変換成功ならfalse、p1がb1の範囲外ならtrue。
+// 失敗時はrt1の値を変更しない。rt1がNULLの場合の動作は未定義。
+bool screen_pos_to_box_pos(struct box b1,struct pos p1,struct pos *rp1){
     if(!box_contains_point(b1,p1))return 1;
-    *rt1 = (struct pos){p1.x - b1.pos.x,p1.y - b1.pos.y};
+    *rp1 = (struct pos){p1.x - b1.pos.x,p1.y - b1.pos.y};
     return 0;
+}
+
+struct pos editor_pos_to_buffer_pos(
+                struct editor_state *state,
+                struct pos editor_pos){
+    return(struct pos){state->scr.scr_start_num + editor_pos.y,editor_pos.x};
 }
