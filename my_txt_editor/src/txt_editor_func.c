@@ -677,23 +677,32 @@ void editor_screen_mouse_event(struct editor_input_context *ctx){
         int x = event->x;
         int y = event->y;
 
-        if(y < state->write_area.y_start || y >= state->write_area.y_end ||
-            x < state->write_area.x_start || x >= state->write_area.x_end){
-            if(box_contains_point(ctx->state->file_tree_data.ft_box,(struct pos){event->x,event->y})){
-                editor_set_screen_state(state,filetree_screen);
-                filetree_mouse_event(ctx);
-            }
+      
+        if(box_contains_point(ctx->state->file_tree_data.ft_box,(struct pos){event->x,event->y})){
+            editor_set_screen_state(state,filetree_screen);
+            filetree_mouse_event(ctx);
             return;
         }
-        
-        struct pos write_area_pos;
-        write_area_pos.y = y - state->write_area.y_start;
-        write_area_pos.x = x - state->write_area.x_start;
-        int line_num = state->scr.scr_start_num + write_area_pos.y;
-        if(*state->str.line < line_num){
-            line_num = *state->str.line;
+        else{
+            struct box tmp_write_area_box = 
+                {(struct pos){
+                    ctx->state->write_area.x_start,
+                    ctx->state->write_area.y_start
+                },
+                    ctx->state->write_area.w,
+                    ctx->state->write_area.h
+                };
+            if(box_contains_point(tmp_write_area_box,(struct pos){x,y})){
+                struct pos write_area_pos;
+                write_area_pos.y = y - state->write_area.y_start;
+                write_area_pos.x = x - state->write_area.x_start;
+                int line_num = state->scr.scr_start_num + write_area_pos.y;
+                if(state->file_data.description_line_end < line_num){
+                    line_num = *state->str.line;
+                }
+                editor_set_cursor(state,line_num,write_area_pos.x);
+            }
         }
-        editor_set_cursor(state,line_num,write_area_pos.x);
     }
     else{
         return;
