@@ -14,9 +14,9 @@
 #include "txt_editor.h"
 #include "error_log.h"
 
-#define LSP_INVALID_FD (-1)
-#define LSP_HEADER_MAX 8192
-#define LSP_CONTENT_MAX ((size_t)32 * 1024 * 1024)
+#define LSP_INVALID_FD (-1) // 言語サーバーとのパイプが未接続であることを表す値。
+#define LSP_HEADER_MAX 8192 // 受信するLSPヘッダーの最大バイト数。
+#define LSP_CONTENT_MAX ((size_t)32 * 1024 * 1024) // 受信本文の上限（32MiB）。
 
 /*
  * 指定した長さのデータをfdへすべて書き込む。

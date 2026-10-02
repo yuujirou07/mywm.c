@@ -1,10 +1,22 @@
 {
-  "show_status_bar": true,
-  "status_bar_side": "top",
+  "display": {
+    "show_status_bar": true,
+    "status_bar_side": "top",
+    "use_icon": true
+  },
+  "editor": {
+    "built_in_syntax": true
+  },
   "lsp": {
     "launch_startup_editor": true,
     "epoll_timeout_ms": 16
   },
-  "use_icon":true,
-  "built_in_syntax":true
+  "auto_complete":{
+    "enabled":true,
+    "window":{
+      "show":true,
+      "width":12,
+      "height":7
+    }
+  }
 }

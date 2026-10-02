@@ -677,6 +677,10 @@ void load_default_editor_settings(struct editor_settings *settings_data){
     settings_data->lsp.lsp_use                  = DEFAULT_LSP_USE;
     settings_data->use_icon                     = DEFAULT_USE_ICON;
     settings_data->built_in_syntax              = DEFAULT_BUILT_IN_SYNTAX;
+    settings_data->auto_complete_settings_data.auto_complete_enabled = DEFAULT_AUTO_COMPLETE;
+    settings_data->auto_complete_settings_data.auto_complete_window_enable = DEFAULT_AUTO_COMPLETE_WINDOW;
+    settings_data->auto_complete_settings_data.auto_complete_window_size =
+        (struct pos){DEFAULT_AUTO_COMPLETE_WINDOW_WIDTH, DEFAULT_AUTO_COMPLETE_WINDOW_HEIGHT};
 }
 
 // file_select_line_update(): 現在の選択行をprevious_lineに保存し、新しい選択行を設定する。

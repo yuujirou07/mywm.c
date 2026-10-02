@@ -13,7 +13,7 @@
 #include"error_log.h"
 #include"txt_editor_icon.h"
 
-#define SETTINGS_EXPLATAION_BOX_MIN_W 12
+#define SETTINGS_EXPLATAION_BOX_MIN_W 12 // 設定説明欄へ確保する最小幅（端末セル数）。
 
 static void draw_search_box(struct box search_box,WINDOW *win);
 static int settings_item_name_width(const char *name);

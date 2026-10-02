@@ -15,13 +15,13 @@
 #include"filetree.h"
 
 
-#define SETTINGS_FILE_EXT ".json"
+#define SETTINGS_FILE_EXT ".json" // 設定ファイルとして受け付ける拡張子。
 
-#define startuptime_log_file_argument_num 1
-#define FDS_N 4
-#define DRAW_BOX_REQUEST_MAX 64
-#define box_retention_max 64
-#define screen_state_log_storage 256
+#define startuptime_log_file_argument_num 1 // 起動時間ログのパスを受け取るargv添字。
+#define FDS_N 4 // epoll_wait()で一度に受け取るイベント配列の要素数。
+#define DRAW_BOX_REQUEST_MAX 64 // 1回の更新まで保持できる枠描画要求数。
+#define box_retention_max 64 // 1回の更新まで保持できる矩形消去要求数。
+#define screen_state_log_storage 256 // 画面遷移履歴へ保持できる状態数。
 // ファイルブラウザ一覧に保持する名前の最大長。
 #define DIR_ENTRY_NAME_MAX 256
 // 各行へ前もって足しておく余白列数。ここに収まる入力は再配置なしで処理できる。
@@ -57,12 +57,12 @@ enum render_flags {
 #ifdef CTRL
 #undef CTRL
 #endif
-#define CTRL(x) ((x) & 0x1f)// 0x1fはCtrl
+#define CTRL(x) ((x) & 0x1f) // ASCII文字から対応するCtrlキーコードを作る。
 
 // ステータスバーを画面上端か下端のどちらに出すか。
 enum status_bar_side{
-    top,
-    bottom,
+    top, // 画面上端。
+    bottom, // 画面下端。
 };
 
 // 行ジャンプモード中に入力された行番号を保持する。
@@ -88,12 +88,12 @@ struct file_data{
     bool    is_open_file; // ファイルを開いて編集しているならtrue。
 };
 
-//データの項目種別。
+// ファイルブラウザで判定した項目種別。
 enum select_state{
-    file,
-    folder,
-    unkown,
-    error,
+    file, // 通常ファイル。
+    folder, // ディレクトリ。
+    unkown, // 種別を判定できない項目。
+    error, // stat等の判定処理に失敗した状態。
 };
 
 
@@ -106,7 +106,7 @@ enum now_screen_state{
     error_screen, // エラー表示画面。
     line_jump_mode, // 行ジャンプ番号入力中。
     ask_make_file_mode, // 新規ファイル作成確認中。
-    setting_screen,//せってう画面
+    setting_screen, // 設定画面。
     screen_state_log_error, // 指定された履歴位置が範囲外。
 };
 
@@ -123,15 +123,17 @@ struct file_browse_select_state{
     char select_name[NAME_MAX + 1]; // 選択された項目名。
 };
 
+// パスとdirent互換の名前・種別をまとめた一時的な項目情報。
 struct dir_table{
-    char *path_name; // 操作対象のパス。呼び出し元により相対パスまたは絶対パス。
-    char d_name[DIR_ENTRY_NAME_MAX];
-    unsigned char d_type;
+    char *path_name; // 操作対象の借用パス。相対パスまたは絶対パス。
+    char d_name[DIR_ENTRY_NAME_MAX]; // 項目名のNUL終端文字列。
+    unsigned char d_type; // dirent.d_typeと同じDT_*値。
 };
 
+// ファイルブラウザ一覧へ保持する1行分の項目情報。
 struct dir_entry {
-    char name[DIR_ENTRY_NAME_MAX];
-    unsigned char d_type;
+    char name[DIR_ENTRY_NAME_MAX]; // 項目名のNUL終端文字列。
+    unsigned char d_type; // dirent.d_typeと同じDT_*値。
 };
 
 // ファイルブラウザで反転表示する行の現在値と直前値。
@@ -180,7 +182,7 @@ struct scr_data {
 struct cursor {
     struct pos file_pos; // x=行頭からの桁、y=ファイル先頭からの論理行。
     struct pos screen_pos; // x/y=画面上のカーソル座標。
-    struct pos show_cur_pos_queue;
+    struct pos show_cur_pos_queue; // refresh直前にmove()へ渡す画面上の退避座標。
 };
 
 // 編集バッファ本体と、行ごとの文字数・容量情報。
@@ -210,6 +212,7 @@ struct box_queue{
     int count; // boxに入っている有効な数。
 };
 
+// 現在状態を末尾に保持する固定長の画面遷移履歴。
 struct screen_state_log{
     enum now_screen_state screen_state_log[screen_state_log_storage]; // 画面遷移履歴。
     int screen_state_log_counter; // 記録済みの遷移数。
@@ -227,18 +230,18 @@ struct editor_state {
     struct make_file_mode_status make_file_mode_status; // 新規ファイル作成ダイアログ状態。
     struct box_queue           draw_box_queue; // 次回描画する枠のキュー。
     struct file_browse_state   file_browse; // ファイルブラウザ画面の状態。
-    struct box                *status_bar; // ステータスバー領域への参照。
+    struct box                *status_bar; // main()が所有するステータスバー領域への借用ポインタ。
     struct box                 ask_make_file_box; // 新規ファイル作成ダイアログ外枠。
     struct box                 write_file_name_area; // 新規ファイル名入力欄。
     struct file_data           file_data; // 現在開いているファイルと行情報。
     struct jump_mode           jump_mode_data; // 行ジャンプ入力状態。
     struct clear_box_data      clear_box_data; // 次回消去する矩形領域。
     struct screen_state_log    screen_log; // 現在状態を末尾に持つ画面遷移履歴。
-    settings_screen_data       settings_screen_data;
-    file_tree_data             file_tree_data; 
+    settings_screen_data       settings_screen_data; // 設定画面の項目、選択、入力状態。
+    file_tree_data             file_tree_data; // ファイルツリーの形状、所有ツリー、開閉状態。
     int                        render_flags; // update_screen()へ渡す再描画要求。
     bool                       is_cur_show; // カーソル表示中ならtrue。
-    bool                       mylsp_use;
+    bool                       mylsp_use; // 起動引数でLSP使用を要求されたならtrue。
 };
 
 // editor_get_screen_state_log(): 現在位置を基準に画面遷移履歴を取得する。
@@ -286,26 +289,29 @@ static inline void editor_set_screen_state(struct editor_state *state,
 
 
 
+// 編集画面の行番号欄と本文の境界線を描く端点。
 struct edit_screen_context {
-    struct pos line_start_pos;
-    struct pos line_end_pos;
+    struct pos line_start_pos; // 境界線の画面上の始点。
+    struct pos line_end_pos; // 境界線の画面上の終点。
 };
 
+// 新規ファイル作成ダイアログを配置するための画面中央座標。
 struct ask_make_file_mode_context {
-    int screen_center_y;
-    struct pos screen_center_pos;
+    int screen_center_y; // 画面中央のy座標。
+    struct pos screen_center_pos; // 画面中央のx/y座標。
 };
 
 struct syntax;
+// 全画面の入力ハンドラへ渡す共有参照と、画面別の配置情報。
 struct editor_input_context {
-    WINDOW *win;
-    MEVENT *mouse_event;
-    struct editor_state *state;
-    struct lsp_process *lsp_data;
-    struct syntax *syntax_data;
-    struct edit_screen_context edit_screen;
-    struct ask_make_file_mode_context ask_make_file_mode;
-    struct start_menu_screen_context start_menu_screen;
+    WINDOW *win; // ncursesの標準描画先への借用ポインタ。
+    MEVENT *mouse_event; // main()が所有する直近のマウスイベントへの借用ポインタ。
+    struct editor_state *state; // エディタ全体の状態への借用ポインタ。
+    struct lsp_process *lsp_data; // 言語サーバー状態への借用ポインタ。未使用時はNULL。
+    struct syntax *syntax_data; // 構文着色状態への借用ポインタ。
+    struct edit_screen_context edit_screen; // 編集画面の配置情報。
+    struct ask_make_file_mode_context ask_make_file_mode; // 新規作成ダイアログの配置情報。
+    struct start_menu_screen_context start_menu_screen; // スタートメニューの借用データ。
 };
 
 // editor_filetree_offset(): ファイルツリーを表示中に編集領域を右へ寄せる列数を返す。
@@ -526,9 +532,10 @@ static inline bool editor_move_cursor_line(struct editor_state *state, int delta
     return true;
 }
 
+// 罫線を全体描画するか、スクロールで欠けた部分だけ補修するかを指定する。
 enum line_mode {
-    all_draw_mode,//書き直し時
-    fix_scr_line_damage,//スクロールで線が破損したときなど
+    all_draw_mode, // 始点から終点まで罫線を描き直す。
+    fix_scr_line_damage, // スクロールで破損した罫線だけを補修する。
 };
 
 // txt_editor_draw.c

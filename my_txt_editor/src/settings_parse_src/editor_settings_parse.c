@@ -40,17 +40,25 @@ void load_custom_editor_settings(struct editor_settings *settings_data){
         return;
     }
 
-    cJSON *max_lines = cJSON_GetObjectItemCaseSensitive(json_data, "max_lines");
+    // 旧形式の設定ファイルはルートから読み込む。
+    cJSON *buffer = cJSON_GetObjectItemCaseSensitive(json_data, "buffer");
+    if(buffer == NULL)buffer = json_data;
+    cJSON *display = cJSON_GetObjectItemCaseSensitive(json_data, "display");
+    if(display == NULL)display = json_data;
+    cJSON *editor = cJSON_GetObjectItemCaseSensitive(json_data, "editor");
+    if(editor == NULL)editor = json_data;
+
+    cJSON *max_lines = cJSON_GetObjectItemCaseSensitive(buffer, "max_lines");
     if(cJSON_IsNumber(max_lines)){
         settings_data->max_lines = max_lines->valueint;
     }
 
-    cJSON *max_line_size = cJSON_GetObjectItemCaseSensitive(json_data, "max_line_size");
+    cJSON *max_line_size = cJSON_GetObjectItemCaseSensitive(buffer, "max_line_size");
     if(cJSON_IsNumber(max_line_size)){
         settings_data->max_line_size = max_line_size->valueint;
     }
 
-    cJSON *line_number_space = cJSON_GetObjectItemCaseSensitive(json_data, "line_number_space");
+    cJSON *line_number_space = cJSON_GetObjectItemCaseSensitive(display, "line_number_space");
     if(cJSON_IsNumber(line_number_space)){
         settings_data->line_number_space = line_number_space->valueint;
     }
@@ -58,32 +66,32 @@ void load_custom_editor_settings(struct editor_settings *settings_data){
         settings_data->line_number_space = 4;
     }
 
-    cJSON *indent_range = cJSON_GetObjectItemCaseSensitive(json_data, "indent_range");
+    cJSON *indent_range = cJSON_GetObjectItemCaseSensitive(editor, "indent_range");
     if(cJSON_IsNumber(indent_range)){
         settings_data->indent_range = indent_range->valueint;
     }
 
-    cJSON *jmp_set_cur_pos = cJSON_GetObjectItemCaseSensitive(json_data, "jmp_set_cur_pos");
+    cJSON *jmp_set_cur_pos = cJSON_GetObjectItemCaseSensitive(editor, "jmp_set_cur_pos");
     if(cJSON_IsNumber(jmp_set_cur_pos)){
         settings_data->jmp_set_cur_pos = jmp_set_cur_pos->valueint;
     }
 
-    cJSON *default_load_line_size = cJSON_GetObjectItemCaseSensitive(json_data, "default_load_line_size");
+    cJSON *default_load_line_size = cJSON_GetObjectItemCaseSensitive(buffer, "default_load_line_size");
     if(cJSON_IsNumber(default_load_line_size)){
         settings_data->default_load_line_size = default_load_line_size->valueint;
     }
 
-    cJSON *load_buffer_lines = cJSON_GetObjectItemCaseSensitive(json_data, "load_buffer_lines");
+    cJSON *load_buffer_lines = cJSON_GetObjectItemCaseSensitive(buffer, "load_buffer_lines");
     if(cJSON_IsNumber(load_buffer_lines)){
         settings_data->load_buffer_lines = load_buffer_lines->valueint;
     }
 
-    cJSON *show_status_bar = cJSON_GetObjectItemCaseSensitive(json_data, "show_status_bar");
+    cJSON *show_status_bar = cJSON_GetObjectItemCaseSensitive(display, "show_status_bar");
     if(cJSON_IsBool(show_status_bar)){
         settings_data->show_status_bar = cJSON_IsTrue(show_status_bar);
     }
 
-    cJSON *status_bar_side = cJSON_GetObjectItemCaseSensitive(json_data, "status_bar_side");
+    cJSON *status_bar_side = cJSON_GetObjectItemCaseSensitive(display, "status_bar_side");
     if(cJSON_IsString(status_bar_side) && status_bar_side->valuestring != NULL){
         if(strcmp(status_bar_side->valuestring, "top") == 0){
             settings_data->bar_side_state = top;
@@ -93,24 +101,53 @@ void load_custom_editor_settings(struct editor_settings *settings_data){
         }
     }
 
-    cJSON *draw_split_line = cJSON_GetObjectItemCaseSensitive(json_data, "draw_split_line");
+    cJSON *draw_split_line = cJSON_GetObjectItemCaseSensitive(display, "draw_split_line");
     if(cJSON_IsBool(draw_split_line)){
         settings_data->draw_split_line = cJSON_IsTrue(draw_split_line);
     }
 
-    cJSON *show_start_menu = cJSON_GetObjectItemCaseSensitive(json_data, "show_start_menu");
+    cJSON *show_start_menu = cJSON_GetObjectItemCaseSensitive(display, "show_start_menu");
     if(cJSON_IsBool(show_start_menu)){
         settings_data->show_start_menu = cJSON_IsTrue(show_start_menu);
     }
 
-    cJSON *use_icon = cJSON_GetObjectItemCaseSensitive(json_data, "use_icon");
+    cJSON *use_icon = cJSON_GetObjectItemCaseSensitive(display, "use_icon");
     if(cJSON_IsBool(use_icon)){
         settings_data->use_icon = cJSON_IsTrue(use_icon);
     }
 
-    cJSON *built_in_syntax = cJSON_GetObjectItemCaseSensitive(json_data,"built_in_syntax");
+    cJSON *built_in_syntax = cJSON_GetObjectItemCaseSensitive(editor, "built_in_syntax");
     if(cJSON_IsBool(built_in_syntax)){
         settings_data->built_in_syntax = cJSON_IsTrue(built_in_syntax);
+    }
+
+    cJSON *auto_complete = cJSON_GetObjectItemCaseSensitive(json_data, "auto_complete");
+    if(auto_complete == NULL){
+        auto_complete = cJSON_GetObjectItemCaseSensitive(editor, "auto_complete");
+    }
+    if(cJSON_IsObject(auto_complete)){
+        cJSON *enabled = cJSON_GetObjectItemCaseSensitive(auto_complete,"enabled");
+        if(cJSON_IsBool(enabled)){
+            settings_data->auto_complete_settings_data.auto_complete_enabled = cJSON_IsTrue(enabled);
+        }
+        cJSON *window = cJSON_GetObjectItemCaseSensitive(auto_complete,"window");
+        if(cJSON_IsObject(window)){
+            cJSON *show = cJSON_GetObjectItemCaseSensitive(window,"show");
+            if(cJSON_IsBool(show)){
+                settings_data->auto_complete_settings_data.auto_complete_window_enable = cJSON_IsTrue(show);
+            }
+            cJSON *width = cJSON_GetObjectItemCaseSensitive(window,"width");
+            if(cJSON_IsNumber(width) && width->valuedouble == width->valueint && width->valueint > 0){
+                settings_data->auto_complete_settings_data.auto_complete_window_size.x = width->valueint;
+            }
+            cJSON *height = cJSON_GetObjectItemCaseSensitive(window,"height");
+            if(cJSON_IsNumber(height) && height->valuedouble == height->valueint && height->valueint > 0){
+                settings_data->auto_complete_settings_data.auto_complete_window_size.y = height->valueint;
+            }
+        }
+    }
+    else if(cJSON_IsBool(auto_complete)){
+        settings_data->auto_complete_settings_data.auto_complete_enabled = cJSON_IsTrue(auto_complete);
     }
 
     cJSON *lsp = cJSON_GetObjectItemCaseSensitive(json_data, "lsp");

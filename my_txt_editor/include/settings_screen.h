@@ -24,32 +24,35 @@ struct editor_state;
 // 大きさが項目数で極端に変わらないようにする。
 #define SETTINGS_SCREEN_MIN_W 44
 #define SETTINGS_SCREEN_MIN_H 10
-#define SETTINGS_INPUT_MAX 64
+#define SETTINGS_INPUT_MAX 64 // 設定値入力欄の要素数。終端L'\0'を含む。
 
+// 設定画面で受け付ける値の型。
 typedef enum{
-    VALUE_TYPE_BOOL,
-    VALUE_TYPE_INT,
-    VALUE_TYPE_STR,
-    VALUE_TYPE_UNKNOWN,
-}settinge_value_type;//設定項目の入力タイプ
+    VALUE_TYPE_BOOL, // trueまたはfalse。
+    VALUE_TYPE_INT, // 整数。
+    VALUE_TYPE_STR, // 文字列。
+    VALUE_TYPE_UNKNOWN, // 未対応またはJSONで判別できなかった型。
+}settinge_value_type;
 
 
+// 設定画面へ表示する1項目。nameとexplanationは設定画面が所有する。
 typedef struct{
-    const char *name;
-    wint_t key_code;
-    settinge_value_type value_type;
-    const char *explanation;
+    const char *name; // 画面に表示する設定項目名のNUL終端文字列。
+    wint_t key_code; // この項目を選択する入力キー。
+    settinge_value_type value_type; // 入力値の解釈方法。
+    const char *explanation; // 選択時に表示する説明のNUL終端文字列。
 }settings_items_data;
 
+// 設定画面の形状、項目配列、選択位置、編集中の値。
 typedef struct{
-    struct box box;
-    settings_items_data *item_data;
-    int settings_item_data_num;
-    int settings_item_data_allocate_num;
-    int select_line;
-    bool value_input_mode;
-    wchar_t input_value[SETTINGS_INPUT_MAX];
-    int input_value_len;
+    struct box box; // 設定一覧を描く外枠。
+    settings_items_data *item_data; // この構造体が所有する設定項目の動的配列。
+    int settings_item_data_num; // item_dataに格納済みの有効要素数。
+    int settings_item_data_allocate_num; // item_dataへ確保済みの要素数。
+    int select_line; // 先頭を0とする現在の選択項目番号。
+    bool value_input_mode; // 選択項目の値を入力中ならtrue。
+    wchar_t input_value[SETTINGS_INPUT_MAX]; // 入力中のNUL終端ワイド文字列。
+    int input_value_len; // input_valueに入っている終端を除く文字数。
 }settings_screen_data;
 
 

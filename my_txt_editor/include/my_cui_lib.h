@@ -3,32 +3,34 @@
 
 // ===== 定数 (ANSIカラーオフセット) =====
 
-#define MY_BLACK   0
-#define MY_RED     1
-#define MY_GREEN   2
-#define MY_YELLOW  3
-#define MY_BLUE    4
-#define MY_MAGENTA 5
-#define MY_CYAN    6
-#define MY_WHITE   7
+#define MY_BLACK   0 // ANSI基本色の黒。
+#define MY_RED     1 // ANSI基本色の赤。
+#define MY_GREEN   2 // ANSI基本色の緑。
+#define MY_YELLOW  3 // ANSI基本色の黄。
+#define MY_BLUE    4 // ANSI基本色の青。
+#define MY_MAGENTA 5 // ANSI基本色のマゼンタ。
+#define MY_CYAN    6 // ANSI基本色のシアン。
+#define MY_WHITE   7 // ANSI基本色の白。
 
 // ===== 型定義 =====
 
+// 0〜255の各成分で表す24bit RGB色。
 struct rgb {
-    int r;
-    int g;
-    int b;
+    int r; // 赤成分。
+    int g; // 緑成分。
+    int b; // 青成分。
 };
 
+// ANSIの8基本色。列挙値は対応する色番号と一致する。
 enum eight_bit_rgb {
-    black,
-    red,
-    green,
-    yellow,
-    blue,
-    magenta,
-    cyan,
-    white
+    black, // 黒。
+    red, // 赤。
+    green, // 緑。
+    yellow, // 黄。
+    blue, // 青。
+    magenta, // マゼンタ。
+    cyan, // シアン。
+    white // 白。
 };
 
 // ===== バッファ管理 =====

@@ -7,26 +7,26 @@
 
 // 解析対象の言語。現在はコメント開始文字列の切り替えに使用する。
 typedef enum{
-    C,
-    CPP,
-    PY,
-    TS,
-    UNKNOWN,
+    C, // C。
+    CPP, // C++。
+    PY, // Python。
+    TS, // TypeScript。
+    UNKNOWN, // 未対応言語。構文着色を適用しない。
 }language;
 
 // 着色の分類。現在は予約語、リテラル、ヘッダー名、コメント、メソッド、型、変数を解析で生成する。
 typedef enum{
-    reserved_word,
-    literal,
-    comment,
-    Method,
-    type,
-    operator,
-    variable,
-    declaration_keyword,
-    character_literal,
-    header_name,
-    member_method,
+    reserved_word, // 制御構文などの予約語。
+    literal, // 二重引用符で囲まれた文字列。
+    comment, // 行コメント。
+    Method, // 通常の関数・メソッド呼出し。
+    type, // 組込み型または登録済みの型名。
+    operator, // 演算子。
+    variable, // 変数として検出した識別子。
+    declaration_keyword, // 宣言を開始するキーワード。
+    character_literal, // 単一引用符で囲まれた文字。
+    header_name, // include対象のヘッダー名。
+    member_method, // '.'または'->'に続くメソッド。
 }syntax_type;
 
 
