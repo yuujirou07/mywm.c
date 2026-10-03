@@ -11,9 +11,11 @@
 #include "error_log.h"
 #include "filetree.h"
 #include "ftj.h"
+#include "input_complete.h"
 #include "txt_editor.h"
 #include "txt_editor_screen.h"
 #include"txt_editor_syntax.h"
+#include"editor_types.h"
 
 static int limit = 0;
 
@@ -647,7 +649,7 @@ void editor_screen_mouse_event(struct editor_input_context *ctx){
         if(is_cur_on_edit_screen){
             state->scr.scr_start_num++;
             if(state->settings_data->built_in_syntax){
-                scroll_syntax_pos_data(ctx->syntax_data,-1,state->write_area.h);
+                scroll_syntax_pos_data(&ctx->syntax_data,-1,state->write_area.h);
                 update_line_syntax_data(ctx,state->write_area.h - 1);
             }
         }
@@ -667,7 +669,7 @@ void editor_screen_mouse_event(struct editor_input_context *ctx){
         if(is_cur_on_edit_screen){ 
             state->scr.scr_start_num--;
             if(state->settings_data->built_in_syntax){
-                scroll_syntax_pos_data(ctx->syntax_data,+1,state->write_area.h);
+                scroll_syntax_pos_data(&ctx->syntax_data,+1,state->write_area.h);
                 update_line_syntax_data(ctx,0);
             }
         }
@@ -812,7 +814,7 @@ int filetree_mouse_event(struct editor_input_context *ctx){
                         state->render_flags |= RENDER_FILE_DATA;
                         state->render_flags |= RENDER_EDIT_SCREEN_BASE;
                         if(state->settings_data->built_in_syntax){
-                            if(ctx->syntax_data != NULL)set_syntax_data(ctx->syntax_data,ctx);
+                            set_syntax_data(&ctx->syntax_data,ctx);
                         }
                     }
                 }
@@ -903,4 +905,49 @@ struct pos editor_pos_to_buffer_pos(
                 struct editor_state *state,
                 struct pos editor_pos){
     return(struct pos){state->scr.scr_start_num + editor_pos.y,editor_pos.x};
+}
+
+
+
+
+int editor_set_env_lang(struct editor_input_context *ctx,language lang){
+    if(ctx->state->settings_data->built_in_syntax){
+        init_syntax(&ctx->syntax_data);
+        set_syntax_language(lang,&ctx->syntax_data);
+    }
+    env_language_ctl(&lang,set);
+    if(ctx->state->settings_data->auto_complete_settings_data.auto_complete_enabled){
+        init_edit_complete_data(ctx);
+    }
+    
+    ctx->state->edit_input_complete_data.lang = lang;
+    return 0;
+}
+
+
+
+int init_settings_data(struct editor_input_context *ctx){
+    //最初にデフォルト設定を読み込みユーザーが設定している項目だけ更新する
+    load_default_editor_settings(ctx->state->settings_data);
+    load_custom_editor_settings(ctx->state->settings_data);
+    return 0;
+}
+
+
+language get_env_language(){
+    language tmp_lang;
+    env_language_ctl(&tmp_lang,get);
+    return tmp_lang;
+}
+
+
+int env_language_ctl(language *lang,enum flags flags){
+    static language static_env_lang = UNKNOWN;
+    if(flags == get){
+        return *lang = static_env_lang;
+    }
+    else if(flags == set){
+        static_env_lang = *lang;
+    }
+    return 0;
 }

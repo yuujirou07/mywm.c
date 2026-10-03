@@ -79,10 +79,9 @@ int main(int argc, char *argv[])
     MEVENT mouse_event;
     WINDOW *win;
 
-    load_default_editor_settings(state.settings_data);
-    load_custom_editor_settings(state.settings_data);
-    //カスタム設定のバグになる値を検出する関数の設置
-
+   //カスタム設定のバグになる値を検出する関数の設置
+    init_settings_data(&input_context);
+    
     setlocale(LC_ALL, "");
     // 危険: initscr()以降の失敗returnでendwin()を呼ばない経路が複数ある。
     // その経路では端末がraw/noecho相当の状態に残る可能性がある。
@@ -330,15 +329,11 @@ int main(int argc, char *argv[])
         set_lsp_use_language(&lsp,state.settings_data->lsp.lsp_language);
     }
 
-    syntax syntax = {0};
-    init_syntax(&syntax);
-    set_syntax_language(C,&syntax);
-    
     input_context.win = win;
     input_context.mouse_event = &mouse_event;
     input_context.state = &state;
     input_context.lsp_data = &lsp;
-    input_context.syntax_data = &syntax;
+    editor_set_env_lang(&input_context,C);
     input_context.edit_screen.line_start_pos.x = state.write_area.x_start - 1;
     input_context.edit_screen.line_start_pos.y = state.write_area.y_start;
     input_context.edit_screen.line_end_pos.x = state.write_area.x_start - 1;
@@ -398,7 +393,7 @@ int main(int argc, char *argv[])
             bool show_cursor = state.is_cur_show;
             my_cur_set(&state,false);
             if(state.settings_data->built_in_syntax){
-                apply_syntax_color(&input_context,syntax);
+                apply_syntax_color(&input_context,input_context.syntax_data);
             }
             editor_sync_cursor(&state);
             set_cur_pos(&state);
@@ -413,7 +408,7 @@ int main(int argc, char *argv[])
 
         if (input_result == KEY_CODE_YES && ch == KEY_RESIZE) {
             handle_resize(win, &input_context);
-            set_syntax_data(&syntax,&input_context);
+            set_syntax_data(&input_context.syntax_data,&input_context);
             continue;
         }
 
@@ -422,7 +417,7 @@ int main(int argc, char *argv[])
     }
     // resize_file_browser()がreallocした場合、最新のポインタはstate側にある。
     free(state.file_browse.dir_name_table);
-    free(syntax.syntax_list_data.syntax_data);
+    free(input_context.syntax_data.syntax_list_data.syntax_data);
     if(handle != NULL)
         dlclose(handle);
     if(epfd >= 0)
@@ -496,4 +491,3 @@ static void lsp_poll_events(int *epfd, struct lsp_process *lsp, int timeout_ms)
 void my_mvaddstr(struct pos pos,char * str){
     mvaddstr(pos.y,pos.x,str);
 }
-

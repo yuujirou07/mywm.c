@@ -16,7 +16,7 @@ typedef struct{
 // 設定JSONから読み込んだ拡張子別アイコンの動的配列。
 typedef struct{
    ext_icon *icon_lib; // この構造体が所有し、destroy_icon_data()で解放する配列。
-   int icon_lib_num; // 配列に格納済みの有効要素数。
+   int icon_lib_num;   // 配列に格納済みの有効要素数。
    int icon_lib_allocate_num; // 配列へ確保済みの要素数。
 }icon_data;
 

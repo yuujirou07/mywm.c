@@ -300,7 +300,7 @@ int set_syntax_data(syntax *syntax,struct editor_input_context *ctx){
  */
 int update_line_syntax_data(struct editor_input_context *ctx,int line){
     if(ctx == NULL || ctx->state == NULL)return -1;
-    syntax *syntax = ctx->syntax_data;
+    syntax *syntax = &ctx->syntax_data;
     if(syntax == NULL)return -1;
     if(syntax->syntax_list_data.syntax_data == NULL)return -1;
 

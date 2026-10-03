@@ -163,7 +163,7 @@ bool handle_file_browse_screen_input(struct editor_input_context *ctx, int input
                 // 読み込み直後は先頭行の行頭から編集を始める。
                 editor_set_cursor(state, 0, 0);
                 restore_edit_screen(state);
-                set_syntax_data(ctx->syntax_data,ctx);
+                set_syntax_data(&ctx->syntax_data,ctx);
                 
             }
         }

@@ -3,16 +3,12 @@
 #define TXT_EDITOR_SYNTAX_H
 
 
-#include "txt_editor.h"
+#include <stddef.h>
+#include <wchar.h>
 
-// 解析対象の言語。現在はコメント開始文字列の切り替えに使用する。
-typedef enum{
-    C, // C。
-    CPP, // C++。
-    PY, // Python。
-    TS, // TypeScript。
-    UNKNOWN, // 未対応言語。構文着色を適用しない。
-}language;
+#include "editor_types.h"
+
+struct editor_input_context;
 
 // 着色の分類。現在は予約語、リテラル、ヘッダー名、コメント、メソッド、型、変数を解析で生成する。
 typedef enum{

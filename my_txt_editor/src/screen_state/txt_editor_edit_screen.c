@@ -27,7 +27,7 @@ bool handle_edit_screen_input(struct editor_input_context *ctx, int input_result
             send_lsp_did_change(ctx);
         }
         if(state->settings_data->built_in_syntax){
-            set_syntax_data(ctx->syntax_data,ctx);
+            set_syntax_data(&ctx->syntax_data,ctx);
         }
         return true;
     }
@@ -97,7 +97,7 @@ bool handle_edit_screen_input(struct editor_input_context *ctx, int input_result
         }
         //struct pos write_area_pos = editor_cursor_write_area_pos(state);
         if(state->settings_data->built_in_syntax){
-            set_syntax_data(ctx->syntax_data,ctx);
+            set_syntax_data(&ctx->syntax_data,ctx);
         }
         state->render_flags |= RENDER_LINE_STATUS;
         
@@ -114,7 +114,7 @@ bool handle_edit_screen_input(struct editor_input_context *ctx, int input_result
                 send_lsp_did_change(ctx);
             }
             if(state->settings_data->built_in_syntax){
-                set_syntax_data(ctx->syntax_data,ctx);
+                set_syntax_data(&ctx->syntax_data,ctx);
             }
             state->render_flags |= RENDER_LINE_STATUS;
         }
@@ -125,7 +125,7 @@ bool handle_edit_screen_input(struct editor_input_context *ctx, int input_result
             move_view_to_line(state, n - 1, 0);
 
             if(state->settings_data->built_in_syntax){
-                set_syntax_data(ctx->syntax_data,ctx);
+                set_syntax_data(&ctx->syntax_data,ctx);
             }
         }
     }

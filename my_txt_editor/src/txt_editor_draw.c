@@ -435,7 +435,7 @@ void editor_screen_move_line(struct editor_input_context *ctx,int num){
     state->scr.scr_start_num = next_scr_start;
 
     if(state->settings_data->built_in_syntax){
-        scroll_syntax_pos_data(ctx->syntax_data,-num,state->write_area.h);
+        scroll_syntax_pos_data(&ctx->syntax_data,-num,state->write_area.h);
         int update_line = num > 0 ? state->write_area.h - 1 : 0;
         update_line_syntax_data(ctx,update_line);
     }

@@ -13,6 +13,8 @@
 #include "settings_screen.h"
 #include "start_menu.h"
 #include"filetree.h"
+#include"input_complete.h"
+#include "txt_editor_syntax.h"
 
 
 #define SETTINGS_FILE_EXT ".json" // 設定ファイルとして受け付ける拡張子。
@@ -20,7 +22,7 @@
 #define startuptime_log_file_argument_num 1 // 起動時間ログのパスを受け取るargv添字。
 #define FDS_N 4 // epoll_wait()で一度に受け取るイベント配列の要素数。
 #define DRAW_BOX_REQUEST_MAX 64 // 1回の更新まで保持できる枠描画要求数。
-#define box_retention_max 64 // 1回の更新まで保持できる矩形消去要求数。
+#define box_retention_max 64    // 1回の更新まで保持できる矩形消去要求数。
 #define screen_state_log_storage 256 // 画面遷移履歴へ保持できる状態数。
 // ファイルブラウザ一覧に保持する名前の最大長。
 #define DIR_ENTRY_NAME_MAX 256
@@ -34,18 +36,18 @@ enum render_flags {
     RENDER_NONE       = 0,          // 再描画要求なし。
     RENDER_LINE_STATUS     = 1 << 0,// 現在行表示を更新する。
     RENDER_STATUS_BAR_LINE = 1 << 1,// ステータスバーの区切り線を更新する。
-    RENDER_LINE  = 1 << 2,      // 編集領域左の縦線を更新する。
-    RENDER_STATUS_BAR = 1 << 3, // ステータスバーの内容を更新する。
+    RENDER_LINE  = 1 << 2,          // 編集領域左の縦線を更新する。
+    RENDER_STATUS_BAR = 1 << 3,     // ステータスバーの内容を更新する。
     RENDER_SELECT_DIR_SCENE_COLOR = 1 << 4, // ファイル選択行の反転表示を更新する。
     RENDER_EDIT_SCREEN_BASE = 1<<5, // 編集画面の枠や基本線を更新する。
-    RENDER_FILE_DATA = 1<<6,    // 編集バッファの表示内容を更新する。
-    RENDER_FILE_BROWSE = 1 << 7, // ファイルブラウザ全体を更新する。
-    RENDER_BOX        = 1 << 8, // draw_box_queueに積まれた枠を描画する。
-    RENDER_CLEAR_BOX = 1 << 9,  // clear_box_dataに積まれた範囲を消す。
-    RENDER_ALL        = 1 << 10, // 画面全体更新用の予約フラグ。
-    RENDER_LINE_JUMP = 1 << 11, // 行ジャンプ入力欄を更新する。
-    RENDER_MAKE_FILE = 1 << 12, // 新規ファイル作成ダイアログを更新する。
-    RENDER_SETTINGS = 1 << 13, //設定ファイルを描画する
+    RENDER_FILE_DATA = 1<<6,        // 編集バッファの表示内容を更新する。
+    RENDER_FILE_BROWSE = 1 << 7,    // ファイルブラウザ全体を更新する。
+    RENDER_BOX        = 1 << 8,     // draw_box_queueに積まれた枠を描画する。
+    RENDER_CLEAR_BOX = 1 << 9,      // clear_box_dataに積まれた範囲を消す。
+    RENDER_ALL        = 1 << 10,    // 画面全体更新用の予約フラグ。
+    RENDER_LINE_JUMP = 1 << 11,     // 行ジャンプ入力欄を更新する。
+    RENDER_MAKE_FILE = 1 << 12,     // 新規ファイル作成ダイアログを更新する。
+    RENDER_SETTINGS = 1 << 13,      //設定ファイルを描画する
 };
 
 // ファイルツリーは編集画面の左端に重ねて出し、編集領域をその幅だけ右へ寄せる。
@@ -61,7 +63,7 @@ enum render_flags {
 
 // ステータスバーを画面上端か下端のどちらに出すか。
 enum status_bar_side{
-    top, // 画面上端。
+    top,    // 画面上端。
     bottom, // 画面下端。
 };
 
@@ -79,34 +81,34 @@ struct file_data{
     // 新規作成時は入力された相対パスまたは絶対パスをそのまま保持する。
     // now_open_path_name()内のファイルブラウザ用パスとは別に保持する。
     char    now_open_path_name[DEFAULT_PATH_NAME_MAX_SIZE];
-    long*   file_line_start_num; // ファイル内で各行が始まるバイト位置。
+    long*   file_line_start_num;  // ファイル内で各行が始まるバイト位置。
     long    file_line_start_num_counter; // file_line_start_numに登録済みの行数。
     long    description_line_end; // 保存対象として扱う論理行数。
-    long    file_str_line_end; // 可視文字がある最終行番号。
-    int     file_line_n; // 画面に読み込むファイル行の作業用番号。
-    long    file_total_str_size;//ファイル内の合計文字数
-    bool    is_open_file; // ファイルを開いて編集しているならtrue。
+    long    file_str_line_end;    // 可視文字がある最終行番号。
+    int     file_line_n;          // 画面に読み込むファイル行の作業用番号。
+    long    file_total_str_size;  //ファイル内の合計文字数
+    bool    is_open_file;         // ファイルを開いて編集しているならtrue。
 };
 
 // ファイルブラウザで判定した項目種別。
 enum select_state{
-    file, // 通常ファイル。
-    folder, // ディレクトリ。
-    unkown, // 種別を判定できない項目。
+    file,  // 通常ファイル。
+    folder,// ディレクトリ。
+    unkown,// 種別を判定できない項目。
     error, // stat等の判定処理に失敗した状態。
 };
 
 
 // 現在表示している画面・入力モード。
 enum now_screen_state{
-    edit_screen, // 通常の編集画面。
+    edit_screen,        // 通常の編集画面。
     file_browse_screen, // ファイルブラウザ画面。
-    filetree_screen, // ファイルツリー画面。
-    start_menu_screen, // start menu pluginの画面。
-    error_screen, // エラー表示画面。
-    line_jump_mode, // 行ジャンプ番号入力中。
+    filetree_screen,    // ファイルツリー画面。
+    start_menu_screen,  // start menu pluginの画面。
+    error_screen,       // エラー表示画面。
+    line_jump_mode,     // 行ジャンプ番号入力中。
     ask_make_file_mode, // 新規ファイル作成確認中。
-    setting_screen, // 設定画面。
+    setting_screen,     // 設定画面。
     screen_state_log_error, // 指定された履歴位置が範囲外。
 };
 
@@ -239,6 +241,7 @@ struct editor_state {
     struct screen_state_log    screen_log; // 現在状態を末尾に持つ画面遷移履歴。
     settings_screen_data       settings_screen_data; // 設定画面の項目、選択、入力状態。
     file_tree_data             file_tree_data; // ファイルツリーの形状、所有ツリー、開閉状態。
+    edit_input_complete_data   edit_input_complete_data;//入力補完データ
     int                        render_flags; // update_screen()へ渡す再描画要求。
     bool                       is_cur_show; // カーソル表示中ならtrue。
     bool                       mylsp_use; // 起動引数でLSP使用を要求されたならtrue。
@@ -301,14 +304,13 @@ struct ask_make_file_mode_context {
     struct pos screen_center_pos; // 画面中央のx/y座標。
 };
 
-struct syntax;
 // 全画面の入力ハンドラへ渡す共有参照と、画面別の配置情報。
 struct editor_input_context {
     WINDOW *win; // ncursesの標準描画先への借用ポインタ。
     MEVENT *mouse_event; // main()が所有する直近のマウスイベントへの借用ポインタ。
     struct editor_state *state; // エディタ全体の状態への借用ポインタ。
     struct lsp_process *lsp_data; // 言語サーバー状態への借用ポインタ。未使用時はNULL。
-    struct syntax *syntax_data; // 構文着色状態への借用ポインタ。
+    syntax syntax_data; // 構文着色状態と、その所有する着色情報。
     struct edit_screen_context edit_screen; // 編集画面の配置情報。
     struct ask_make_file_mode_context ask_make_file_mode; // 新規作成ダイアログの配置情報。
     struct start_menu_screen_context start_menu_screen; // スタートメニューの借用データ。
@@ -621,4 +623,9 @@ struct pos editor_pos_to_buffer_pos(
 
 
 bool screen_pos_to_box_pos(struct box b1,struct pos p1,struct pos *rt1);
+
+int init_settings_data(struct editor_input_context *ctx);
+int editor_set_env_lang(struct editor_input_context *ctx,language lang);
+
+int env_language_ctl(language *lang,enum flags flags);
 #endif

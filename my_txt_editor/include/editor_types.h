@@ -1,6 +1,20 @@
 #ifndef EDITOR_TYPES_H
 #define EDITOR_TYPES_H
 
+
+
+
+// 解析対象の言語。現在はコメント開始文字列の切り替えに使用する。
+typedef enum{
+    C, // C。
+    CPP, // C++。
+    PY, // Python。
+    TS, // TypeScript。
+    UNKNOWN, // 未対応言語。構文着色を適用しない。
+}language;
+
+
+
 // 呼び出し側が定める座標系上の2次元位置。
 struct pos {
     int x; // 横方向の位置。画面座標では左端が0。
