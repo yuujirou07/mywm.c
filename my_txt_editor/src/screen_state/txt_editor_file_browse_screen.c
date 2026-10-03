@@ -259,7 +259,9 @@ bool handle_file_browse_screen_input(struct editor_input_context *ctx, int input
         if(ch == 'q'){
             return false;
         }
-        if(ch == KEY_BACKSPACE || (input_result == OK && iswprint(ch)) || ch == '\t' || ch == '\n'){
+
+        //親ディレクトリ内の候補の更新
+        if(ch == KEY_BACKSPACE || (input_result == OK && iswprint(ch)) || ch == '\n'){
             int table_rows = file_browse->dir_name_table_rows;
             struct dir_table table[table_rows];
             int men_num = check_dir_mem(table,table_rows);

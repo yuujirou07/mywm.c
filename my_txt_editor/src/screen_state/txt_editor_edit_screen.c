@@ -1,10 +1,14 @@
 #include <ncurses.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
 #include <wctype.h>
 #include<unistd.h>
+#include "default_settings.h"
 #include "editor_types.h"
 #include "filetree.h"
+#include "input_complete.h"
 #include "txt_editor.h"
 #include "txt_editor_syntax.h"
 #include "txt_editor_screen.h"
@@ -22,6 +26,7 @@ bool handle_edit_screen_input(struct editor_input_context *ctx, int input_result
         state->render_flags |= RENDER_EDIT_SCREEN_BASE;
     }
     if (input_result == KEY_CODE_YES && ch == KEY_BACKSPACE && state->is_cur_show) {
+        reduce_edit_comp_candidacy_part_data(state);
         handle_backspace(ctx);
         if(state->settings_data->lsp.lsp_use){
             send_lsp_did_change(ctx);
@@ -78,9 +83,31 @@ bool handle_edit_screen_input(struct editor_input_context *ctx, int input_result
         return true;
     }
     if (state->is_cur_show) {
+
         if (ch == KEY_ENTER || ch == '\n' || ch == '\r') {
-            handle_newline(ctx);
+            bool is_new_line = true;
+            if(state->settings_data->auto_complete_settings_data.auto_complete_enabled){
+                if(state->edit_input_complete_data.
+                    comp_world_candidacy_part_data.
+                    comp_w_cand_part_d_count > 0 &&
+                    state->edit_input_complete_data.show){
+                    is_new_line = false;
+                    editor_input_str(
+                            state,
+                            state->edit_input_complete_data.
+                                word_data.world[state->edit_input_complete_data.
+                                    now_select_complete_world_num]
+                        );
+                }
+                init_edit_comt_candidacy_part_data(state);
+            }
+
+            if(is_new_line){
+                handle_newline(ctx);
+            }
+            
         } else if (ch == '\t') {
+            init_edit_comt_candidacy_part_data(state);
             handle_tab(win, state);
         } else if (ch == KEY_LEFT || ch == KEY_RIGHT || ch == KEY_UP || ch == KEY_DOWN){
             handle_input_allow(ctx,ch);
@@ -132,6 +159,7 @@ bool handle_edit_screen_input(struct editor_input_context *ctx, int input_result
     if(ch == 'q') {
         return false;
     }
+
     return true;
 }
 
@@ -177,5 +205,15 @@ static void send_lsp_did_change(struct editor_input_context *ctx){
 
 int set_status_bar_size(struct editor_input_context *ctx,struct box box){
     *ctx->state->status_bar = box;
+    return 0;
+}
+
+
+int editor_input_str(struct editor_state *state,wchar_t *str){
+    int str_len = wcslen(str);
+    if(str_len <= 0)return -1;
+    for(int i = 0;i < str_len;i++){
+        handle_char_input(stdscr,str[i],state);
+    }
     return 0;
 }

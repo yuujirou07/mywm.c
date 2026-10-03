@@ -1,3 +1,4 @@
+#include <bits/types/idtype_t.h>
 #include <stdio.h>
 #include <ncurses.h>
 #include <locale.h>
@@ -15,15 +16,18 @@
 #include <limits.h>
 #include<unistd.h>
 #include<sys/epoll.h>
+#include "c_settings.h"
 #include "ascii_art_comb.h"
+#include "ftj.h"
 #include "lsp_src/language_server_communication.h"
+#include "public_data/c_settings/c_settings_setting.h"
 #include "txt_editor.h"
 #include "txt_editor_screen.h"
 #include"error_log.h"
 #include"path_util.h"
 #include "txt_editor_icon.h"
 #include"txt_editor_syntax.h"
-
+#include"input_complete.h"
 
 static void end_process(struct editor_state *state);
 static void lsp_poll_events(int *epfd, struct lsp_process *lsp, int timeout_ms);
@@ -67,6 +71,7 @@ int main(int argc, char *argv[])
         }
 
     }
+
     struct editor_settings settings_data = {0};
     struct editor_state state      = {0};
     struct ascii_data   ascii_data = {0};
@@ -75,6 +80,8 @@ int main(int argc, char *argv[])
     state.mylsp_use     = mylsp;
 
     struct editor_input_context input_context = {0};
+    // 設定読み込みがctx->stateを参照するため、呼び出し前に借用先を設定する。
+    input_context.state = &state;
     struct box status_bar;
     MEVENT mouse_event;
     WINDOW *win;
@@ -134,6 +141,15 @@ int main(int argc, char *argv[])
     state.str.chr_file_all_str_data = NULL;
 
     input_context.ask_make_file_mode.screen_center_y =  state.scr.scr_size.y / 2;
+
+    input_context.key_mapp_list.key_map_allocate_num  = 16;
+    input_context.key_mapp_list.key_map_num = 0;
+    input_context.key_mapp_list.key_mapp_list =
+        malloc(sizeof(settings_key_mapps) * input_context.key_mapp_list.key_map_allocate_num);
+    if(input_context.key_mapp_list.key_mapp_list == NULL){
+        error_log("malloc");
+    }
+
     state.file_browse.box.w = state.scr.scr_size.x / 3;
     state.file_browse.box.h = input_context.ask_make_file_mode.screen_center_y;
     state.file_browse.box.pos.x = (state.scr.scr_size.x / 2) - state.file_browse.box.w / 2;
@@ -218,7 +234,7 @@ int main(int argc, char *argv[])
         return 1;
     }
     state.jump_mode_data.jump_line_num_counter = 0;
-
+    
 
 
     editor_set_screen_state(&state, state.settings_data->show_start_menu ? start_menu_screen : edit_screen);
@@ -331,18 +347,19 @@ int main(int argc, char *argv[])
 
     input_context.win = win;
     input_context.mouse_event = &mouse_event;
-    input_context.state = &state;
     input_context.lsp_data = &lsp;
     editor_set_env_lang(&input_context,C);
     input_context.edit_screen.line_start_pos.x = state.write_area.x_start - 1;
     input_context.edit_screen.line_start_pos.y = state.write_area.y_start;
     input_context.edit_screen.line_end_pos.x = state.write_area.x_start - 1;
     input_context.edit_screen.line_end_pos.y = state.write_area.y_end;
+
     state.file_browse.search_box.pos.x = state.file_browse.box.pos.x;
     state.file_browse.search_box.pos.y = state.file_browse.box.pos.y + state.file_browse.box.h - 1;
     state.file_browse.search_box.w = state.file_browse.box.w;
     state.file_browse.search_box.h = 3;
     state.file_browse.path_input_mode = false;
+
     input_context.start_menu_screen.open = &open_start_menu;
     input_context.start_menu_screen.has_plugin = (start_menu != NULL);
     input_context.start_menu_screen.plugin = start_menu;
@@ -350,7 +367,11 @@ int main(int argc, char *argv[])
     input_context.start_menu_screen.startup_start_time = startup_timer ? &startup_start_time : NULL;
     input_context.start_menu_screen.startup_log_path = startup_timer ? startuptime_log_file_path_name : NULL;
     
-
+    input_context.dl_data.now_loading_lib_allocate_num = 8;
+    input_context.dl_data.now_loading_lib_num = 0;
+    input_context.dl_data.now_loading_dynamic_lib = 
+        malloc(sizeof(void *) * input_context.dl_data.now_loading_lib_allocate_num);
+    
     
     int load_icon_rt = 0;
     load_icon_rt = 
@@ -361,12 +382,13 @@ int main(int argc, char *argv[])
         error_log("can not load icon data");
     }
 
+    MY_TXT_EDITOR_API settings_api;
+    init_settings_src(&settings_api,&input_context);
 
 
     char *now_dir = getcwd(NULL,0);
     get_root_file_tree_data(&state.file_tree_data,now_dir);
     free(now_dir);
-        
 
     int running = true;
     while (running) {
@@ -388,17 +410,45 @@ int main(int argc, char *argv[])
         }
         
 
+        if(state.settings_data->auto_complete_settings_data.auto_complete_enabled){
+            if(state.edit_input_complete_data.show){
+                if(state.edit_input_complete_data.comp_world_candidacy_part_data.comp_w_cand_part_d_count <= 0){
+                    state.edit_input_complete_data.show = false;
+                }
+                else{
+                    state.render_flags |= RENDER_EDIT_COMPLETE_WINDOW;
+                }
+            }
+        }
+
+
+        set_complete_str(&state,state.edit_input_complete_data.
+                comp_world_candidacy_part_data.complete_world_candidacy_part_str,1);
+
+
+
+
         update_screen(&input_context);
         if(editor_get_screen_state(&state) == edit_screen || editor_get_screen_state(&state) == filetree_screen){
-            bool show_cursor = state.is_cur_show;
-            my_cur_set(&state,false);
             if(state.settings_data->built_in_syntax){
                 apply_syntax_color(&input_context,input_context.syntax_data);
             }
             editor_sync_cursor(&state);
             set_cur_pos(&state);
-            my_cur_set(&state,show_cursor);
         }
+
+        bool is_cur_hide = false;
+        if(input_context.state->is_cur_show){
+            my_cur_set(&state,false);
+            is_cur_hide = true;
+            refresh();
+        }
+        refresh();
+
+        if(is_cur_hide){
+            my_cur_set(&state,true);
+        }
+
 
         wint_t ch = 0;
         int input_result;
@@ -418,8 +468,27 @@ int main(int argc, char *argv[])
     // resize_file_browser()がreallocした場合、最新のポインタはstate側にある。
     free(state.file_browse.dir_name_table);
     free(input_context.syntax_data.syntax_list_data.syntax_data);
-    if(handle != NULL)
+    if(state.file_tree_data.root_node != NULL){
+        close_tree(state.file_tree_data.root_node);
+        state.file_tree_data.root_node = NULL;
+    }
+    if(state.file_tree_data.open_check_data != NULL){
+        free(state.file_tree_data.open_check_data);
+        state.file_tree_data.open_check_data = NULL;
+    }
+    if(state.edit_input_complete_data.word_data.world_allocate_num > 0){
+        for(int i = 0;i < state.edit_input_complete_data.word_data.world_allocate_num;i++){
+            free(state.edit_input_complete_data.word_data.world[i]);
+        }
+    }
+    if(state.edit_input_complete_data.word_data.world != NULL){
+        free(state.edit_input_complete_data.word_data.world);
+        state.edit_input_complete_data.word_data.world_allocate_num = 0;
+        state.edit_input_complete_data.word_data.world_num = 0;
+    }
+    if(handle != NULL){
         dlclose(handle);
+    }
     if(epfd >= 0)
         close(epfd);
     lsp_close_server(&lsp);
@@ -439,6 +508,7 @@ static void end_process(struct editor_state *state){
     free(state->file_data.file_str_data);
     free(state->file_data.file_line_start_num);
     free(state->str.chr_file_all_str_data);
+    
     for(int i = 0;i < state->settings_screen_data.settings_item_data_num;i++){
         free((char *)state->settings_screen_data.item_data[i].name);
         free((char *)state->settings_screen_data.item_data[i].explanation);

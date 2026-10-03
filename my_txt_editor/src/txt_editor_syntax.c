@@ -335,6 +335,25 @@ int update_line_syntax_data(struct editor_input_context *ctx,int line){
     return syntax->syntax_list_data.syntax_list_num;
 }
 
+// ACS罫線の属性を残し、その他の連続したセルだけを着色する。
+static void color_text_cells(int y,int x,int width,short color){
+    int start = -1;
+    for(int i = 0;i < width;i++){
+        if(mvinch(y,x + i) & A_ALTCHARSET){
+            if(start >= 0){
+                mvchgat(y,x + start,i - start,A_NORMAL,color,NULL);
+                start = -1;
+            }
+        }
+        else if(start < 0){
+            start = i;
+        }
+    }
+    if(start >= 0){
+        mvchgat(y,x + start,width - start,A_NORMAL,color,NULL);
+    }
+}
+
 /* 本文領域を通常色へ戻した後、syntaxに登録された画面内の範囲へ色を適用する。
  * 引数: ctxは有効なstateを持つ入力コンテキスト、syntaxは借用配列を含む浅いコピー。
  * syntax_dataの所有権は移動せず、この関数では確保・解放しない。
@@ -349,8 +368,8 @@ int apply_syntax_color(struct editor_input_context *ctx,syntax syntax){
     // 前回の着色を戻してから、本文描画後の画面へ適用する。
     for(int h = 0;h < state->write_area.h;h++){
         if(state->write_area.w > 0)
-            mvchgat(state->write_area.y_start + h,state->write_area.x_start,
-                state->write_area.w,A_NORMAL,1,NULL);
+            color_text_cells(state->write_area.y_start + h,state->write_area.x_start,
+                state->write_area.w,1);
     }
     if(syntax.lang == UNKNOWN)return 0;
 
@@ -361,11 +380,10 @@ int apply_syntax_color(struct editor_input_context *ctx,syntax syntax){
         else if(area->st_y >= state->write_area.h || area->end_y >= state->write_area.h)continue;
 
         short syntax_color = syntax_color_pair(data->type); 
-        mvchgat(state->write_area.y_start + area->st_y,
+        color_text_cells(state->write_area.y_start + area->st_y,
             state->write_area.x_start + area->st_x,
-            area->end_x - area->st_x + 1,A_NORMAL,syntax_color,NULL);
+            area->end_x - area->st_x + 1,syntax_color);
     }
-    refresh();
     return 0;
 }
 

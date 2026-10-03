@@ -5,8 +5,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
+#include "editor_types.h"
 #include "filetree.h"
 #include "ftj.h"
+#include "input_complete.h"
 #include "settings_screen.h"
 #include "txt_editor.h"
 #include"txt_editor_syntax.h"
@@ -246,7 +248,9 @@ void draw_box(struct box box, WINDOW *win){
 // 引数: queue=描画する枠を持つキュー、win=描画先ウィンドウ。
 // 返り値: なし。
 static void flush_box_queue(struct box_queue *queue, WINDOW *win){
+
     for(int i = 0; i < queue->count; i++){
+        clear_box_interior(queue->box[i]);
         draw_box(queue->box[i], win);
     }
     queue->count = 0;
@@ -650,7 +654,8 @@ void update_screen(struct editor_input_context *ctx){
     unsigned int flags = ctx->state->render_flags;
     struct editor_state *state = ctx->state;
     WINDOW *win = ctx->win;
-    
+
+    editor_sync_cursor(state);
 
     if(flags & RENDER_ALL){
         
@@ -747,10 +752,14 @@ void update_screen(struct editor_input_context *ctx){
         if(flags & RENDER_MAKE_FILE){
             draw_make_file_dialog(ctx);
         }
+        if(flags & RENDER_EDIT_COMPLETE_WINDOW){
+            draw_editor_complete_word_box(state);
+            draw_edit_complete_world(state);
+
+        }
     }
     set_cur_pos(state);
     ctx->state->render_flags = RENDER_NONE;
-    if(editor_get_screen_state(state) != edit_screen)refresh();
 }
 
 // request_clear_box(): 次回更新で消す矩形を消去要求配列へ追加する。
@@ -1211,6 +1220,97 @@ int clear_status_bar_outline(struct editor_state *state){
                 tmp_status_bar_box.pos.x + tmp_status_bar_box.w,
                 wall_outline,sizeof(wall_outline));
         }
+    }
+    return 0;
+}
+
+
+int draw_editor_complete_word_box(struct editor_state *state){
+
+    struct pos tmp_mouse_pos;
+    state->edit_input_complete_data.show = true;
+
+    struct pos tmp_pos = get_screen_cursor_pos(state);
+
+    switch(state->edit_input_complete_data.show_data.pos_mode){
+        case EDIT_COMP_TRACKING:
+        case EDIT_COMP_UNKNOWN:
+            tmp_mouse_pos = tmp_pos;
+            tmp_mouse_pos.y+=1;
+            break;
+
+        case EDIT_COMP_FIXED_TOP_LEFT:
+            tmp_mouse_pos =
+                (struct pos){state->write_area.x_start,state->write_area.y_start};
+            break;
+
+        case EDIT_COMP_FIXED_TOP_RIGHT:
+            tmp_mouse_pos =
+                (struct pos){state->write_area.x_end,state->write_area.y_start};
+            break;
+
+        case EDIT_COMP_FIXED_BOTTOM_LEFT:
+            tmp_mouse_pos =
+                (struct pos){state->write_area.x_start,state->write_area.y_end};
+            break;
+
+        case EDIT_COMP_FIXED_BOTTOM_RIGH:
+            tmp_mouse_pos =
+                (struct pos){state->write_area.x_end,state->write_area.y_end};
+            break;
+    }
+
+
+    struct box tmp_comp_box = (struct box){
+        tmp_mouse_pos,
+        state->edit_input_complete_data.show_data.size.x,
+        state->edit_input_complete_data.show_data.size.y
+    };
+
+    /* 入力候補ウィンドウ画面内収束処理*/
+    if(tmp_comp_box.pos.x < 0 ){
+        tmp_comp_box.pos.x = 0;
+    }
+    else if(tmp_comp_box.pos.x + tmp_comp_box.w >= state->write_area.x_end){
+        tmp_comp_box.pos.x = state->write_area.x_end - tmp_comp_box.w;
+    }   
+    //編集画面下とカーソルの間がウィンドウの縦サイズより小さくなった場合上に表示する
+    if(state->write_area.y_end - tmp_comp_box.pos.y < tmp_comp_box.h){
+        if(tmp_comp_box.pos.y - state->write_area.y_start < tmp_comp_box.h){
+            editor_error_screen(state,"youre screen is so small resize bigger");
+            return 0;
+        }
+        tmp_comp_box.pos.y = tmp_pos.y - tmp_comp_box.h;
+    }
+    state->edit_input_complete_data.box = tmp_comp_box;
+
+    clear_box_interior(state->edit_input_complete_data.box);
+    draw_box(state->edit_input_complete_data.box,stdscr);
+    state->render_flags |= RENDER_BOX;
+    return 0;
+}
+
+int clear_box_interior(struct box b){
+    if(b.h <= 2 || b.w <= 2)return -1;
+    wchar_t clear_line[b.w];
+    wmemset(clear_line,L' ',b.w  - 2);
+    clear_line[b.w - 1] = L'\0';
+    for(int i = 1;i < b.h - 1;i++){
+        mvaddnwstr(b.pos.y + i,b.pos.x + 1,clear_line,b.w - 2);
+    }
+    return 0;
+}
+
+
+int draw_edit_complete_world(struct editor_state *state){
+    complete_world_data *cmp_data = &state->edit_input_complete_data.word_data;
+    struct box tmp_cmp_box = state->edit_input_complete_data.box;
+
+    if(state->edit_input_complete_data.word_data.world_num <= 0)return 0;
+    
+    for(int i = 0;i < state->edit_input_complete_data.box.h - 2;i++){
+        if(cmp_data->world[i][0] == L'\0')continue;
+        mvaddnwstr(tmp_cmp_box.pos.y + i,tmp_cmp_box.pos.x + 1,cmp_data->world[i],tmp_cmp_box.w - 2);
     }
     return 0;
 }

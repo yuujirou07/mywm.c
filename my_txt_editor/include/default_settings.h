@@ -2,6 +2,7 @@
 #define DEFALT_SETTINGS_H
 
 #include "txt_editor_icon.h"
+#include "input_complete.h"
 #include<ncurses.h>
 #include<editor_types.h>
 
@@ -30,6 +31,27 @@
 #define DEFAULT_AUTO_COMPLETE_WINDOW true // 補完候補ウィンドウを表示する既定値。
 #define DEFAULT_AUTO_COMPLETE_WINDOW_WIDTH 12 // 候補ウィンドウの既定幅（端末セル数）。
 #define DEFAULT_AUTO_COMPLETE_WINDOW_HEIGHT 7 // 候補ウィンドウの既定高さ（端末行数）。
+#define DEFAULT_AUTO_COMPLETE_POSITION_MODE EDIT_COMP_TRACKING // 候補ウィンドウを入力位置に追従させる既定値。
+
+#define DEFAULT_SETTINGS_LANGUAGE 2
+
+
+
+
+
+typedef enum{
+    c   = 0,
+    lua = 1,
+    unknown = 2,
+}settings_lang;
+
+const char *const SETTINGS_LANGUAGE_JSON_KEY_STR[] = 
+    {
+        "c",
+        "lua",
+        "unknown",
+    };
+
 
 
 // LSPの有効状態、起動方法、ポーリング条件を保持する設定。
@@ -45,6 +67,8 @@ typedef struct{
     bool auto_complete_enabled; // 自動補完機能を有効にするならtrue。
     bool auto_complete_window_enable; // 候補ウィンドウを表示するならtrue。
     struct pos auto_complete_window_size; // x=幅、y=高さ。どちらも枠を含む端末セル数。
+    EDIT_COMPLETE_POSITION_MODE auto_complete_position_mode; // JSONのwindow.position_modeを列挙値で保持する。
+
 }auto_complete_settings_data;
 
 // 既定値と設定JSONを統合した、実行中のエディタ設定。
@@ -67,6 +91,7 @@ struct editor_settings{
     auto_complete_settings_data auto_complete_settings_data; // 自動補完の設定一式。
     struct lsp_settings_data lsp; // LSP連携の設定一式。
     icon_data icon_data; // 読み込んだ拡張子別アイコン配列を所有する。
+    settings_lang settings_lang;
 };
 
 

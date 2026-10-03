@@ -15,8 +15,10 @@
     "enabled":true,
     "window":{
       "show":true,
-      "width":12,
+      "position_mode":"tracking",
+      "width":20,
       "height":7
     }
-  }
+  },
+  "settings_language":"c"
 }

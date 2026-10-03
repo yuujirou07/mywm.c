@@ -345,6 +345,17 @@ void handle_char_input(WINDOW *win, wchar_t ch, struct editor_state *state){
             state->file_data.description_line_end = state->cursor.file_pos.y + 1;
         }
     }
+
+    //入力候補ウィンドウ処理
+    if(state->settings_data->auto_complete_settings_data.auto_complete_enabled){
+        if(ch != L' '){
+            state->edit_input_complete_data.show = true;
+            set_edit_comp_candidacy_part_data(state,ch);
+        }
+        else{
+            init_edit_comt_candidacy_part_data(state);
+        }
+    }
     state->render_flags |= RENDER_FILE_DATA;
 }
 
@@ -910,6 +921,9 @@ struct pos editor_pos_to_buffer_pos(
 
 
 
+// editor_set_env_lang(): 言語を保存し、有効な構文着色と補完データを初期化する。
+// 引数: ctx=stateとsettings_dataが設定済みの入力context、lang=新しい言語。
+// 返り値: 常に0。現実装では補完データの初期化失敗を返さない。
 int editor_set_env_lang(struct editor_input_context *ctx,language lang){
     if(ctx->state->settings_data->built_in_syntax){
         init_syntax(&ctx->syntax_data);
@@ -919,8 +933,7 @@ int editor_set_env_lang(struct editor_input_context *ctx,language lang){
     if(ctx->state->settings_data->auto_complete_settings_data.auto_complete_enabled){
         init_edit_complete_data(ctx);
     }
-    
-    ctx->state->edit_input_complete_data.lang = lang;
+
     return 0;
 }
 
@@ -934,6 +947,8 @@ int init_settings_data(struct editor_input_context *ctx){
 }
 
 
+// get_env_language(): env_language_ctl()に保存された現在の言語を取得する。
+// 返り値: 未設定ならUNKNOWN、設定済みなら最後に保存した言語。
 language get_env_language(){
     language tmp_lang;
     env_language_ctl(&tmp_lang,get);
@@ -941,13 +956,18 @@ language get_env_language(){
 }
 
 
+// env_language_ctl(): getなら保存済み言語をlangへ書き、setならlangの値を保存する。
+// 引数: lang=読み書き先の有効なポインタ、flags=getまたはset。
+// 返り値: 現実装ではflagsにかかわらず0。
 int env_language_ctl(language *lang,enum flags flags){
     static language static_env_lang = UNKNOWN;
     if(flags == get){
-        return *lang = static_env_lang;
+        *lang = static_env_lang;
+        return 0;
     }
     else if(flags == set){
         static_env_lang = *lang;
+        return 0;
     }
     return 0;
 }

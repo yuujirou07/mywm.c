@@ -4,9 +4,15 @@
 #include <unistd.h>
 #include "cjson/cJSON.h"
 #include "default_settings.h"
+#include "input_complete.h"
 #include "json_read.h"
 #include "path_util.h"
 #include "txt_editor.h"
+
+static bool json_int_in_range(const cJSON *item, int min, int max){
+    return cJSON_IsNumber(item) && item->valuedouble >= min &&
+        item->valuedouble <= max && item->valuedouble == item->valueint;
+}
 
 // load_custom_editor_settings(): 設定JSONがあれば読み込み、既定値を上書きする。
 // editor_settings/my_txt_editor_settings.jsonをカレントディレクトリ→実行ファイルの隣、
@@ -49,40 +55,37 @@ void load_custom_editor_settings(struct editor_settings *settings_data){
     if(editor == NULL)editor = json_data;
 
     cJSON *max_lines = cJSON_GetObjectItemCaseSensitive(buffer, "max_lines");
-    if(cJSON_IsNumber(max_lines)){
+    if(json_int_in_range(max_lines, 1, INT_MAX)){
         settings_data->max_lines = max_lines->valueint;
     }
 
     cJSON *max_line_size = cJSON_GetObjectItemCaseSensitive(buffer, "max_line_size");
-    if(cJSON_IsNumber(max_line_size)){
+    if(json_int_in_range(max_line_size, 2, EDITOR_LINE_COL_MAX)){
         settings_data->max_line_size = max_line_size->valueint;
     }
 
     cJSON *line_number_space = cJSON_GetObjectItemCaseSensitive(display, "line_number_space");
-    if(cJSON_IsNumber(line_number_space)){
+    if(json_int_in_range(line_number_space, 4, INT_MAX - 1)){
         settings_data->line_number_space = line_number_space->valueint;
-    }
-    if(settings_data->line_number_space < 4){
-        settings_data->line_number_space = 4;
     }
 
     cJSON *indent_range = cJSON_GetObjectItemCaseSensitive(editor, "indent_range");
-    if(cJSON_IsNumber(indent_range)){
+    if(json_int_in_range(indent_range, 1, INT_MAX)){
         settings_data->indent_range = indent_range->valueint;
     }
 
     cJSON *jmp_set_cur_pos = cJSON_GetObjectItemCaseSensitive(editor, "jmp_set_cur_pos");
-    if(cJSON_IsNumber(jmp_set_cur_pos)){
+    if(json_int_in_range(jmp_set_cur_pos, 0, INT_MAX)){
         settings_data->jmp_set_cur_pos = jmp_set_cur_pos->valueint;
     }
 
     cJSON *default_load_line_size = cJSON_GetObjectItemCaseSensitive(buffer, "default_load_line_size");
-    if(cJSON_IsNumber(default_load_line_size)){
+    if(json_int_in_range(default_load_line_size, 1, INT_MAX)){
         settings_data->default_load_line_size = default_load_line_size->valueint;
     }
 
     cJSON *load_buffer_lines = cJSON_GetObjectItemCaseSensitive(buffer, "load_buffer_lines");
-    if(cJSON_IsNumber(load_buffer_lines)){
+    if(json_int_in_range(load_buffer_lines, 1, INT_MAX)){
         settings_data->load_buffer_lines = load_buffer_lines->valueint;
     }
 
@@ -137,17 +140,36 @@ void load_custom_editor_settings(struct editor_settings *settings_data){
                 settings_data->auto_complete_settings_data.auto_complete_window_enable = cJSON_IsTrue(show);
             }
             cJSON *width = cJSON_GetObjectItemCaseSensitive(window,"width");
-            if(cJSON_IsNumber(width) && width->valuedouble == width->valueint && width->valueint > 0){
+            if(json_int_in_range(width, 3, INT_MAX / 2)){
                 settings_data->auto_complete_settings_data.auto_complete_window_size.x = width->valueint;
             }
             cJSON *height = cJSON_GetObjectItemCaseSensitive(window,"height");
-            if(cJSON_IsNumber(height) && height->valuedouble == height->valueint && height->valueint > 0){
+            if(json_int_in_range(height, 3, INT_MAX / 2)){
                 settings_data->auto_complete_settings_data.auto_complete_window_size.y = height->valueint;
+            }
+            // 不明な文字列や文字列以外の値では既定の配置方式を保持する。
+            cJSON *pos_mode = cJSON_GetObjectItemCaseSensitive(window,"position_mode");
+            if(cJSON_IsString(pos_mode) && pos_mode->valuestring != NULL){
+                for(int i = 0; i < get_edit_comp_pos_def_world_num(); i++){
+                    if(strcmp(pos_mode->valuestring, get_edit_comp_pos_def_world(i)) == 0){
+                        settings_data->auto_complete_settings_data.auto_complete_position_mode = i;
+                        break;
+                    }
+                }
             }
         }
     }
     else if(cJSON_IsBool(auto_complete)){
         settings_data->auto_complete_settings_data.auto_complete_enabled = cJSON_IsTrue(auto_complete);
+    }
+
+    cJSON *settings_language = cJSON_GetObjectItemCaseSensitive(json_data,"settings_language");
+    if(cJSON_IsString(settings_language)){
+        for(int i = 0;i < (int)(sizeof(SETTINGS_LANGUAGE_JSON_KEY_STR)/sizeof(SETTINGS_LANGUAGE_JSON_KEY_STR[0]));i++){
+            if(strcmp(settings_language->string,SETTINGS_LANGUAGE_JSON_KEY_STR[i]) == 0){
+                
+            }
+        }
     }
 
     cJSON *lsp = cJSON_GetObjectItemCaseSensitive(json_data, "lsp");
@@ -161,22 +183,9 @@ void load_custom_editor_settings(struct editor_settings *settings_data){
             settings_data->lsp.lsp_launch_startup_editor =
                 cJSON_IsTrue(launch_startup_editor);
         }
-        if(cJSON_IsNumber(epoll_timeout_ms) && epoll_timeout_ms->valueint >= 0){
+        if(json_int_in_range(epoll_timeout_ms, 0, INT_MAX)){
             settings_data->lsp.lsp_epoll_timeout_ms = epoll_timeout_ms->valueint;
         }
-    }
-
-    if(settings_data->max_line_size < 2){
-        settings_data->max_line_size = MAX_LINE_SIZE;
-    }
-    if(settings_data->default_load_line_size < 1){
-        settings_data->default_load_line_size = DEFAULT_LOAD_LINE_SIZE;
-    }
-    if(settings_data->load_buffer_lines < 1){
-        settings_data->load_buffer_lines = LOAD_BUFFER_LINES;
-    }
-    if(settings_data->indent_range < 1){
-        settings_data->indent_range = INDENT_RANGE;
     }
 
     cJSON_Delete(json_data);

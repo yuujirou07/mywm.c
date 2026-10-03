@@ -15,6 +15,9 @@
 #include"filetree.h"
 #include"input_complete.h"
 #include "txt_editor_syntax.h"
+#include "public_data/c_settings/c_settings_setting.h"
+
+
 
 
 #define SETTINGS_FILE_EXT ".json" // 設定ファイルとして受け付ける拡張子。
@@ -30,6 +33,10 @@
 #define EDITOR_LINE_COL_SLACK 16
 // 1行が確保できる列数の絶対上限。これを超える伸長要求は拒否する。
 #define EDITOR_LINE_COL_MAX 65536
+
+
+const char *const MY_TXT_EDITOR_CURRENT_DIR_NAME = "my_txt_editor";
+
 
 // update_screen()で再描画する領域を指定するビットフラグ。
 enum render_flags {
@@ -48,6 +55,7 @@ enum render_flags {
     RENDER_LINE_JUMP = 1 << 11,     // 行ジャンプ入力欄を更新する。
     RENDER_MAKE_FILE = 1 << 12,     // 新規ファイル作成ダイアログを更新する。
     RENDER_SETTINGS = 1 << 13,      //設定ファイルを描画する
+    RENDER_EDIT_COMPLETE_WINDOW = 1 << 14,//入力補完ウィンドウの描画
 };
 
 // ファイルツリーは編集画面の左端に重ねて出し、編集領域をその幅だけ右へ寄せる。
@@ -220,7 +228,9 @@ struct screen_state_log{
     int screen_state_log_counter; // 記録済みの遷移数。
 };
 
+typedef struct{
 
+}key_bord_data;
 
 // エディタ全体で共有する実行時状態。
 struct editor_state {
@@ -304,6 +314,23 @@ struct ask_make_file_mode_context {
     struct pos screen_center_pos; // 画面中央のx/y座標。
 };
 
+typedef struct{
+    wchar_t ch[2];
+    EDITOR_ACTION action_func;
+}settings_key_mapps;
+
+typedef struct{
+    settings_key_mapps *key_mapp_list;
+    int key_map_num;
+    int key_map_allocate_num;
+}settings_key_mapp_list_data;
+
+typedef struct{
+    void **now_loading_dynamic_lib;
+    int now_loading_lib_num;
+    int now_loading_lib_allocate_num;
+}loading_dl_data;
+
 // 全画面の入力ハンドラへ渡す共有参照と、画面別の配置情報。
 struct editor_input_context {
     WINDOW *win; // ncursesの標準描画先への借用ポインタ。
@@ -314,6 +341,8 @@ struct editor_input_context {
     struct edit_screen_context edit_screen; // 編集画面の配置情報。
     struct ask_make_file_mode_context ask_make_file_mode; // 新規作成ダイアログの配置情報。
     struct start_menu_screen_context start_menu_screen; // スタートメニューの借用データ。
+    settings_key_mapp_list_data key_mapp_list;
+    loading_dl_data dl_data;
 };
 
 // editor_filetree_offset(): ファイルツリーを表示中に編集領域を右へ寄せる列数を返す。
@@ -628,4 +657,16 @@ int init_settings_data(struct editor_input_context *ctx);
 int editor_set_env_lang(struct editor_input_context *ctx,language lang);
 
 int env_language_ctl(language *lang,enum flags flags);
+
+int draw_editor_complete_word_box(struct editor_state *state);
+
+int clear_box_interior(struct box b);
+language get_env_language();
+
+int draw_edit_complete_world(struct editor_state *state);
+
+int editor_input_str(struct editor_state *state,wchar_t *str);
+
+
+
 #endif

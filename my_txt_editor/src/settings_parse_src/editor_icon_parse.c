@@ -71,7 +71,7 @@ int load_icon_data(char *path,icon_data *icon_data_ptr){
 
     // 再読み込みに備えて前回の対応表を捨て、空の状態から作り直す。
     clear_icon_lib(icon_data_ptr);
-
+    
     icon_data_ptr->icon_lib_allocate_num = 16;
     icon_data_ptr->icon_lib =
         malloc(sizeof(ext_icon) * icon_data_ptr->icon_lib_allocate_num);

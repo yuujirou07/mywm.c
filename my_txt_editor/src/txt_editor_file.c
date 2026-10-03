@@ -1,5 +1,6 @@
 #include <dirent.h>
 #include <errno.h>
+#include <libgen.h>
 #include <limits.h>
 #include <linux/limits.h>
 #include <ncurses.h>
@@ -8,9 +9,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <termios.h>
 #include <time.h>
 #include <wchar.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #include<dirent.h>
 #include<sys/stat.h>
 #include "error_log.h"
@@ -592,13 +595,14 @@ char *editor_buffer_to_utf8(struct editor_state *state)
     return text;
 }
 
-// save_file(): 現在の編集バッファを開いているファイルパスへ書き戻す。
-// wint_line_str_dataは画面セル位置に合わせているため、0のセルは書かずに飛ばす。
+// save_file(): 編集バッファを同じディレクトリの一時ファイルに書き、成功時だけ置き換える。
 // 引数: state=保存先パスと編集バッファを持つエディタ状態。
 // 返り値: なし。
 void save_file(struct editor_state *state){
     if(state == NULL)return;
-    if(state->file_data.now_open_path_name[0] == '\0'){
+
+    const char *now_open_path_name = state->file_data.now_open_path_name;
+    if(now_open_path_name[0] == '\0'){
         if(state->settings_data->ask_make_file){
             editor_set_screen_state(state, ask_make_file_mode);
             return;
@@ -609,38 +613,86 @@ void save_file(struct editor_state *state){
         return;
     }
 
-    // 危険: "w"で元ファイルを先に切り詰めてから書くため、
-    // 途中の変換・書き込み失敗やプロセス停止で元データを復元できない。
-    FILE *file = fopen(state->file_data.now_open_path_name, "w");
+    char *text = editor_buffer_to_utf8(state);
+    if(text == NULL){
+        editor_error_screen(state, "can not convert file");
+        return;
+    }
+
+    struct stat st;
+    char resolved_path[PATH_MAX];
+    const char *save_path = now_open_path_name;
+    bool existed = (stat(now_open_path_name, &st) == 0);
+    if(existed){
+        if(!S_ISREG(st.st_mode) || realpath(now_open_path_name, resolved_path) == NULL){
+            free(text);
+            editor_error_screen(state, "can not save file");
+            return;
+        }
+        save_path = resolved_path;
+    }
+    else{
+        struct stat link_st;
+        if(errno != ENOENT || lstat(now_open_path_name, &link_st) == 0 || errno != ENOENT){
+            free(text);
+            editor_error_screen(state, "can not save file");
+            return;
+        }
+    }
+
+    char tmp_path[PATH_MAX + sizeof("/.my_txt_editor_XXXXXX")];
+    const char *last_slash = strrchr(save_path, '/');
+    int path_len = last_slash == NULL
+        ? snprintf(tmp_path, sizeof(tmp_path), "./.my_txt_editor_XXXXXX")
+        : snprintf(tmp_path, sizeof(tmp_path), "%.*s/.my_txt_editor_XXXXXX",
+                   (int)(last_slash - save_path), save_path);
+
+    if(path_len < 0 || (size_t)path_len >= sizeof(tmp_path)){
+        free(text);
+        editor_error_screen(state, "path too long");
+        return;
+    }
+
+    int fd = mkstemp(tmp_path);
+    if(fd < 0){
+        free(text);
+        editor_error_screen(state, "can not save file");
+        return;
+    }
+    FILE *file = fdopen(fd, "w");
     if(file == NULL){
+        close(fd);
+        unlink(tmp_path);
+        free(text);
         editor_error_screen(state, "can not save file");
         return;
     }
 
-    int line_count = state->file_data.description_line_end;
-    for(int line = 0; line < line_count; line++){
-        //画面幅では丸めない。画面外にあった桁もバッファ上に残っているので保存する。
-        int max_col = editor_line_len(state, line);
-        wint_t *cells = editor_line_cells(state, line);
-        if(cells == NULL){
-            fputwc('\n', file);
-            continue;
-        }
-
-
-        
-        for(int col = 0; col < max_col; col++){
-            wint_t cell = cells[col];
-            if(cell == 0) continue;
-            if(fputwc((wchar_t)cell, file) == WEOF){
-                fclose(file);
-                editor_error_screen(state, "can not write file");
-                return;
-            }
-        }
-        fputwc('\n', file);
+    size_t text_len = strlen(text);
+    bool write_ok = fwrite(text, 1, text_len, file) == text_len;
+    free(text);
+    if(write_ok && existed && fchmod(fd, st.st_mode & 0777) != 0)write_ok = false;
+    if(write_ok && fflush(file) != 0)write_ok = false;
+    if(write_ok && fsync(fd) != 0)write_ok = false;
+    if(fclose(file) != 0)write_ok = false;
+    if(!write_ok){
+        unlink(tmp_path);
+        editor_error_screen(state, "can not write file");
+        return;
     }
-    fclose(file);
+
+    FILE *replacement = fopen(tmp_path, "r");
+    if(replacement == NULL || rename(tmp_path, save_path) != 0){
+        if(replacement != NULL)fclose(replacement);
+        unlink(tmp_path);
+        editor_error_screen(state, "can not save file");
+        return;
+    }
+
+    if(state->file_data.now_open_file != NULL)fclose(state->file_data.now_open_file);
+    state->file_data.now_open_file = replacement;
+    state->file_data.file_line_start_num_counter = 0;
+    set_line_memory(state);
 }
 
 // load_screen_size(): ファイル読み込み後に行開始位置と編集バッファを作り直し、
@@ -672,15 +724,17 @@ void load_default_editor_settings(struct editor_settings *settings_data){
     settings_data->ask_make_file                = DEFAULT_ASK_MAKE_FILE;
     settings_data->file_select_scene_lighting   = DEFAULT_FILE_SELECT_SCENE_LIGHTING;
     settings_data->show_start_menu              = DEFAULT_SHOW_START_MENU;
-    settings_data->lsp.lsp_launch_startup_editor = DEFAULT_LSP_PROCESS_LAUNCH_STARTUP_EDITOR;
+    settings_data->lsp.lsp_launch_startup_editor= DEFAULT_LSP_PROCESS_LAUNCH_STARTUP_EDITOR;
     settings_data->lsp.lsp_epoll_timeout_ms     = DEFAULT_EPOLL_TIME_OUT_MS;
     settings_data->lsp.lsp_use                  = DEFAULT_LSP_USE;
     settings_data->use_icon                     = DEFAULT_USE_ICON;
     settings_data->built_in_syntax              = DEFAULT_BUILT_IN_SYNTAX;
-    settings_data->auto_complete_settings_data.auto_complete_enabled = DEFAULT_AUTO_COMPLETE;
+    settings_data->auto_complete_settings_data.auto_complete_enabled       = DEFAULT_AUTO_COMPLETE;
     settings_data->auto_complete_settings_data.auto_complete_window_enable = DEFAULT_AUTO_COMPLETE_WINDOW;
     settings_data->auto_complete_settings_data.auto_complete_window_size =
         (struct pos){DEFAULT_AUTO_COMPLETE_WINDOW_WIDTH, DEFAULT_AUTO_COMPLETE_WINDOW_HEIGHT};
+    settings_data->auto_complete_settings_data.auto_complete_position_mode = DEFAULT_AUTO_COMPLETE_POSITION_MODE;
+    settings_data->settings_lang                = DEFAULT_SETTINGS_LANGUAGE;
 }
 
 // file_select_line_update(): 現在の選択行をprevious_lineに保存し、新しい選択行を設定する。
@@ -838,12 +892,13 @@ enum select_state get_path_state(const char *path){
     if(path == NULL)return error;
     struct stat stat_state = {0};
     int stat_rt = stat(path,&stat_state);
-    if(stat_rt != 0){
+    if(stat_rt == -1){
         char *error_msg = strerror(errno);
         if(strlen(error_msg) + 1 > ERROR_MSG_SIZE_MAX){
             error_msg[ERROR_MSG_SIZE_MAX - 1] = '\0';
         }
-        error_log(error_msg);
+        error_log_write(error_msg);
+        error_log_write((char*)path);
     }
     if(stat_state.st_mode & S_IFREG){
         return file;
