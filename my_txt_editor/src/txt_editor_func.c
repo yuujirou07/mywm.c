@@ -389,6 +389,7 @@ void handle_mouse(struct editor_input_context *ctx,int dir_num) {
             filetree_mouse_event(ctx);
             break;
         }
+
         default:
             break;
     }
@@ -731,6 +732,15 @@ void editor_screen_mouse_event(struct editor_input_context *ctx){
 void file_browse_screen_mouse_event(WINDOW *win, MEVENT *event, struct editor_state *state,int dir_num){
     //ホイールで選択行を動かすだけなので描画先ウィンドウは使わない
     (void)win;
+
+    if(event->bstate & BUTTON1_DOUBLE_CLICKED){
+        if(box_contains_point(state->file_browse.box,(struct pos){event->x,event->y})){
+
+            
+
+
+        }
+    }
 
     if(state->settings_data->file_select_scene_lighting){
         if(event->bstate & BUTTON4_PRESSED){
