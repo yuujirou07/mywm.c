@@ -722,7 +722,7 @@ void editor_screen_mouse_event(struct editor_input_context *ctx){
     }
 
     // カーソル行が編集領域から出たら隠す。戻ってきたらまた出す。
-    state->is_cur_show = editor_cursor_is_visible(state);
+    my_cur_set(state,editor_cursor_is_visible(state));
 }
 
 // file_browse_screen_mouse_event(): ホイール入力でファイルブラウザの選択行を循環移動する。

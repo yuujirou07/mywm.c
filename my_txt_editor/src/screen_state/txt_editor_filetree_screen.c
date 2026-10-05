@@ -105,6 +105,18 @@ void hide_filetree(struct editor_input_context *ctx){
 
     // ツリーの枠が残らないよう画面全体を消してから編集画面へ戻す。
     restore_edit_screen(state);
+
+    //ステータスバーのサイズを戻す
+    if(state->settings_data->show_status_bar){
+        if(state->settings_data->bar_side_state == top || 
+            state->settings_data->bar_side_state == bottom){
+            int status_bar_y = (state->settings_data->bar_side_state == top)?1:getmaxy(ctx->win) - 1;
+            state->status_bar->pos = (struct pos){0,status_bar_y};
+            state->status_bar->w = getmaxx(ctx->win);
+            state->status_bar->h = 3;
+        }
+        state->render_flags |= RENDER_STATUS_BAR_LINE;
+    }
 }
 
 
@@ -118,6 +130,11 @@ bool handle_filetree_screen_input(struct editor_input_context *ctx,wint_t ch,int
         // ツリーを出したキーと同じキーで閉じる。
         hide_filetree(ctx);
         return true;
+    }
+    else if(ch == CTRL('h')){
+        editor_set_screen_state(state,line_jump_mode);
+        reset_jump_mode(state);
+        state->render_flags |= RENDER_LINE_JUMP;
     }
     if(ch == 'q')return false;
     if(ch == KEY_MOUSE){

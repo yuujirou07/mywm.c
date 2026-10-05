@@ -309,6 +309,7 @@ void draw_now_path_name(struct box file_browse_box,char *path_name){
 // 引数: state=行番号情報、win=描画先、start_pos/end_pos=区切り線の端点。
 // 返り値: なし。
 void draw_edit_screen_base(struct editor_state *state,WINDOW *win,struct pos start_pos,struct pos end_pos){
+    draw_line_numbers(state);
     if(state->settings_data->draw_split_line){
         draw_line(start_pos,end_pos,win,all_draw_mode);
     }
@@ -319,7 +320,6 @@ void draw_edit_screen_base(struct editor_state *state,WINDOW *win,struct pos sta
         draw_status_bar_path(state,win);
         draw_line_status(state,win);
     }
-    draw_line_numbers(state);
 }
 
 // draw_box_inside_dir(): load_dir_table()が作ったディレクトリエントリ一覧を
@@ -684,6 +684,9 @@ void update_screen(struct editor_input_context *ctx){
             if(is_cur_move)cur_pos_push(mouse_pos,state);
         }
 
+        if(flags & RENDER_FILE_DATA){
+            draw_file_data(state);
+        }
         if(flags & RENDER_LINE){
             draw_line(ctx->edit_screen.line_start_pos,
                       ctx->edit_screen.line_end_pos, win, all_draw_mode);
@@ -699,9 +702,6 @@ void update_screen(struct editor_input_context *ctx){
             if(state->file_tree_data.is_show){
                 draw_filetree(ctx,&state->file_tree_data);
             }
-        }
-        if(flags & RENDER_FILE_DATA){
-            draw_file_data(state);
         }
         if(flags & RENDER_FILE_BROWSE){
             //ブラウザ画面を後ろのコードが見えないように消す

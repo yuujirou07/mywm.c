@@ -45,7 +45,7 @@ typedef enum{
     unknown = 2,
 }settings_lang;
 
-const char *const SETTINGS_LANGUAGE_JSON_KEY_STR[] = 
+static const char *const SETTINGS_LANGUAGE_JSON_KEY_STR[] =
     {
         "c",
         "lua",

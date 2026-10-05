@@ -35,7 +35,7 @@
 #define EDITOR_LINE_COL_MAX 65536
 
 
-const char *const MY_TXT_EDITOR_CURRENT_DIR_NAME = "my_txt_editor";
+static const char *const MY_TXT_EDITOR_CURRENT_DIR_NAME = "my_txt_editor";
 
 
 // update_screen()で再描画する領域を指定するビットフラグ。

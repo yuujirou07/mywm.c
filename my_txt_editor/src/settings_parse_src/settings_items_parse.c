@@ -59,9 +59,9 @@ int load_settings_screen_items(settings_screen_data *settings_screen_data){
     cJSON *json_item = NULL;
     cJSON_ArrayForEach(json_item,root){
         cJSON *name = cJSON_GetObjectItemCaseSensitive(json_item,"name");
-        cJSON *key = cJSON_GetObjectItemCaseSensitive(json_item,"key");
+        cJSON *key  = cJSON_GetObjectItemCaseSensitive(json_item,"key");
         cJSON *explanation = cJSON_GetObjectItemCaseSensitive(json_item,"explanation");
-        cJSON *value_type = cJSON_GetObjectItemCaseSensitive(json_item,"value");
+        cJSON *value_type  = cJSON_GetObjectItemCaseSensitive(json_item,"value");
         if(!cJSON_IsString(name) || !cJSON_IsString(key) ||
             !cJSON_IsString(explanation) || key->valuestring[0] == '\0' ||
             !cJSON_IsString(value_type) ||key->valuestring[1] != '\0'){

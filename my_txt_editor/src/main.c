@@ -489,6 +489,11 @@ int main(int argc, char *argv[])
     if(handle != NULL){
         dlclose(handle);
     }
+    free(input_context.key_mapp_list.key_mapp_list);
+    for(int i = 0;i < input_context.dl_data.now_loading_lib_num;i++){
+        dlclose(input_context.dl_data.now_loading_dynamic_lib[i]);
+    }
+    free(input_context.dl_data.now_loading_dynamic_lib);
     if(epfd >= 0)
         close(epfd);
     lsp_close_server(&lsp);
