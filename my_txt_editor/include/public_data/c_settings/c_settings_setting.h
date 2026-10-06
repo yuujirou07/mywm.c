@@ -15,8 +15,10 @@ typedef void (*KEY_SET)(void *userdata,wchar_t key1,wchar_t key2,EDITOR_ACTION a
 
 struct MY_TXT_EDITOR_API{
     void * userdata;
+    void *screen_state;
     void (* save_file)(void *userdata);
     KEY_SET key;
+
 };
 
 

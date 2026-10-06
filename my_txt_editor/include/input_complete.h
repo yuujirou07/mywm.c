@@ -59,8 +59,8 @@ static inline int get_edit_comp_pos_def_world_num(){
 typedef struct{
     struct pos size; // x=幅、y=高さ。枠を含む端末セル・行数。
     EDIT_COMPLETE_POSITION_MODE pos_mode; // 設定JSONから読み込んだ配置方式。
+    
 }complete_show_data;
-
 // 入力途中の補完対象文字列。countは終端文字を含まない文字数。
 typedef struct{
     wchar_t complete_world_candidacy_part_str[COMPLETE_WORLD_CANDIDACY_PART_DATA_MAX_LEN]; // NUL終端の入力文字列。

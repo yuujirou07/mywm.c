@@ -17,7 +17,6 @@ struct option_data{
         int w;
 };   
 
-
 void option_fn(char *key,int *return_numk);
 int draw_option(struct pos screen_max_pos,struct pos *option_start_pos,struct ascii_data ascii_data,struct option_data *option_data,int size);
 void draw_ascii_logo(struct pos screen_max_pos,struct ascii_data *ascii_data);

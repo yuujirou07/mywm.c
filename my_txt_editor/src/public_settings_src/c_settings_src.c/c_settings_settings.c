@@ -22,6 +22,7 @@ void connect_api_mem_data(MY_TXT_EDITOR_API *const api,struct editor_input_conte
     api->userdata = ctx; 
     api->save_file = api_save_file;
     api->key = api_key_mapping;
+
     return;
 }
 

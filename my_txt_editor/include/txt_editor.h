@@ -486,6 +486,57 @@ static inline int editor_clamp_col(struct editor_state *state, int line, int col
     return editor_clamp_int(col, 0, len);
 }
 
+// editor_cursor_col_boundary(): 幅2以上の文字の継続セル上にある桁を文字先頭へ戻す。
+// 引数: state=行セル配列、line=対象行、col=補正する画面桁。
+// 返り値: 文字の途中を指さない有効な桁。
+static inline int editor_cursor_col_boundary(struct editor_state *state, int line, int col){
+    col = editor_clamp_col(state, line, col);
+    int len = editor_line_len(state, line);
+    wint_t *cells = editor_line_cells(state, line);
+    if(cells == NULL){
+        return col;
+    }
+    while(col > 0 && col < len && cells[col] == 0){
+        col--;
+    }
+    return col;
+}
+
+// editor_previous_char_col(): 直前の文字の先頭セルを返す。
+// 引数: state=行セル配列、line=対象行、col=文字境界。
+// 返り値: 直前の文字の先頭桁。行頭なら0。
+static inline int editor_previous_char_col(struct editor_state *state, int line, int col){
+    if(col <= 0){
+        return 0;
+    }
+    wint_t *cells = editor_line_cells(state, line);
+    if(cells == NULL){
+        return col - 1;
+    }
+    int start = col - 1;
+    while(start > 0 && cells[start] == 0){
+        start--;
+    }
+    return start;
+}
+
+// editor_next_char_col(): 指定桁の文字幅だけ進んだ桁を返す。
+// 引数: state=行セル配列、line=対象行、col=文字境界。
+// 返り値: 次の文字境界。行末を越えない。
+static inline int editor_next_char_col(struct editor_state *state, int line, int col){
+    int len = editor_line_len(state, line);
+    if(col >= len){
+        return len;
+    }
+    wint_t *cells = editor_line_cells(state, line);
+    int width = (cells != NULL && cells[col] != 0)
+        ? wcwidth((wchar_t)cells[col]) : 1;
+    if(width < 1){
+        width = 1;
+    }
+    return (col + width < len) ? col + width : len;
+}
+
 // editor_cursor_screen_pos(): 論理ファイル座標から画面座標を計算して保持する。
 // 引数: state=カーソル・表示開始行・書き込み領域を持つエディタ状態。
 // 返り値: カーソルを置くべき画面座標。
@@ -528,7 +579,7 @@ int set_cur_pos(struct editor_state *state);
 // 引数: state=論理カーソル位置と反映待ち座標を持つエディタ状態。
 // 返り値: なし。
 static inline void editor_sync_cursor(struct editor_state *state){
-    state->cursor.file_pos.x = editor_clamp_col(state, state->cursor.file_pos.y,
+    state->cursor.file_pos.x = editor_cursor_col_boundary(state, state->cursor.file_pos.y,
         state->cursor.file_pos.x);
     struct pos pos = editor_cursor_screen_pos(state);
     cur_pos_push(pos,state);
@@ -544,7 +595,7 @@ static inline void editor_set_cursor(struct editor_state *state, int line, int c
         return;
     }
     state->cursor.file_pos.y = editor_clamp_int(line, 0, line_limit - 1);
-    state->cursor.file_pos.x = editor_clamp_col(state, state->cursor.file_pos.y, col);
+    state->cursor.file_pos.x = editor_cursor_col_boundary(state, state->cursor.file_pos.y, col);
 }
 
 // editor_move_cursor_line(): 論理カーソル行をdelta分だけ動かす。桁は新しい行長へ丸める。
@@ -558,7 +609,7 @@ static inline bool editor_move_cursor_line(struct editor_state *state, int delta
         return false;
     }
     state->cursor.file_pos.y = next;
-    state->cursor.file_pos.x = editor_clamp_col(state, next, state->cursor.file_pos.x);
+    state->cursor.file_pos.x = editor_cursor_col_boundary(state, next, state->cursor.file_pos.x);
 
     return true;
 }

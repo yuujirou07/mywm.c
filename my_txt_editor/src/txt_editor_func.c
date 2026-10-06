@@ -137,7 +137,7 @@ void handle_resize(WINDOW *win, struct editor_input_context *ctx){
 
     // 幅が縮むと桁が可視範囲外へ出るため、新しい可視幅で丸め直す。
     // 行番号は変わらないので、行方向はupdate_screen_ratio()側の判定に任せる。
-    state->cursor.file_pos.x = editor_clamp_col(state, state->cursor.file_pos.y,
+    state->cursor.file_pos.x = editor_cursor_col_boundary(state, state->cursor.file_pos.y,
         state->cursor.file_pos.x);
 
     //各画面の枠やカーソル位置を新しい画面サイズの比率へ合わせ、再描画を要求する
@@ -154,6 +154,8 @@ void handle_backspace(struct editor_input_context *ctx) {
     if(line < 0 || line >= editor_line_limit(state)){
         return;
     }
+    state->cursor.file_pos.x = editor_cursor_col_boundary(state, line,
+        state->cursor.file_pos.x);
 
     if (state->cursor.file_pos.x > 0) {
         // 行内の1文字削除。列容量が要るのはこちらの経路だけ。
@@ -161,7 +163,7 @@ void handle_backspace(struct editor_input_context *ctx) {
         if(col_limit <= 0){
             return;
         }
-        int del_pos = state->cursor.file_pos.x - 1;
+        int del_pos = editor_previous_char_col(state, line, state->cursor.file_pos.x);
         if(del_pos < 0 || del_pos >= col_limit || del_pos >= state->str.line[line]){
             return;
         }
@@ -169,17 +171,24 @@ void handle_backspace(struct editor_input_context *ctx) {
         if(cells == NULL){
             return;
         }
-        state->str.line[line]--;
-
-        int new_len = state->str.line[line];
+        int old_len = editor_line_len(state, line);
+        int char_width = wcwidth((wchar_t)cells[del_pos]);
+        if(char_width < 1){
+            char_width = 1;
+        }
+        if(del_pos + char_width > old_len){
+            char_width = old_len - del_pos;
+        }
+        int new_len = old_len - char_width;
+        state->str.line[line] = new_len;
 
         //画面外にある桁も含めて行末まで詰める
-        int move_count = new_len - del_pos;
+        int move_count = old_len - del_pos - char_width;
         if (move_count > 0)
-            memmove(&cells[del_pos], &cells[del_pos + 1],
+            memmove(&cells[del_pos], &cells[del_pos + char_width],
                     move_count * sizeof(wint_t));
 
-        cells[new_len] = 0;
+        memset(&cells[new_len], 0, char_width * sizeof(wint_t));
         state->cursor.file_pos.x = del_pos;
 
 
@@ -284,6 +293,8 @@ void handle_char_input(WINDOW *win, wchar_t ch, struct editor_state *state){
         return;
     }
     state->cursor.file_pos.x = editor_clamp_int(state->cursor.file_pos.x, 0, view_cols - 1);
+    state->cursor.file_pos.x = editor_cursor_col_boundary(state, line,
+        state->cursor.file_pos.x);
 
     int writing_area = state->cursor.file_pos.x;
     if(writing_area < 0 || writing_area >= view_cols){
@@ -410,6 +421,8 @@ void handle_input_allow(struct editor_input_context *ctx,wchar_t ch){
     int line = state->cursor.file_pos.y;
     bool can_move_up_in_view   = (line > state->scr.scr_start_num);
     bool can_move_down_in_view = (line - state->scr.scr_start_num + 1 < state->write_area.h);
+    state->cursor.file_pos.x = editor_cursor_col_boundary(state, line,
+        state->cursor.file_pos.x);
 
     switch(ch){
         case KEY_UP:{
@@ -428,7 +441,10 @@ void handle_input_allow(struct editor_input_context *ctx,wchar_t ch){
             break;
         }
         case KEY_LEFT:{
-            if (state->cursor.file_pos.x > 0)state->cursor.file_pos.x--;
+            if (state->cursor.file_pos.x > 0){
+                state->cursor.file_pos.x = editor_previous_char_col(state, line,
+                    state->cursor.file_pos.x);
+            }
             else if (can_move_up_in_view && line > 0) {
                 editor_move_cursor_line(state, -1);
                 state->cursor.file_pos.x = editor_clamp_col(state, state->cursor.file_pos.y,
@@ -441,7 +457,8 @@ void handle_input_allow(struct editor_input_context *ctx,wchar_t ch){
                 break;
             }
             if (state->cursor.file_pos.x < editor_clamp_col(state, line, editor_line_len(state, line))){
-                state->cursor.file_pos.x++;
+                state->cursor.file_pos.x = editor_next_char_col(state, line,
+                    state->cursor.file_pos.x);
             }
             else if (can_move_down_in_view && line + 1 < line_limit) {
                 editor_move_cursor_line(state, 1);

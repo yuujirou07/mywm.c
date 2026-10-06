@@ -95,6 +95,7 @@ bool handle_file_browse_screen_input(struct editor_input_context *ctx, int input
                 else{
                     *(child_dir) = '\0';
                 }
+                
 
                 file_browse->select_line.now_logical_line = 0;
                 load_dir_table(state, &file_browse->dir_name_table,
@@ -199,7 +200,7 @@ bool handle_file_browse_screen_input(struct editor_input_context *ctx, int input
             }
         }
         if(ch == '\t' || ch == '\0' || ch == '\r' || ch == '\n' || ch == KEY_ENTER){
-
+            
             const wchar_t *path = now_open_path_name(NULL,get);
             if(path == NULL)return true;
             char char_old_path[PATH_MAX];
