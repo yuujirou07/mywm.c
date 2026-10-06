@@ -19,7 +19,7 @@ static void *load_current_settings_obj_c_file(struct editor_input_context *ctx);
 
 static void api_key_mapping(void *userdata,wchar_t key1,wchar_t key2,EDITOR_ACTION action);
 void connect_api_mem_data(MY_TXT_EDITOR_API *const api,struct editor_input_context *ctx){
-    api->userdata = ctx; 
+    api->userdata  = ctx; 
     api->save_file = api_save_file;
     api->key = api_key_mapping;
 
@@ -35,6 +35,13 @@ static void api_save_file(void *userdata){
 
 static void api_key_mapping(void *userdata,wchar_t key1,wchar_t key2,EDITOR_ACTION action){
     struct editor_input_context *ctx = (struct editor_input_context *)userdata;
+
+    //キーマップ最大登録数ガード
+    if(ctx->key_mapp_list.key_map_num >= KEY_MAPPING_MAX_NUM){
+        error_log("over flow key map tabele");
+        return;
+    }
+
     //メモリの拡張処理
     if(ctx->key_mapp_list.key_map_allocate_num <= ctx->key_mapp_list.key_map_num){
         settings_key_mapps *tmp_key_mapps = 
@@ -110,4 +117,20 @@ static void *load_current_settings_obj_c_file(struct editor_input_context *ctx){
         error_log_write("can not load settings library\n");
     }
     return handle;
+}
+
+
+
+int check_user_settings_event(struct editor_input_context *ctx){
+    if(ctx->key_mapp_list.key_map_num > 0){
+
+    }
+
+    return 0;
+}
+
+
+int call_user_key_mapping_event(settings_key_mapps *key_mapp_data){
+    *key_mapp_data->ch = 0;
+    return 0;
 }

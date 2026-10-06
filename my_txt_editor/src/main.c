@@ -391,6 +391,11 @@ int main(int argc, char *argv[])
     free(now_dir);
 
     int running = true;
+    
+    wint_t ch = 0;
+    int input_result = 0;
+    
+
     while (running) {
         
         //もしlspを使用する設定だったら
@@ -421,7 +426,7 @@ int main(int argc, char *argv[])
             }
         }
 
-
+        
         set_complete_str(&state,state.edit_input_complete_data.
                 comp_world_candidacy_part_data.complete_world_candidacy_part_str,1);
 
@@ -450,9 +455,9 @@ int main(int argc, char *argv[])
         }
 
 
-        wint_t ch = 0;
-        int input_result;
         input_result = get_wch(&ch);
+
+        
         
         if (input_result == ERR)continue;
 

@@ -163,6 +163,18 @@ void load_custom_editor_settings(struct editor_settings *settings_data){
         settings_data->auto_complete_settings_data.auto_complete_enabled = cJSON_IsTrue(auto_complete);
     }
 
+    cJSON *key_log = cJSON_GetObjectItemCaseSensitive(json_data, "key_log");
+    if(cJSON_IsObject(key_log)){
+        cJSON *enabled = cJSON_GetObjectItemCaseSensitive(key_log, "enabled");
+        if(cJSON_IsBool(enabled)){
+            settings_data->key_log_settings.use_key_log = cJSON_IsTrue(enabled);
+        }
+        cJSON *buffer_size = cJSON_GetObjectItemCaseSensitive(key_log, "buffer_size");
+        if(json_int_in_range(buffer_size, 1, UINT16_MAX)){
+            settings_data->key_log_settings.key_log_buffer_size = buffer_size->valueint;
+        }
+    }
+
     cJSON *settings_language = cJSON_GetObjectItemCaseSensitive(json_data,"settings_language");
     if(cJSON_IsString(settings_language)){
         for(int i = 0;i < (int)(sizeof(SETTINGS_LANGUAGE_JSON_KEY_STR)/sizeof(SETTINGS_LANGUAGE_JSON_KEY_STR[0]));i++){

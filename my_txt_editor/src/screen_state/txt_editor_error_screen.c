@@ -8,9 +8,9 @@ bool handle_error_screen_input(struct editor_input_context *ctx, wint_t ch){
 
     if(ch == KEY_ENTER || ch == '\n' || ch == '\r'){
         clear();
-        enum now_screen_state previous_state = editor_get_screen_state_log(state,1);
+        enum screen_state previous_state = editor_get_screen_state_log(state,1);
         // start menu由来のfile browserで発生したエラーでは、2つ前が戻り先になる。
-        enum now_screen_state previous_previous_state =
+        enum screen_state previous_previous_state =
             editor_get_screen_state_log(state,2);
 
         if(previous_state == start_menu_screen ||

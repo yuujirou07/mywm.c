@@ -3,6 +3,7 @@
 
 #include <ncurses.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <wchar.h>
 #include <wctype.h>
 #include <dirent.h>
@@ -81,6 +82,7 @@ struct jump_mode{
     int  jump_line_num_counter; // jump_line_numに入っている文字数。
 };
 
+
 // 開いているファイルと、読み込み済みテキストの行情報。
 struct file_data{
     FILE*   now_open_file; // 現在開いているFILE。未オープンならNULL。
@@ -108,7 +110,7 @@ enum select_state{
 
 
 // 現在表示している画面・入力モード。
-enum now_screen_state{
+enum screen_state{
     edit_screen,        // 通常の編集画面。
     file_browse_screen, // ファイルブラウザ画面。
     filetree_screen,    // ファイルツリー画面。
@@ -119,6 +121,11 @@ enum now_screen_state{
     setting_screen,     // 設定画面。
     screen_state_log_error, // 指定された履歴位置が範囲外。
 };
+
+typedef enum screen_state screen_state;
+
+
+
 
 // 新規ファイル作成ダイアログの入力状態。
 struct make_file_mode_status{
@@ -224,12 +231,25 @@ struct box_queue{
 
 // 現在状態を末尾に保持する固定長の画面遷移履歴。
 struct screen_state_log{
-    enum now_screen_state screen_state_log[screen_state_log_storage]; // 画面遷移履歴。
+    enum screen_state screen_state_log[screen_state_log_storage]; // 画面遷移履歴。
     int screen_state_log_counter; // 記録済みの遷移数。
 };
 
 typedef struct{
+    wchar_t key;
+    int input_result;
+    screen_state screen_state;
+}key_data;
 
+typedef struct{
+    key_data *key_log;
+    uint16_t key_count;
+    uint16_t key_allocate_num;
+}key_log_data;
+
+
+typedef struct{
+    key_log_data Key_log_data;
 }key_bord_data;
 
 // エディタ全体で共有する実行時状態。
@@ -252,6 +272,7 @@ struct editor_state {
     settings_screen_data       settings_screen_data; // 設定画面の項目、選択、入力状態。
     file_tree_data             file_tree_data; // ファイルツリーの形状、所有ツリー、開閉状態。
     edit_input_complete_data   edit_input_complete_data;//入力補完データ
+    key_bord_data              key_bord_data; //入力関連データ
     int                        render_flags; // update_screen()へ渡す再描画要求。
     bool                       is_cur_show; // カーソル表示中ならtrue。
     bool                       mylsp_use; // 起動引数でLSP使用を要求されたならtrue。
@@ -260,7 +281,7 @@ struct editor_state {
 // editor_get_screen_state_log(): 現在位置を基準に画面遷移履歴を取得する。
 // 引数: state=画面遷移履歴を持つ状態、history_offset=0なら現在、1なら直前、2なら2つ前。
 // 返り値: 指定位置の画面状態。履歴範囲外ならscreen_state_log_error。
-static inline enum now_screen_state editor_get_screen_state_log(struct editor_state *state,
+static inline enum screen_state editor_get_screen_state_log(struct editor_state *state,
                                                                 int history_offset){
     if(history_offset < 0 ||
        history_offset >= state->screen_log.screen_state_log_counter){
@@ -274,7 +295,7 @@ static inline enum now_screen_state editor_get_screen_state_log(struct editor_st
 // editor_get_screen_state(): 現在の画面状態を返す。
 // 引数: state=画面遷移履歴を持つ状態。
 // 返り値: 現在の画面状態。履歴が空ならscreen_state_log_error。
-static inline enum now_screen_state editor_get_screen_state(struct editor_state *state){
+static inline enum screen_state editor_get_screen_state(struct editor_state *state){
     return editor_get_screen_state_log(state,0);
 }
 
@@ -283,7 +304,7 @@ static inline enum now_screen_state editor_get_screen_state(struct editor_state 
 // 引数: state=更新する画面遷移履歴、next_state=遷移先。
 // 返り値: なし。
 static inline void editor_set_screen_state(struct editor_state *state,
-                                        enum now_screen_state next_state){
+                                        enum screen_state next_state){
     struct screen_state_log *log = &state->screen_log;
 
     if(log->screen_state_log_counter > 0 &&
@@ -718,6 +739,8 @@ int draw_edit_complete_world(struct editor_state *state);
 
 int editor_input_str(struct editor_state *state,wchar_t *str);
 
+int key_log_add(struct editor_state *state,wchar_t ch,int result,screen_state screen_state);
 
+int key_log_write_file();
 
 #endif

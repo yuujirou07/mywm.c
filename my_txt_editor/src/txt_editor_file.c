@@ -735,6 +735,8 @@ void load_default_editor_settings(struct editor_settings *settings_data){
         (struct pos){DEFAULT_AUTO_COMPLETE_WINDOW_WIDTH, DEFAULT_AUTO_COMPLETE_WINDOW_HEIGHT};
     settings_data->auto_complete_settings_data.auto_complete_position_mode = DEFAULT_AUTO_COMPLETE_POSITION_MODE;
     settings_data->settings_lang                = DEFAULT_SETTINGS_LANGUAGE;
+    settings_data->key_log_settings.use_key_log = DEFAULT_USE_KEY_LOG;
+    settings_data->key_log_settings.key_log_buffer_size = DEFAULT_KEY_LOG_BUFFER_SIZE;
 }
 
 // file_select_line_update(): 現在の選択行をprevious_lineに保存し、新しい選択行を設定する。

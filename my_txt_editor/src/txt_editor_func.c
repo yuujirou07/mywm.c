@@ -998,3 +998,42 @@ int env_language_ctl(language *lang,enum flags flags){
     }
     return 0;
 }
+
+
+
+int key_log_add(struct editor_state *state,wchar_t ch,int result,screen_state screen_state){
+    if(state->key_bord_data.Key_log_data.key_allocate_num >= 
+            state->settings_data->key_log_settings.key_log_buffer_size){
+
+        
+        return 0; 
+    }
+    if(state->key_bord_data.Key_log_data.key_allocate_num <= 
+        state->key_bord_data.Key_log_data.key_count){
+        key_data *tmp_key_data = 
+            realloc(
+                state->key_bord_data.Key_log_data.key_log,
+                sizeof(key_data) * state->key_bord_data.Key_log_data.key_count * 2
+            );
+        if(tmp_key_data == NULL){
+            error_log("malloc");
+            return -1;
+        }
+        state->key_bord_data.Key_log_data.key_log = tmp_key_data;
+        state->key_bord_data.Key_log_data.key_allocate_num *= 2;
+    }
+
+    key_data *tmp_key_log = &state->key_bord_data.Key_log_data.key_log[state->key_bord_data.Key_log_data.key_count];
+    tmp_key_log->screen_state = screen_state;
+    tmp_key_log->input_result = result;
+    tmp_key_log->key = ch;
+    state->key_bord_data.Key_log_data.key_count++;
+    return 0;
+}
+
+int key_log_write_file(){
+
+
+
+    return 0;
+}

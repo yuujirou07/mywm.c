@@ -20,5 +20,9 @@
       "height":7
     }
   },
+  "key_log": {
+    "enabled": false,
+    "buffer_size": 1024
+  },
   "settings_language":"c"
 }

@@ -35,6 +35,8 @@
 
 #define DEFAULT_SETTINGS_LANGUAGE 2
 
+#define DEFAULT_USE_KEY_LOG false
+#define DEFAULT_KEY_LOG_BUFFER_SIZE 1024
 
 
 
@@ -68,8 +70,13 @@ typedef struct{
     bool auto_complete_window_enable; // 候補ウィンドウを表示するならtrue。
     struct pos auto_complete_window_size; // x=幅、y=高さ。どちらも枠を含む端末セル数。
     EDIT_COMPLETE_POSITION_MODE auto_complete_position_mode; // JSONのwindow.position_modeを列挙値で保持する。
-
 }auto_complete_settings_data;
+
+
+typedef struct{
+    bool use_key_log;
+    int key_log_buffer_size;
+}key_log_settings;
 
 // 既定値と設定JSONを統合した、実行中のエディタ設定。
 struct editor_settings{
@@ -89,6 +96,7 @@ struct editor_settings{
     bool use_icon; // ファイル種別アイコンを表示するならtrue。
     bool built_in_syntax; // 組込み構文着色を使うならtrue。
     auto_complete_settings_data auto_complete_settings_data; // 自動補完の設定一式。
+    key_log_settings key_log_settings;
     struct lsp_settings_data lsp; // LSP連携の設定一式。
     icon_data icon_data; // 読み込んだ拡張子別アイコン配列を所有する。
     settings_lang settings_lang;

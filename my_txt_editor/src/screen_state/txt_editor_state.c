@@ -152,7 +152,7 @@ int update_screen_ratio(struct editor_input_context *ctx){
         ctx->ask_make_file_mode.screen_center_y
     };
 
-    enum now_screen_state now_state = editor_get_screen_state(ctx->state);
+    enum screen_state now_state = editor_get_screen_state(ctx->state);
     switch(now_state){
         case file_browse_screen: {
             // 枠を作り直すと縮小時に古い枠が残る。start menu側のロゴを消さないよう、
