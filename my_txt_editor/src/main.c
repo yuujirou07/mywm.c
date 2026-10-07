@@ -433,7 +433,7 @@ int main(int argc, char *argv[])
                 comp_world_candidacy_part_data.complete_world_candidacy_part_str,1);
 
 
-
+    
 
         update_screen(&input_context);
         if(editor_get_screen_state(&state) == edit_screen || editor_get_screen_state(&state) == filetree_screen){
