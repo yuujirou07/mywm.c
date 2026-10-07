@@ -458,6 +458,8 @@ int main(int argc, char *argv[])
 
 
         input_result = get_wch(&ch);
+
+        
         key_log_add(
             &state,
             ch,
@@ -523,6 +525,13 @@ static void end_process(struct editor_state *state){
     free(state->file_data.file_str_data);
     free(state->file_data.file_line_start_num);
     free(state->str.chr_file_all_str_data);
+
+    //キーログ解放
+    if(state->settings_data->key_log_settings.use_key_log){
+        if(state->key_bord_data.Key_log_data.key_allocate_num > 0){
+            free(state->key_bord_data.Key_log_data.key_log);
+        }
+    }
     
     for(int i = 0;i < state->settings_screen_data.settings_item_data_num;i++){
         free((char *)state->settings_screen_data.item_data[i].name);

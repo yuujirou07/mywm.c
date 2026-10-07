@@ -509,9 +509,7 @@ void clear_box(struct clear_box_data *clear_box){
     for(int f = 0;f < clear_box->clear_box_counter;f++){
         struct box box = clear_box->clear_box[f];
         for(int i = box.pos.y;i < box.pos.y + box.h;i++){
-            char buff[box.w];
-            memset(buff,' ',sizeof(buff));
-            mvaddnstr(i,box.pos.x,buff,box.w);
+            mvhline(i,box.pos.x,' ',box.w);
         }
     }
     clear_box->clear_box_counter = 0;
@@ -544,6 +542,8 @@ void draw_line_status(struct editor_state *state,WINDOW *win){
             ' ', clear_len);
     mvaddnstr(write_start_pos.y, write_start_pos.x, line_status_str, total_line_len);
 }
+
+
 
 // 新規作成の確認画面またはファイル名入力画面を描画する。
 // 引数: ctx=画面状態・配置基準・描画先を持つ入力context。 返り値: なし。入力画面ではカーソル反映位置と入力欄の矩形も更新する。
@@ -606,7 +606,6 @@ static void draw_make_file_dialog(struct editor_input_context *ctx){
                  input_box.pos.y + 1},state);
     my_cur_set(state,true);
 }
-
 // ctxのrender_flagsにある描画要求を順に処理し、予約済みカーソルを反映してフラグをRENDER_NONEに戻す。
 // 返り値: なし。ctxの状態・描画先は必須。現実装のRENDER_ALLは空処理で、個別描画も行わない。
 void update_screen(struct editor_input_context *ctx){
@@ -1198,6 +1197,10 @@ int draw_editor_complete_word_box(struct editor_state *state){
             tmp_mouse_pos =
                 (struct pos){state->write_area.x_end,state->write_area.y_end};
             break;
+
+        default:
+            tmp_mouse_pos = tmp_pos;
+            tmp_mouse_pos.y += 1;
     }
 
 

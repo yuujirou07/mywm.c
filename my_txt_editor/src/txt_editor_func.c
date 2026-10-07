@@ -966,17 +966,29 @@ int env_language_ctl(language *lang,enum flags flags){
 int key_log_add(struct editor_state *state,wchar_t ch,int result,screen_state screen_state){
     if(state->key_bord_data.Key_log_data.key_allocate_num >= 
             state->settings_data->key_log_settings.key_log_buffer_size){
-
-        
         return 0; 
     }
-    if(state->key_bord_data.Key_log_data.key_allocate_num <= 
+
+    if(state->key_bord_data.Key_log_data.key_log == NULL){
+        state->key_bord_data.Key_log_data.key_allocate_num = 32;
+        state->key_bord_data.Key_log_data.key_count = 0;
+        state->key_bord_data.Key_log_data.key_log = 
+            malloc(sizeof(key_data) * 
+                state->key_bord_data.Key_log_data.key_allocate_num);
+
+        if(state->key_bord_data.Key_log_data.key_log == NULL){
+            error_log("malloc");
+            return -1;
+        }
+    }
+    else if(state->key_bord_data.Key_log_data.key_allocate_num <= 
         state->key_bord_data.Key_log_data.key_count){
         uint16_t tmp_realloc_num = 
             (state->key_bord_data.Key_log_data.key_count * 2 >= 
                 state->settings_data->key_log_settings.key_log_buffer_size)?
                 state->settings_data->key_log_settings.key_log_buffer_size:
                 state->key_bord_data.Key_log_data.key_count * 2;
+        
 
         key_data *tmp_key_data = 
             realloc(
