@@ -1,6 +1,7 @@
 #include <dirent.h>
 #include <ncurses.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -225,12 +226,12 @@ void draw_box(struct box box, WINDOW *win){
 
 }
 
-// queueの矩形の内側を消去してから枠を順に描き、件数を0へ戻す。
+// queueの矩形全体を消去してから枠を順に描き、件数を0へ戻す。
 // 引数: queue=有効な枠キュー、win=枠描画関数へ渡すウィンドウ。返り値: なし。
 static void flush_box_queue(struct box_queue *queue, WINDOW *win){
 
     for(int i = 0; i < queue->count; i++){
-        clear_box_interior(queue->box[i]);
+        clear_box_area(queue->box[i]);
         draw_box(queue->box[i], win);
     }
     queue->count = 0;
@@ -1170,14 +1171,25 @@ int draw_editor_complete_word_box(struct editor_state *state){
 
     struct pos tmp_mouse_pos;
     state->edit_input_complete_data.show = true;
+    struct pos tmp_pos = editor_cursor_write_area_pos(state);
 
-    struct pos tmp_pos = get_screen_cursor_pos(state);
+    //補完ウィンドウが動く前に消しておく
+    if(state->edit_input_complete_data.box.h > 0 && 
+        state->edit_input_complete_data.box.w > 0){
+        clear_box_area(state->edit_input_complete_data.box);
+    }
 
+    struct box old_box = {0};
+    if(state->edit_input_complete_data.show_data.pos_mode == EDIT_COMP_TRACKING){
+        old_box = state->edit_input_complete_data.box;
+    }
+        
     switch(state->edit_input_complete_data.show_data.pos_mode){
         case EDIT_COMP_TRACKING:
         case EDIT_COMP_UNKNOWN:
             tmp_mouse_pos = tmp_pos;
-            tmp_mouse_pos.y+=1;
+            tmp_mouse_pos.x += state->write_area.x_start;
+            tmp_mouse_pos.y += state->write_area.y_start + 1;
             break;
 
         case EDIT_COMP_FIXED_TOP_LEFT:
@@ -1202,7 +1214,8 @@ int draw_editor_complete_word_box(struct editor_state *state){
 
         default:
             tmp_mouse_pos = tmp_pos;
-            tmp_mouse_pos.y += 1;
+            tmp_mouse_pos.x += state->write_area.x_start;
+            tmp_mouse_pos.y += state->write_area.y_start + 1;
     }
 
 
@@ -1225,25 +1238,29 @@ int draw_editor_complete_word_box(struct editor_state *state){
             editor_error_screen(state,"youre screen is so small resize bigger");
             return 0;
         }
-        tmp_comp_box.pos.y = tmp_pos.y - tmp_comp_box.h;
+        tmp_comp_box.pos.y = state->write_area.y_start + tmp_pos.y - tmp_comp_box.h;
     }
     state->edit_input_complete_data.box = tmp_comp_box;
 
-    clear_box_interior(state->edit_input_complete_data.box);
+    //補完ウィンドウ移動後の下の文字の再描画
+    if(!(old_box.pos.x == 0 || old_box.pos.y == 0)){
+        redraw_write_area_line_str(state,old_box.pos.y,old_box.h);
+    }
     draw_box(state->edit_input_complete_data.box,stdscr);
     state->render_flags |= RENDER_BOX;
     return 0;
 }
 
-// 画面上の矩形bの枠を残し、内側を空白で消す。
+
+// 画面上を空白で消す。
 // 返り値: 幅・高さが2以下なら-1、それ以外0。ncursesの描画失敗は通知しない。
-int clear_box_interior(struct box b){
+int clear_box_area(struct box b){
     if(b.h <= 2 || b.w <= 2)return -1;
-    wchar_t clear_line[b.w];
-    wmemset(clear_line,L' ',b.w  - 2);
-    clear_line[b.w - 1] = L'\0';
-    for(int i = 1;i < b.h - 1;i++){
-        mvaddnwstr(b.pos.y + i,b.pos.x + 1,clear_line,b.w - 2);
+    wchar_t clear_line[b.w + 1];
+    wmemset(clear_line,L' ',b.w);
+    clear_line[b.w] = L'\0';
+    for(int i = 0;i < b.h;i++){
+        mvaddnwstr(b.pos.y + i,b.pos.x,clear_line,b.w);
     }
     return 0;
 }
@@ -1260,6 +1277,29 @@ int draw_edit_complete_world(struct editor_state *state){
     for(int i = 0;i < state->edit_input_complete_data.box.h - 2;i++){
         if(cmp_data->world[i][0] == L'\0')continue;
         mvaddnwstr(tmp_cmp_box.pos.y + i,tmp_cmp_box.pos.x + 1,cmp_data->world[i],tmp_cmp_box.w - 2);
+    }
+    return 0;
+}
+
+int redraw_write_area_line_str(struct editor_state *state,uint16_t line,uint16_t size){
+    if(state->file_data.is_open_file == false)return -1;
+
+    if(state->file_data.file_str_line_end <= line || 
+        state->scr.scr_start_num >= line || 
+            state->scr.scr_start_num + state->write_area.h <= line){
+        return -1;
+    }
+
+    size = (size > state->write_area.h)?state->write_area.h:size;
+    for(int i = 0;i < size;i++){
+        //論理行数
+        uint16_t ligical_line_num = state->scr.scr_start_num + line; 
+        long line_start_num = state->file_data.file_line_start_num[ligical_line_num];
+        char *line_start_ptr = state->file_data.file_str_data[line_start_num];
+
+        int line_y = state->write_area.y_start + line + i; 
+        int line_x = state->write_area.x_start;
+        mvaddnstr(line_y,line_x,line_start_ptr,strlen(line_start_ptr) + 1);
     }
     return 0;
 }

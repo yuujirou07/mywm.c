@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <bits/types/idtype_t.h>
 #include <stdio.h>
 #include <ncurses.h>
@@ -41,7 +42,6 @@ int main(int argc, char *argv[])
     char startuptime_log_file_path_name[PATH_MAX] = {0};
 
     struct timespec startup_start_time;
-    
     clock_gettime(CLOCK_MONOTONIC, &startup_start_time);
 
     bool startup_timer = 0;
@@ -157,6 +157,13 @@ int main(int argc, char *argv[])
     state.file_tree_data.ft_search_box = (struct box){(struct pos){0,0},0,0};
     state.file_tree_data.root_node = NULL;
     state.file_tree_data.is_show = false;
+
+    state.edit_input_complete_data.box.pos = (struct pos){0,0};
+    state.edit_input_complete_data.box.h = 
+        settings_data.auto_complete_settings_data.auto_complete_window_size.y;
+        
+    state.edit_input_complete_data.box.w = 
+        settings_data.auto_complete_settings_data.auto_complete_window_size.x;
 
 
     my_cur_set(&state,true);
@@ -427,8 +434,7 @@ int main(int argc, char *argv[])
                 }
             }
         }
-
-        
+    
         set_complete_str(&state,state.edit_input_complete_data.
                 comp_world_candidacy_part_data.complete_world_candidacy_part_str,1);
 
@@ -458,8 +464,6 @@ int main(int argc, char *argv[])
 
 
         input_result = get_wch(&ch);
-
-        
         key_log_add(
             &state,
             ch,
@@ -519,9 +523,6 @@ int main(int argc, char *argv[])
 // 返り値: なし。stateとその参照先は初期化済みであること。
 static void end_process(struct editor_state *state){
     clear();
-    for(int i=0;i < state->file_data.file_line_n;i++){
-        free(state->file_data.file_str_data[i]);
-    }
     free(state->file_data.file_str_data);
     free(state->file_data.file_line_start_num);
     free(state->str.chr_file_all_str_data);

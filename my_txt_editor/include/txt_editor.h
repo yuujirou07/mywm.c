@@ -95,7 +95,6 @@ struct file_data{
     long    file_line_start_num_counter; // file_line_start_numに登録済みの行数。
     long    description_line_end; // 保存対象として扱う論理行数。
     long    file_str_line_end;    // 可視文字がある最終行番号。
-    int     file_line_n;          // 画面に読み込むファイル行の作業用番号。
     long    file_total_str_size;  //ファイル内の合計文字数
     bool    is_open_file;         // ファイルを開いて編集しているならtrue。
 };
@@ -544,10 +543,7 @@ static inline struct pos editor_cursor_screen_pos(struct editor_state *state){
 // 論理カーソル位置を表示領域内の相対座標へ変換する。
 // 引数: state=カーソル位置・表示開始行・書き込み領域を持つエディタ状態。 返り値: 書き込み領域左上を原点とするカーソル座標。
 static inline struct pos editor_cursor_write_area_pos(struct editor_state *state){
-    struct pos pos;
-    pos.x = state->cursor.file_pos.x;
-    pos.y = state->cursor.file_pos.y - state->scr.scr_start_num;
-    return pos;
+    return (struct pos){state->cursor.file_pos.x,state->cursor.file_pos.y - state->scr.scr_start_num};
 }
 
 // 現在の論理カーソル行を返す。
@@ -629,6 +625,11 @@ void update_screen(struct editor_input_context *ctx);
 void request_clear_box(struct editor_state *state, struct box box);
 void draw_line_jump(struct editor_state *state);
 int set_clear_box(struct clear_box_data *clear_box_data,struct box box);
+int clear_status_bar_outline(struct editor_state *state);
+int clear_box_area(struct box b);
+int draw_editor_complete_word_box(struct editor_state *state);
+int draw_edit_complete_world(struct editor_state *state);
+int redraw_write_area_line_str(struct editor_state *state,uint16_t line,uint16_t size);
 
 // txt_editor_file.c
 int load_dir_table(struct editor_state *state,struct dir_entry **table,int *table_rows,char *path_name,int start_num,int *dir_num,int *table_num);
@@ -671,41 +672,28 @@ void file_browse_screen_mouse_event(WINDOW *win, MEVENT *event, struct editor_st
 void set_file_browse_path_input_mode(struct file_browse_state *file_browse,bool flag);
 bool get_file_browse_path_input_mode(struct file_browse_state *file_browse);
 void my_cur_set(struct editor_state *state,bool set);
+bool box_contains_point(struct box b,struct pos p);
+struct pos editor_mouse_to_buffer_pos(struct editor_state *state,
+                        struct pos mouse_pos);
+struct pos editor_pos_to_buffer_pos(
+                struct editor_state *state,
+                struct pos editor_pos);
+bool screen_pos_to_box_pos(struct box b1,struct pos p1,struct pos *rt1);
+int init_settings_data(struct editor_input_context *ctx);
+int editor_set_env_lang(struct editor_input_context *ctx,language lang);
+int env_language_ctl(language *lang,enum flags flags);
+language get_env_language();
+int key_log_add(struct editor_state *state,wchar_t ch,int result,screen_state screen_state);
+int key_log_write_file();
+
+// screen_state/txt_editor_edit_screen.c
+int editor_input_str(struct editor_state *state,wchar_t *str);
 
 // main.c
 int cur_pos_mg(struct pos mouse_pos,enum flags flags);
 void my_mvaddstr(struct pos pos,char *str);
 
-bool box_contains_point(struct box b,struct pos p);
 
-int clear_status_bar_outline(struct editor_state *state);
-
-struct pos editor_mouse_to_buffer_pos(struct editor_state *state,
-                        struct pos mouse_pos);
-
-struct pos editor_pos_to_buffer_pos(
-                struct editor_state *state,
-                struct pos editor_pos);
-
-
-bool screen_pos_to_box_pos(struct box b1,struct pos p1,struct pos *rt1);
-
-int init_settings_data(struct editor_input_context *ctx);
-int editor_set_env_lang(struct editor_input_context *ctx,language lang);
-
-int env_language_ctl(language *lang,enum flags flags);
-
-int draw_editor_complete_word_box(struct editor_state *state);
-
-int clear_box_interior(struct box b);
-language get_env_language();
-
-int draw_edit_complete_world(struct editor_state *state);
-
-int editor_input_str(struct editor_state *state,wchar_t *str);
-
-int key_log_add(struct editor_state *state,wchar_t ch,int result,screen_state screen_state);
-
-int key_log_write_file();
+int get_write_screen_pos_chr(struct editor_state *state,struct pos pos,char *chr);
 
 #endif

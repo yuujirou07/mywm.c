@@ -1011,3 +1011,28 @@ int key_log_add(struct editor_state *state,wchar_t ch,int result,screen_state sc
     state->key_bord_data.Key_log_data.key_count++;
     return 0;
 }
+
+int get_write_screen_pos_chr(struct editor_state *state,struct pos pos,char *chr){
+    if(state->file_data.is_open_file == false){
+        chr = NULL;
+        return -1;
+    }
+
+    //write_area.wは0からカウントしないため-1して判定
+    if(pos.x < 0 || pos.y < 0 ||
+        state->write_area.w-1 <= pos.x ||
+        state->write_area.h-1 <= pos.y){
+            chr = NULL;
+            return -1;
+    }
+
+    int logical_line_pos = state->scr.scr_start_num + pos.y;
+    int line_start_num = state->file_data.file_line_start_num[logical_line_pos];
+    char *str_line_start_ptr = state->file_data.file_str_data[line_start_num];
+    if((int)strlen(str_line_start_ptr) < pos.x){
+        chr = NULL;
+        return 0;
+    }
+    *chr = str_line_start_ptr[pos.x];
+    return pos.x;
+}
