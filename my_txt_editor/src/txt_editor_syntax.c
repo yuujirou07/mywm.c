@@ -33,10 +33,8 @@ static int garbage_collection_allocate_num = 256;
 static int collection_count = 0;
 
 
-// init_syntax_colors(): 構文用の色ペア4以降を黒背景で登録する。
-// ncursesとstart_color()の初期化後に呼び、COLOR_PAIRSの範囲内だけ登録する。
-// 引数: なし。
-// 返り値: なし。色非対応なら何もせず、init_pair()の失敗は通知しない。
+// ncursesとstart_color初期化後に、利用可能な構文色ペアを4番以降へ登録する。
+// 引数・返り値: なし。色非対応なら何もせず、色登録の失敗は通知しない。
 void init_syntax_colors(void){
     if(!has_colors())return;
     for(size_t i = 0;i < sizeof(syntax_colors) / sizeof(syntax_colors[0]);i++){
@@ -48,9 +46,8 @@ void init_syntax_colors(void){
     }
 }
 
-/* 引数: word_typeは着色の分類。使用前にinit_syntax_colors()を呼ぶ。
- * 返り値: 対応する色ペア番号。色非対応なら0、分類不正・ペア不足なら本文用の1。
- */
+// word_typeに対応する構文色ペア番号を返す。事前にinit_syntax_colorsを呼ぶ。
+// 返り値: 色非対応は0、分類不正・ペア不足は本文用の1、それ以外は4+word_type。
 short syntax_color_pair(syntax_type word_type){
     if(!has_colors())return 0;
     //suntax_typeが要素数より上の値かの条件分岐
@@ -103,18 +100,14 @@ const wchar_t *comment_ev_str = L"//";
 
 
 
-/* 引数: chは判定するワイド文字。
- * 返り値: 現在のロケールで英数字に分類される文字、または'_'ならtrue。
- */
+// chが現在のロケールで英数字、またはアンダースコアならtrueを返す。
+// 引数: 判定するワイド文字。入力は変更せず、それ以外はfalse。
 static bool is_word_char(wint_t ch){
     return iswalnum(ch) || ch == L'_';
 }
 
-/* lineのposからkeywordが単語単位で一致するかを返す。
- * 引数: lineはline_len要素以上の配列（NUL終端不要）、0 <= pos < line_len。
- * keywordは非NULLのNUL終端ワイド文字列。前後の英数字・'_'への連結は不一致。
- * 返り値: 一致ならtrue。空のkeywordや行末を越える場合はfalse。
- */
+// line_lenセルのlineのposから、NUL終端のkeywordが前後の単語境界を含め一致するか調べる。
+// 返り値: 一致ならtrue、空語・行末超過・不一致はfalse。非NULL入力と範囲内のposが必要。
 static bool keyword_at(const wint_t *line,int line_len,int pos,const wchar_t *keyword){
     int keyword_len = (int)wcslen(keyword);
     if(keyword_len == 0 || keyword_len > line_len - pos)return false;
@@ -127,11 +120,8 @@ static bool keyword_at(const wint_t *line,int line_len,int pos,const wchar_t *ke
     return true;
 }
 
-/* 引数: lineはline_len要素の行配列（NUL終端不要）、posは照合開始の添字。
- * wordsはword_count要素の辞書で、各要素はNUL終端ワイド文字列またはNULL。
- * 返り値: 単語境界を含めて最初に一致した語の文字数。不一致、line/wordsがNULL、
- * posが範囲外なら0。入力は変更せず、NULLの辞書要素は読み飛ばす。
- */
+// lineのposからwordsのword_count語を照合し、最初に単語境界まで一致した語の長さを返す。
+// line_lenはセル数。NULLの辞書要素を飛ばし、入力不正・不一致は0。入力の変更・解放はしない。
 int find_syntax_word(const wint_t *line,int line_len,int pos,
                      const wchar_t *const words[],size_t word_count){
     if(line == NULL || words == NULL || pos < 0 || pos >= line_len)return 0;
@@ -144,11 +134,8 @@ int find_syntax_word(const wint_t *line,int line_len,int pos,
     return 0;
 }
 
-/* 引数: syntaxは初期化済みの管理情報、x/yは表示領域内の開始位置、
- * word_lenは正の着色文字数、word_typeは分類。同じ開始座標があれば上書きし、なければ末尾へ追加する。
- * 返り値: 成功0、realloc失敗-1（既存の配列・件数は維持）。
- * 再確保すると既存要素へのポインタは無効になるため、呼び出し後に取得し直す。
- */
+// 初期化済みsyntaxへ画面相対セル(x,y)からword_lenセルをword_typeで登録し、同じ始点は上書きする。
+// 返り値: 成功0、再確保失敗-1。再確保で既存要素へのポインタは無効になり得る。
 static int add_syntax_data(syntax *syntax,int x,int y,int word_len,syntax_type word_type){
     syntax_list_data *list = &syntax->syntax_list_data;
     int count = list->syntax_list_num;
@@ -179,11 +166,8 @@ static int add_syntax_data(syntax *syntax,int x,int y,int word_len,syntax_type w
 
 
 
-/* 引数: syntaxは初期化済み、line/line_lenは行配列と要素数、view_colsは表示列数、
- * yは表示行。words/word_countは辞書と要素数、word_typeは追加する分類。
- * 行全体で単語境界を調べ、表示列内の一致範囲だけをsyntaxへ追加する。
- * 返り値: 成功0、追加失敗-1。失敗前に追加した要素は残す。
- */
+// line_lenセルのlineからwordsのword_count語を探し、表示幅view_cols内を分類word_typeでsyntaxへ追加する。
+// yは画面相対行。返り値: 成功0、追加失敗-1。失敗前に追加した情報は残る。
 static int scan_syntax_words(syntax *syntax,const wint_t *line,int line_len,int view_cols,
                             int y,const wchar_t *const words[],size_t word_count,
                                 syntax_type word_type){
@@ -201,11 +185,8 @@ static int scan_syntax_words(syntax *syntax,const wint_t *line,int line_len,int 
     return 0;
 }
 
-/* 引数: syntaxは未確保の管理情報（0初期化推奨）。ncurses初期化後に呼ぶ。
- * stdscrの行数×列数の要素を確保し、有効件数を0にする。langは変更しない。
- * 返り値: 成功0、NULL・画面寸法不正・確保失敗なら-1。
- * 成功後の配列は呼び出し側がfreeする。確保済みのまま再度呼ぶとリークする。
- */
+// ncurses初期化後、未確保のsyntaxに画面セル数分の配列を確保し、件数を0にする。langは保持する。
+// 返り値: 成功0、NULL・画面寸法不正・確保失敗-1。配列は呼び出し側でfreeし、確保済み状態では再実行しない。
 int init_syntax(syntax *syntax){
     if(syntax == NULL)return -1;
     int x;
@@ -220,11 +201,8 @@ int init_syntax(syntax *syntax){
     return 0;
 }
 
-/* 言語を保存し、その言語の行コメント開始文字列をcomment_ev_strへ設定する。
- * 引数: langはC/CPP/PY/TS/UNKNOWNのいずれか、syntaxは設定先。
- * C、CPP、TSは"//"、PYは"#"を使用する。UNKNOWNでは現在値を変更しない。
- * 返り値: 成功0、syntaxがNULLまたはlangが範囲外なら-1。既存の解析結果は変更しない。
- */
+// syntaxへlangを保存し、行コメント記号をC/CPP/TSでは//、PYでは#にする。UNKNOWNは記号を保持する。
+// 返り値: 成功0、syntaxがNULLまたは言語不正なら-1。既存の解析結果は更新しない。
 int set_syntax_language(language lang,syntax *syntax){
     if(syntax == NULL)return -1;
     switch(lang){
@@ -247,14 +225,8 @@ int set_syntax_language(language lang,syntax *syntax){
 
 
 
-/* 引数: syntaxはinit_syntax成功済み、ctxは有効なstateを持つ入力コンテキスト。
- * スクロール開始行から表示領域内を再解析し、予約語、型、メソッド、行コメント、変数、リテラル、ヘッダー名の情報を再構築する。
- * コメント開始文字列はset_syntax_language()が設定したcomment_ev_strを使う。
- * 文字列内かどうかの区別や複数行コメントの追跡はしない。
- * 返り値: 登録件数（0以上）。NULL引数・state不在・未確保・追加失敗なら-1。
- * 再解析開始後の失敗では件数が0または途中までの結果になる。配列は保持する。
- * ctxは借用して変更しない。配列の再確保により以前の要素ポインタは無効になり得る。
- */
+// ctxの表示範囲を解析し、初期化済みsyntaxの着色情報を再構築する。複数行コメントの状態は追跡しない。
+// 返り値: 登録件数、不正な状態・追加失敗は-1。途中失敗では部分結果が残り、再確保で要素ポインタが無効になり得る。
 int set_syntax_data(syntax *syntax,struct editor_input_context *ctx){
     if(syntax == NULL || ctx == NULL || ctx->state == NULL)return -1;
 
@@ -292,12 +264,8 @@ int set_syntax_data(syntax *syntax,struct editor_input_context *ctx){
     return syntax->syntax_list_data.syntax_list_num;
 }
 
-/* 現在表示中の1行にある古い着色情報を削除し、その行を再解析する。
- * 引数: ctxは有効なstateを持つ入力コンテキスト、lineは表示領域先頭を0とする画面相対行。
- * ctxのsyntax_dataを設定し、配列を確保しておく必要がある。
- * 返り値: 更新後の登録件数。ctx/state、登録syntax、配列、対象ファイル行が無効、または追加失敗なら-1。
- * 対象行以外の着色情報と確保済み配列は保持する。
- */
+// ctxの確保済み構文情報から画面相対行lineの旧情報を削除し、その行だけ再解析する。
+// 返り値: 全登録件数、状態・対象行不正や追加失敗は-1。他行の情報は保持し、途中失敗は巻き戻さない。
 int update_line_syntax_data(struct editor_input_context *ctx,int line){
     if(ctx == NULL || ctx->state == NULL)return -1;
     syntax *syntax = &ctx->syntax_data;
@@ -335,7 +303,8 @@ int update_line_syntax_data(struct editor_input_context *ctx,int line){
     return syntax->syntax_list_data.syntax_list_num;
 }
 
-// ACS罫線の属性を残し、その他の連続したセルだけを着色する。
+// 画面座標(x,y)からwidthセルへ色ペアcolorを適用し、ACS罫線の属性は保持する。
+// 返り値: なし。ncurses初期化済みで有効な画面範囲を渡す。描画失敗は通知しない。
 static void color_text_cells(int y,int x,int width,short color){
     int start = -1;
     for(int i = 0;i < width;i++){
@@ -354,11 +323,8 @@ static void color_text_cells(int y,int x,int width,short color){
     }
 }
 
-/* 本文領域を通常色へ戻した後、syntaxに登録された画面内の範囲へ色を適用する。
- * 引数: ctxは有効なstateを持つ入力コンテキスト、syntaxは借用配列を含む浅いコピー。
- * syntax_dataの所有権は移動せず、この関数では確保・解放しない。
- * 返り値: ctxがNULLなら-1、それ以外は0。ncurses関数の失敗は返り値へ反映しない。
- */
+// ctxの本文領域を通常色に戻し、借用したsyntaxの可視範囲へ構文色を適用する。
+// 返り値: ctxがNULLなら-1、それ以外0。stateは必須で、配列の所有権は移動せず描画失敗は通知しない。
 int apply_syntax_color(struct editor_input_context *ctx,syntax syntax){
     if(ctx == NULL)return -1;
     struct editor_state *state = ctx->state; 
@@ -388,12 +354,8 @@ int apply_syntax_color(struct editor_input_context *ctx,syntax syntax){
 }
 
 
-/* 行内で、空白を挟んで'('が続く識別子をメソッドとして着色情報へ追加する。
- * 引数: syntaxは初期化済み、line_st_ptrはline_len要素の行、view_colsは表示列数、
- * hは画面相対行、mthodは通常の関数名の分類。予約語と型名は対象外にする。
- * 直前が'.'または'->'ならmember_methodに分類する（構文上の推定）。
- * 返り値: 成功0、着色情報の追加失敗なら-1。失敗前に追加した情報は残る。
- */
+// line_st_ptrのline_lenセルを調べ、括弧が続く識別子をsyntaxへ追加する。view_colsは表示幅、hは画面相対行。
+// mthodは通常関数の分類、メンバーはmember_method。返り値: 成功0、追加失敗-1（追加済み情報は残る）。
 int scan_syntax_method(syntax *syntax,wint_t *line_st_ptr,
     int line_len,int view_cols,int h,syntax_type mthod){
 
@@ -430,11 +392,8 @@ int scan_syntax_method(syntax *syntax,wint_t *line_st_ptr,
     return 0;
 }
 
-/* comment_ev_strと一致する位置から表示行末までをコメントとして登録する。
- * 引数: syntaxは初期化済み、line_st_ptrはline_len要素の行バッファ、
- * view_colsは表示列数、hは画面相対行、commentは登録する分類。
- * 返り値: コメントなしなら0。着色情報の追加結果を返す。
- */
+// line_st_ptrのline_lenセルから行コメント記号を探し、h行の開始位置からview_colsまでを分類commentでsyntaxへ登録する。
+// 返り値: 対象なし・成功0、追加失敗-1。syntaxは初期化済みとし、文字列内の記号も検出する。
 int scan_syntax_comment(syntax *syntax,wint_t *line_st_ptr,
         int line_len,int view_cols,int h,syntax_type comment){
 
@@ -461,11 +420,8 @@ int scan_syntax_comment(syntax *syntax,wint_t *line_st_ptr,
 }
 
 
-/* 型名の後ろにある識別子を変数候補として着色情報へ追加する。
- * 引数: syntaxは初期化済み、line_st_ptrはline_len要素の行、view_colsは表示列数、
- * hは画面相対行、commentは登録する分類。空白と'*'を読み飛ばし、関数形式は対象外にする。
- * 返り値: 成功0、着色情報の追加失敗なら-1。失敗前に追加した情報は残る。
- */
+// line_st_ptrの型名に続く識別子をsyntaxへ分類commentで追加する。line_len/view_colsはセル数、hは画面相対行。
+// 関数形式は除外する。返り値: 成功0、追加失敗-1（追加済み情報は残る）。syntaxは初期化済みとする。
 int scan_syntax_variable(syntax *syntax,wint_t *line_st_ptr,
         int line_len,int view_cols,int h,syntax_type comment){
     int limit = line_len < view_cols ? line_len : view_cols;
@@ -496,10 +452,8 @@ int scan_syntax_variable(syntax *syntax,wint_t *line_st_ptr,
     return 0;
 }
 
-/* 全着色範囲の画面上の行座標を同じ量だけ移動する。
- * 引数: syntaxは移動対象、yは加算する行数。正なら下、負なら上へ移動する。
- * 返り値: syntaxがNULLなら-1、それ以外は0。画面外へ出た範囲も配列から削除しない。
- */
+// syntaxの全着色範囲の行座標へyを加算する。正で下、負で上へ動かす。
+// 返り値: 成功0、syntaxがNULLなら-1。画面外へ出た要素も保持する。
 int move_syntax_pos_data(syntax *syntax,int y){
     if(syntax == NULL)return -1;
     syntax_list_data *syntax_list = &syntax->syntax_list_data;
@@ -510,11 +464,8 @@ int move_syntax_pos_data(syntax *syntax,int y){
     return 0;
 }
 
-/* syntax_dataへの借用ポインタをモジュール内の一覧へ登録する。
- * 引数: syntax_data_ptrは呼び出し側が所有し、登録中は有効でなければならない。
- * 返り値: 成功0、NULLまたは一覧用配列のmalloc/realloc失敗なら-1。
- * 一覧用配列はこのモジュールが所有するが、現在は登録解除・解放処理を持たない。
- */
+// syntax_data_ptrの借用ポインタを内部一覧へ登録する。登録中は呼び出し側で参照先を有効に保つ。
+// 返り値: 成功0、NULL・一覧の確保失敗-1。現実装には登録解除や一覧の解放処理がない。
 int add_garbage_collection(syntax_data *syntax_data_ptr){
     if(syntax_data_ptr == NULL)return -1;
     if(syntax_data_collection == NULL){
@@ -535,10 +486,8 @@ int add_garbage_collection(syntax_data *syntax_data_ptr){
     return 0;
 }
 
-/* syntaxの全着色範囲を画面上で移動し、画面外の範囲を削除する。
- * 引数: syntaxは更新対象、yは各範囲へ加算する行数。正なら下、負なら上へ移動する。view_rowsは表示行数。
- * 返り値: syntaxがNULL、またはview_rowsが0以下なら-1。それ以外は0。
- */
+// syntax_ptrの全着色範囲へy行を加算し、表示行数view_rowsの外へ出た情報を削除する。
+// 返り値: 成功0、syntax_ptrがNULLまたはview_rowsが0以下なら-1。配列の容量は保持する。
 int scroll_syntax_pos_data(syntax *syntax_ptr,int y,int view_rows){
     if(syntax_ptr == NULL || view_rows <= 0)return -1;
     if(move_syntax_pos_data(syntax_ptr,y) < 0)return -1;
@@ -555,11 +504,8 @@ int scroll_syntax_pos_data(syntax *syntax_ptr,int y,int view_rows){
     return 0;
 }
 
-/* 行頭の#includeに続く山括弧または二重引用符形式のヘッダー名を着色情報へ追加する。
- * 引数: syntaxは初期化済み、line_st_ptrはline_len要素の行、view_colsは表示列数、
- * hは画面相対行、str_typeは登録する分類。囲み文字も着色範囲に含める。
- * 返り値: 対象なしなら0、追加成功なら0、着色情報の追加失敗なら-1。
- */
+// line_st_ptrの行頭#includeに続くヘッダー名を囲み文字ごとsyntaxへ分類str_typeで追加する。
+// line_len/view_colsはセル数、hは画面相対行。返り値: 対象なし・成功0、追加失敗-1。syntaxは初期化済み。
 int scan_syntax_header_name(syntax *syntax,wint_t *line_st_ptr,
         int line_len,int view_cols,int h,syntax_type str_type){
     const wchar_t *const words[] = {
@@ -592,12 +538,8 @@ int scan_syntax_header_name(syntax *syntax,wint_t *line_st_ptr,
     return add_syntax_data(syntax,start_x,h,end_x - start_x + 1,str_type);
 }
 
-/* 二重引用符の文字列リテラルと単一引用符の文字リテラルを着色情報へ追加する。
- * 引数: syntaxは初期化済み、line_st_ptrはline_len要素の行、view_colsは表示列数、
- * hは画面相対行、literal_typeは文字列の分類。単一引用符はcharacter_literalを使う。
- * 引用符も着色範囲に含める。
- * 返り値: 成功0、着色情報の追加失敗なら-1。閉じていないリテラルは登録しない。
- */
+// line_st_ptrの引用符で閉じたリテラルをsyntaxへ追加する。line_len/view_colsはセル数、hは画面相対行。
+// 文字列はliteral_type、文字はcharacter_literal。返り値: 成功0、追加失敗-1。未閉鎖は登録せず、syntaxは初期化済み。
 int scan_syntax_literal(syntax *syntax,wint_t *line_st_ptr,
         int line_len,int view_cols,int h,syntax_type literal_type){
     int limit = line_len < view_cols ? line_len : view_cols;

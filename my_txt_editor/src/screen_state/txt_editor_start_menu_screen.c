@@ -2,9 +2,8 @@
 #include "txt_editor.h"
 #include "txt_editor_screen.h"
 
-// handle_start_menu_input(): start menu pluginを実行し、選択結果に対応する画面へ遷移する。
-// 引数: ctx=pluginと各遷移先の状態を持つcontext、ch=dispatcherとの共通形式用で未使用。
-// 返り値: 入力ループを続けるならtrue、pluginが終了を要求したらfalse。
+// start menu pluginを実行し、選択結果に対応する画面へ遷移する。
+// 引数: ctx=pluginと各遷移先の状態を持つcontext、ch=dispatcherとの共通形式用で未使用。 返り値: 入力ループを続けるならtrue、pluginが終了を要求したらfalse。
 bool handle_start_menu_input(struct editor_input_context *ctx, wint_t ch){
     (void)ch;
     struct editor_state *state = ctx->state;

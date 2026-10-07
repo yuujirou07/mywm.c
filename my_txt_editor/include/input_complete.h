@@ -41,14 +41,13 @@ static const char * const EDIT_COMP_POS_DEF_WORLD[6] =
         "unknown",
     };
 
-// get_edit_comp_pos_def_world(): 配置方式に対応する設定文字列を返す。
-// 引数: mode=0以上get_edit_comp_pos_def_world_num()未満の列挙値。範囲外は指定できない。
-// 返り値: ヘッダ内の静的な文字列。呼び出し側は解放しない。
+// 配置方式に対応する設定文字列を返す。
+// 引数: mode=0以上get_edit_comp_pos_def_world_num()未満の列挙値。範囲外は指定できない。 返り値: ヘッダ内の静的な文字列。呼び出し側は解放しない。
 static inline const char *get_edit_comp_pos_def_world(EDIT_COMPLETE_POSITION_MODE mode){
     return EDIT_COMP_POS_DEF_WORLD[mode];
 }
 
-// get_edit_comp_pos_def_world_num(): 配置方式の設定文字列の個数を返す。
+// 配置方式の設定文字列の個数を返す。
 // 返り値: EDIT_COMP_POS_DEF_WORLDの要素数。
 static inline int get_edit_comp_pos_def_world_num(){
     return (int)(sizeof(EDIT_COMP_POS_DEF_WORLD)/sizeof(EDIT_COMP_POS_DEF_WORLD[0]));

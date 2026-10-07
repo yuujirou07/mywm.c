@@ -24,10 +24,8 @@ void draw_version(struct pos screen_mid_pos,struct ascii_data ascii_data);
 static void write_startup_time_log(const struct timespec *start_time, const char *log_path);
 
 
-// draw_start_menu(): スタートメニューを描画し、ショートカット入力が選ぶ処理番号を返す。
-// 引数: screen_max_w/screen_max_h=画面サイズ、ascii_data_ptr=描画したロゴ情報の返却先、
-//       startup_start_time=起動計測の開始時刻、startup_log_path=計測結果の保存先。
-// 返り値: new_file/select_folder/settings/quit、リサイズ時はresize_request。
+// screen_max_w/hの画面でメニュー入力を待つ。ascii_data_ptrはロゴ情報の出力先（NULL可）。
+// 返り値: 選択した処理番号またはresize_request。startup_start_time/log_pathは初回描画の所要時間記録用（NULL可）。
 int draw_start_menu(int screen_max_w,int screen_max_h,struct ascii_data *ascii_data_ptr,
         const struct timespec *startup_start_time,
                 const char *startup_log_path){
@@ -87,9 +85,8 @@ int draw_start_menu(int screen_max_w,int screen_max_h,struct ascii_data *ascii_d
         return 0;
 }
 
-// write_startup_time_log(): 開始時刻から現在までの経過ミリ秒をログへ上書き保存する。
-// 引数: start_time=CLOCK_MONOTONICの開始時刻、log_path=保存先パス。
-// 返り値: なし。引数不正またはファイルを開けない場合は保存しない。
+// 開始時刻から現在までの経過ミリ秒をログへ上書き保存する。
+// 引数: start_time=CLOCK_MONOTONICの開始時刻、log_path=保存先パス。 返り値: なし。引数不正またはファイルを開けない場合は保存しない。
 static void write_startup_time_log(const struct timespec *start_time, const char *log_path){
         if(start_time == NULL || log_path == NULL)return;
         
@@ -108,9 +105,8 @@ static void write_startup_time_log(const struct timespec *start_time, const char
         fclose(startup_timer_log_file);
 }
 
-// draw_ascii_logo(): 設定ファイルからASCIIロゴを読み込み、画面上部の中央へ描画する。
-// 引数: screen_mid_pos=画面中央座標、ascii_data=読み込んだロゴ情報の保存先。
-// 返り値: なし。ファイルを開けない場合はログを残して描画しない。
+// 設定ファイルからASCIIロゴを読み込み、画面上部の中央へ描画する。
+// 引数: screen_mid_pos=画面中央座標、ascii_data=読み込んだロゴ情報の保存先。 返り値: なし。ファイルを開けない場合はログを残して描画しない。
 void draw_ascii_logo(struct pos screen_mid_pos,struct ascii_data *ascii_data){
 
         const char *ascii_name = "my_txt_editor_settings_folder/ascii_art_img.txt";
@@ -139,10 +135,8 @@ void draw_ascii_logo(struct pos screen_mid_pos,struct ascii_data *ascii_data){
 }
 
 
-// draw_option(): スタートメニュー項目とショートカットキーを配置して描画する。
-// 引数: screen_max_pos=画面サイズ、option_start_pos=先頭項目位置の返却先、
-//       ascii_data=ロゴ寸法、option_data=項目情報の書き込み先、size=配列要素数。
-// 返り値: 描画した項目数。画面に収まらない場合は0。
+// スタートメニュー項目とショートカットキーを配置して描画する。
+// 引数: screen_max_pos=画面サイズ、option_start_pos=先頭項目位置の返却先、 ascii_data=ロゴ寸法、option_data=項目情報の書き込み先、size=配列要素数。 返り値: 描画した項目数。画面に収まらない場合は0。
 int draw_option(struct pos screen_max_pos,struct pos *option_start_pos,
         struct ascii_data ascii_data,struct option_data *option_data,int size){
 
@@ -209,9 +203,8 @@ int draw_option(struct pos screen_max_pos,struct pos *option_start_pos,
         return option_list_counter;
 }
 
-// draw_version(): ロゴ最終行の中央へエディタのバージョンを描画する。
-// 引数: screen_mid_pos=画面中央座標、ascii_data=ロゴの高さ。
-// 返り値: なし。
+// ロゴ最終行の中央へエディタのバージョンを描画する。
+// 引数: screen_mid_pos=画面中央座標、ascii_data=ロゴの高さ。 返り値: なし。
 void draw_version(struct pos screen_mid_pos,struct ascii_data ascii_data){
         char var[16];
         snprintf(var,16,"Var%.1f",my_txt_editor_var);
@@ -219,9 +212,8 @@ void draw_version(struct pos screen_mid_pos,struct ascii_data ascii_data){
         mvaddstr(ascii_data.h-1,screen_mid_pos.x - (len/2),var);
 }
 
-// option_fn(): ショートカットキーをスタートメニューの処理番号へ変換する。
-// 引数: key=判定する1文字、return_num=処理番号の書き込み先。
-// 返り値: なし。未対応キーではreturn_numへnoneを書き込む。
+// ショートカットキーをスタートメニューの処理番号へ変換する。
+// 引数: key=判定する1文字、return_num=処理番号の書き込み先。 返り値: なし。未対応キーではreturn_numへnoneを書き込む。
 void option_fn(char *key,int *return_num){
         switch(*key){
                 case 'q':{

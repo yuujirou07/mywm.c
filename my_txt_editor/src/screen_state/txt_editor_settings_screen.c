@@ -11,10 +11,8 @@
 
 settings_items_data *get_now_select_settings_item(settings_screen_data *screen_data);
 
-// handle_settings_screen_input(): 設定画面の終了、選択行移動、入力エラーを処理する。
-// Tabでは履歴上の遷移元へ戻り、履歴が無ければエラー画面へ遷移する。
-// 引数: ctx=画面履歴と描画状態を持つcontext、ch=入力文字、input_result=get_wch()の結果。
-// 返り値: 入力ループを続けるならtrue、qで終了するならfalse。
+// ctxの設定画面でchとget_wch結果input_resultを処理し、選択移動・値入力・Tabでの復帰を行う。
+// 返り値: 入力モード外のqはfalse、それ以外true。入力値の確定は入力モードを閉じるだけで、設定本体へは反映しない。
 bool handle_settings_screen_input(struct editor_input_context *ctx,wint_t ch,int input_result){
     struct editor_state *state = ctx->state;
     settings_screen_data *screen_data = &state->settings_screen_data;
@@ -78,10 +76,8 @@ bool handle_settings_screen_input(struct editor_input_context *ctx,wint_t ch,int
     return true;
 }
 
-// move_settings_select_line(): 設定画面の選択行をdelta分だけ動かす。
-// 項目の範囲外へは出さず、端ではそのまま止める。
-// 引数: settings_screen_data=選択行と項目数を持つ設定画面データ、delta=移動量。
-// 返り値: なし。
+// 設定画面の選択行をdelta分だけ動かす。項目の範囲外へは出さず、端ではそのまま止める。
+// 引数: settings_screen_data=選択行と項目数を持つ設定画面データ、delta=移動量。 返り値: なし。
 void move_settings_select_line(settings_screen_data *settings_screen_data,int delta){
     if(settings_screen_data == NULL)return;
 
@@ -95,10 +91,8 @@ void move_settings_select_line(settings_screen_data *settings_screen_data,int de
 }
 
 
-// add_settings_screen_item(): 設定項目配列を必要に応じて拡張し、末尾へ1項目追加する。
-// 引数: settings_screen_data=追加先、item_data=値コピーする項目。
-// 返り値: 成功時0、malloc()またはrealloc()失敗時-1。
-// 所有権: item_data内の文字列ポインタは複製せず、成功後はsettings_screen_dataが保持する。
+// 設定項目配列を必要に応じて拡張し、末尾へ1項目追加する。
+// 引数: settings_screen_data=追加先、item_data=値コピーする項目。 返り値: 成功時0、malloc()またはrealloc()失敗時-1。 所有権: item_data内の文字列ポインタは複製せず、成功後はsettings_screen_dataが保持する。
 int add_settings_screen_item(settings_screen_data *settings_screen_data,settings_items_data item_data){
     if(settings_screen_data->item_data == NULL){
         settings_screen_data->settings_item_data_allocate_num = 16; 
@@ -124,9 +118,8 @@ int add_settings_screen_item(settings_screen_data *settings_screen_data,settings
     return 0;
 }
 
-// get_now_select_settings_item(): 現在選択中の設定項目を返す。
-// 引数: screen_data=項目配列と選択位置を持つ設定画面データ。
-// 返り値: 選択項目への借用ポインタ。引数や選択位置が不正な場合の動作は未定義。
+// 現在選択中の設定項目を返す。
+// 引数: screen_data=項目配列と選択位置を持つ設定画面データ。 返り値: 選択項目への借用ポインタ。引数や選択位置が不正な場合の動作は未定義。
 settings_items_data *get_now_select_settings_item(settings_screen_data *screen_data){
     return &screen_data->item_data[screen_data->select_line];
 }

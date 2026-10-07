@@ -18,6 +18,8 @@ static void api_save_file(void *userdata);
 static void *load_current_settings_obj_c_file(struct editor_input_context *ctx);
 
 static void api_key_mapping(void *userdata,wchar_t key1,wchar_t key2,EDITOR_ACTION action);
+// apiへ借用したctxと、保存・キーマップ登録用の関数ポインタを接続する。
+// 返り値: なし。apiとctxは非NULLで、API利用中はctxを有効に保つ。
 void connect_api_mem_data(MY_TXT_EDITOR_API *const api,struct editor_input_context *ctx){
     api->userdata  = ctx; 
     api->save_file = api_save_file;
@@ -26,6 +28,8 @@ void connect_api_mem_data(MY_TXT_EDITOR_API *const api,struct editor_input_conte
     return;
 }
 
+// userdataをeditor_input_contextとして扱い、そのstateの本文を保存する。
+// 返り値: なし。userdataは有効なctxであること。保存結果の画面遷移はsave_fileに従う。
 static void api_save_file(void *userdata){
     struct editor_input_context *tmp_ctx = userdata;
     save_file((struct editor_state *)tmp_ctx->state);
@@ -33,6 +37,8 @@ static void api_save_file(void *userdata){
 
 
 
+// userdataのctxへkey1・key2の組とactionを登録する。キーマップ配列は事前に確保しておく。
+// 返り値: なし。上限到達・再確保失敗はログを残して追加しない。actionは呼出し可能な関数を渡す。
 static void api_key_mapping(void *userdata,wchar_t key1,wchar_t key2,EDITOR_ACTION action){
     struct editor_input_context *ctx = (struct editor_input_context *)userdata;
 
@@ -62,6 +68,8 @@ static void api_key_mapping(void *userdata,wchar_t key1,wchar_t key2,EDITOR_ACTI
 }
 
 
+// apiへctxを接続し、実行ファイル隣のso_file/settings.soからST_INITを呼んで設定を登録する。
+// 返り値: なし。読込失敗は登録せず戻り、成功したハンドルはctxが保持して終了時にdlcloseする。
 void init_settings_src(MY_TXT_EDITOR_API *const api,struct editor_input_context *ctx){
     connect_api_mem_data(api,ctx);
     if(ctx->key_mapp_list.key_mapp_list == NULL){
@@ -83,6 +91,8 @@ void init_settings_src(MY_TXT_EDITOR_API *const api,struct editor_input_context 
     settings_init(api);
 }
 
+// ctxの登録一覧でchrの2文字と一致する全項目を探し、それぞれの処理へapiを渡して実行する。
+// 返り値: なし。chrは2要素以上で、登録関数・ctx・apiは有効であること。不一致は何もしない。
 void check_key_mapps_entry(struct editor_input_context *ctx,wchar_t chr[2],MY_TXT_EDITOR_API *api){
     for(int i = 0;i < ctx->key_mapp_list.key_map_num;i++){
         if(ctx->key_mapp_list.key_mapp_list[i].ch[0] == chr[0] &&
@@ -94,6 +104,8 @@ void check_key_mapps_entry(struct editor_input_context *ctx,wchar_t chr[2],MY_TX
     return;
 }
 
+// ctxのハンドル格納余地を確認し、実行ファイル隣のso_file/settings.soをdlopenする。
+// 返り値: 読込ハンドル、格納余地不足・パス不正・読込失敗はNULL。成功したハンドルは呼び出し側がdlcloseする。
 static void *load_current_settings_obj_c_file(struct editor_input_context *ctx){
     if(ctx->dl_data.now_loading_dynamic_lib == NULL ||
         ctx->dl_data.now_loading_lib_num >= ctx->dl_data.now_loading_lib_allocate_num){
@@ -121,6 +133,8 @@ static void *load_current_settings_obj_c_file(struct editor_input_context *ctx){
 
 
 
+// ctxのキーマップ件数を参照するが、現実装ではイベント処理を行わない。
+// 返り値: 常に0。ctxは非NULLとする。
 int check_user_settings_event(struct editor_input_context *ctx){
     if(ctx->key_mapp_list.key_map_num > 0){
 
@@ -130,6 +144,8 @@ int check_user_settings_event(struct editor_input_context *ctx){
 }
 
 
+// key_mapp_dataの先頭キーを0へ書き換える。現実装では登録アクションを呼ばない。
+// 返り値: 常に0。key_mapp_dataは非NULLとする。
 int call_user_key_mapping_event(settings_key_mapps *key_mapp_data){
     *key_mapp_data->ch = 0;
     return 0;

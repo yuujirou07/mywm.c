@@ -3,9 +3,8 @@
 #include "txt_editor_syntax.h"
 #include "txt_editor_screen.h"
 
-// handle_line_jump_mode_input(): 行ジャンプ入力中の数字入力・確定・キャンセルを処理する。
-// 引数: ctx=ジャンプ後の再描画に必要なcontext、ch=入力文字またはKEY_*。
-// 返り値: 入力ループを続けるならtrue。
+// 行ジャンプ入力中の数字入力・確定・キャンセルを処理する。
+// 引数: ctx=ジャンプ後の再描画に必要なcontext、ch=入力文字またはKEY_*。 返り値: 入力ループを続けるならtrue。
 bool handle_line_jump_mode_input(struct editor_input_context *ctx, wint_t ch){
     struct editor_state *state = ctx->state;
 
@@ -48,9 +47,8 @@ bool handle_line_jump_mode_input(struct editor_input_context *ctx, wint_t ch){
     return true;
 }
 
-// reset_jump_mode(): 行ジャンプ番号と入力文字数を初期状態へ戻す。
-// 引数: state=行ジャンプ入力状態を持つエディタ状態。
-// 返り値: なし。
+// 行ジャンプ番号と入力文字数を初期状態へ戻す。
+// 引数: state=行ジャンプ入力状態を持つエディタ状態。 返り値: なし。
 void reset_jump_mode(struct editor_state *state){
     memset(state->jump_mode_data.jump_line_num, 0, sizeof(state->jump_mode_data.jump_line_num));
     state->jump_mode_data.jump_line_num_counter = 0;

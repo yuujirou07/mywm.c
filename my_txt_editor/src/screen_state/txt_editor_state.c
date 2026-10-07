@@ -1,8 +1,7 @@
 #include "txt_editor_screen.h"
 
-// editor_handle_screen_input(): 現在のscreen_stateに応じて入力処理を各state関数へ振り分ける。
-// 引数: ctx=描画対象や共有状態をまとめた入力context、input_result=get_wch()の結果、ch=入力文字またはKEY_*。
-// 返り値: 入力ループを続けるならtrue、終了要求ならfalse。
+// 現在のscreen_stateに応じて入力処理を各state関数へ振り分ける。
+// 引数: ctx=描画対象や共有状態をまとめた入力context、input_result=get_wch()の結果、ch=入力文字またはKEY_*。 返り値: 入力ループを続けるならtrue、終了要求ならfalse。
 bool editor_handle_screen_input(struct editor_input_context *ctx, int input_result, wint_t ch){
     switch (editor_get_screen_state(ctx->state)){
         case start_menu_screen:
@@ -29,9 +28,8 @@ bool editor_handle_screen_input(struct editor_input_context *ctx, int input_resu
     return true;
 }
 
-// clamp_editor_target_line(): 移動先行番号を編集可能な範囲へ丸める。
-// 引数: state=有効行数を持つエディタ状態、target_line=移動したい論理行番号。
-// 返り値: 有効範囲内の論理行番号。
+// stateの有効行数に合わせて、0始まりのtarget_lineを範囲内へ丸める。
+// 返り値: 有効な論理行番号。有効行がなければ0。
 static long clamp_editor_target_line(struct editor_state *state, long target_line){
     int line_limit = editor_line_limit(state);
 
@@ -47,9 +45,8 @@ static long clamp_editor_target_line(struct editor_state *state, long target_lin
     return target_line;
 }
 
-// draw_start_line_for_target(): 指定行を少し下に表示するための表示開始行を返す。
-// 引数: state=表示領域の高さを持つエディタ状態、target_line=画面内に表示したい論理行番号。
-// 返り値: scr_start_numへ設定する表示開始行。
+// 指定行を少し下に表示するための表示開始行を返す。
+// 引数: state=表示領域の高さを持つエディタ状態、target_line=画面内に表示したい論理行番号。 返り値: scr_start_numへ設定する表示開始行。
 static int draw_start_line_for_target(struct editor_state *state, long target_line){
     int line_limit = get_line_limit();
     int context_lines = state->write_area.h - 1;
@@ -61,19 +58,16 @@ static int draw_start_line_for_target(struct editor_state *state, long target_li
     return (target_line > context_lines) ? (target_line - context_lines) : 0;
 }
 
-// redraw_edit_screen(): 編集画面の再描画を要求する。
-// 実際に描くのはupdate_screen()で、区切り線の座標もそちらがctxから読む。
-// 引数: state=描画要求を積むエディタ状態。
-// 返り値: なし。
+// stateの編集画面の本文と固定要素を再描画するよう要求し、標準画面を消去する。
+// 返り値: なし。実際の再描画はupdate_screenで行う。
 static void redraw_edit_screen(struct editor_state *state){
     clear();
     state->render_flags |= RENDER_EDIT_SCREEN_BASE;
     state->render_flags |= RENDER_FILE_DATA;
 }
 
-// restore_edit_screen(): ファイルブラウザやジャンプ入力から編集画面へ戻す。
-// 引数: state=復帰させる状態。
-// 返り値: なし。
+// ファイルブラウザやジャンプ入力から編集画面へ戻す。
+// 引数: state=復帰させる状態。 返り値: なし。
 void restore_edit_screen(struct editor_state *state){
     editor_set_screen_state(state, edit_screen);
     my_cur_set(state,true);
@@ -82,9 +76,8 @@ void restore_edit_screen(struct editor_state *state){
     editor_sync_cursor(state);
 }
 
-// move_view_to_line(): 指定行が見える位置へ表示開始行とカーソルを移動する。
-// 引数: state=表示位置とカーソル行、target_line=移動先論理行、col=移動後の桁数。
-// 返り値: なし。
+// 指定行が見える位置へ表示開始行とカーソルを移動する。
+// 引数: state=表示位置とカーソル行、target_line=移動先論理行、col=移動後の桁数。 返り値: なし。
 void move_view_to_line(struct editor_state *state, long target_line, int col){
     target_line = clamp_editor_target_line(state, target_line);
     int draw_start_line = draw_start_line_for_target(state,target_line);
@@ -94,10 +87,8 @@ void move_view_to_line(struct editor_state *state, long target_line, int col){
     editor_sync_cursor(state);
 }
 
-// browser_clear_area(): ファイルブラウザが実際に塗っていた範囲を返す。
-// 枠線を含む外枠と、枠の上に出るパス表示2行分を含める。
-// 引数: browse_box=消去したいファイルブラウザ外枠。
-// 返り値: 消去対象の矩形。
+// browse_boxの枠と、その上に表示するパス2行を含む消去矩形を返す。
+// 引数: 画面座標のブラウザ枠。上端は0で止め、入力自体は変更しない。
 static struct box browser_clear_area(struct box browse_box){
     struct box area = browse_box;
 
@@ -106,11 +97,8 @@ static struct box browser_clear_area(struct box browse_box){
     return area;
 }
 
-// clamp_box_to_screen(): 矩形を現在の画面内へ収める。
-// リサイズ前の矩形は新しい画面からはみ出すことがあり、clear_box()は
-// box.w分の一時バッファを取るため、負値や画面外を渡さないようにする。
-// 引数: state=現在の画面サイズ、box=丸める矩形。
-// 返り値: 画面内に収めた矩形。収まる部分が無ければw/hが0。
+// 画面座標のboxをstateの画面範囲へ切り詰めた矩形を返す。
+// 画面外の部分を幅・高さから除き、残らない寸法は0にする。stateと入力boxは変更しない。
 static struct box clamp_box_to_screen(struct editor_state *state, struct box box){
     if(box.pos.x < 0){
         box.w += box.pos.x;
@@ -135,11 +123,8 @@ static struct box clamp_box_to_screen(struct editor_state *state, struct box box
     return box;
 }
 
-// update_screen_ratio(): 画面サイズが変わったあと、今表示している画面の配置を
-// 新しい画面サイズの比率で作り直し、必要な再描画要求をrender_flagsへ積む。
-// 実際の描画はupdate_screen()が行うため、ここでは配置更新と要求だけを行う。
-// 引数: ctx=画面状態・各領域・中央寄せ基準を持つ入力context。
-// 返り値: 配置を更新したら1、ctxが無効で何もしなかったら0。
+// ctxの現在画面に応じて枠・配置基準・表示位置を新しい画面寸法へ合わせ、再描画を要求する。
+// 返り値: 更新処理後1、ctxまたはstateがNULLなら0。実際の描画はupdate_screenで行う。
 int update_screen_ratio(struct editor_input_context *ctx){
     if(ctx == NULL || ctx->state == NULL)return 0;
 

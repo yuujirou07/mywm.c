@@ -278,9 +278,8 @@ struct editor_state {
     bool                       mylsp_use; // 起動引数でLSP使用を要求されたならtrue。
 };
 
-// editor_get_screen_state_log(): 現在位置を基準に画面遷移履歴を取得する。
-// 引数: state=画面遷移履歴を持つ状態、history_offset=0なら現在、1なら直前、2なら2つ前。
-// 返り値: 指定位置の画面状態。履歴範囲外ならscreen_state_log_error。
+// 現在位置を基準に画面遷移履歴を取得する。
+// 引数: state=画面遷移履歴を持つ状態、history_offset=0なら現在、1なら直前、2なら2つ前。 返り値: 指定位置の画面状態。履歴範囲外ならscreen_state_log_error。
 static inline enum screen_state editor_get_screen_state_log(struct editor_state *state,
                                                                 int history_offset){
     if(history_offset < 0 ||
@@ -292,17 +291,14 @@ static inline enum screen_state editor_get_screen_state_log(struct editor_state 
     return state->screen_log.screen_state_log[log_index];
 }
 
-// editor_get_screen_state(): 現在の画面状態を返す。
-// 引数: state=画面遷移履歴を持つ状態。
-// 返り値: 現在の画面状態。履歴が空ならscreen_state_log_error。
+// 現在の画面状態を返す。
+// 引数: state=画面遷移履歴を持つ状態。 返り値: 現在の画面状態。履歴が空ならscreen_state_log_error。
 static inline enum screen_state editor_get_screen_state(struct editor_state *state){
     return editor_get_screen_state_log(state,0);
 }
 
-// editor_set_screen_state(): 画面状態を履歴末尾へ追加する。
-// 同じ状態が連続する場合は追加せず、満杯なら最古の状態を捨てる。
-// 引数: state=更新する画面遷移履歴、next_state=遷移先。
-// 返り値: なし。
+// stateの履歴へnext_stateを追加する。同じ画面への連続遷移は記録せず、満杯なら最古を捨てる。
+// 返り値: なし。stateの履歴件数と配列が初期化済みであること。
 static inline void editor_set_screen_state(struct editor_state *state,
                                         enum screen_state next_state){
     struct screen_state_log *log = &state->screen_log;
@@ -366,9 +362,8 @@ struct editor_input_context {
     loading_dl_data dl_data;
 };
 
-// editor_filetree_offset(): ファイルツリーを表示中に編集領域を右へ寄せる列数を返す。
-// 引数: state=ファイルツリーの表示状態と枠を持つエディタ状態。
-// 返り値: 寄せる列数。表示していない、または枠が未設定なら0。
+// ファイルツリーを表示中に編集領域を右へ寄せる列数を返す。
+// 引数: state=ファイルツリーの表示状態と枠を持つエディタ状態。 返り値: 寄せる列数。表示していない、または枠が未設定なら0。
 static inline int editor_filetree_offset(struct editor_state *state){
     if(!state->file_tree_data.is_show){
         return 0;
@@ -379,10 +374,8 @@ static inline int editor_filetree_offset(struct editor_state *state){
     return (offset > 0) ? offset : 0;
 }
 
-// editor_apply_write_area(): ファイルツリーの表示状態を反映し、編集領域の左端と幅を決め直す。
-// x_endは呼び出し側が決めた値(画面幅や右余白)をそのまま使う。
-// 引数: state=編集領域・画面設定・ファイルツリーを持つエディタ状態。
-// 返り値: なし。
+// ファイルツリーの表示状態を反映し、編集領域の左端と幅を決め直す。x_endは呼び出し側が決めた値(画面幅や右余白)をそのまま使う。
+// 引数: state=編集領域・画面設定・ファイルツリーを持つエディタ状態。 返り値: なし。
 static inline void editor_apply_write_area(struct editor_state *state){
     state->write_area.x_start = state->settings_data->line_number_space + 1 +
                                 editor_filetree_offset(state);
@@ -390,9 +383,8 @@ static inline void editor_apply_write_area(struct editor_state *state){
     state->write_area.w = (w > 0) ? w : 0;
 }
 
-// editor_sync_split_line(): 区切り線の座標を現在のwrite_areaへ合わせる。
-// 引数: ctx=編集領域と区切り線座標を持つ入力context。
-// 返り値: なし。
+// 区切り線の座標を現在のwrite_areaへ合わせる。
+// 引数: ctx=編集領域と区切り線座標を持つ入力context。 返り値: なし。
 static inline void editor_sync_split_line(struct editor_input_context *ctx){
     int x = ctx->state->write_area.x_start - 1;
 
@@ -401,9 +393,8 @@ static inline void editor_sync_split_line(struct editor_input_context *ctx){
 }
 
 
-// editor_line_limit(): 編集対象として扱える最大行数を返す。
-// 引数: state=行バッファ容量と読み込み済みファイル行数を持つエディタ状態。
-// 返り値: 0以上の有効行数。
+// 編集対象として扱える最大行数を返す。
+// 引数: state=行バッファ容量と読み込み済みファイル行数を持つエディタ状態。 返り値: 0以上の有効行数。
 static inline int editor_line_limit(struct editor_state *state){
     int limit = state->str.line_capacity;
     if(state->file_data.now_open_file != NULL &&
@@ -414,17 +405,14 @@ static inline int editor_line_limit(struct editor_state *state){
     return (limit > 0) ? limit : 0;
 }
 
-// editor_view_cols(): 画面へ描ける桁数を返す。表示上の都合だけで使う値であり、
-// バッファ容量とは無関係。リサイズで変わるのはこちらだけ。
-// 引数: state=書き込み領域を持つエディタ状態。
-// 返り値: 0以上の桁数。
+// 画面へ描ける桁数を返す。表示上の都合だけで使う値であり、バッファ容量とは無関係。リサイズで変わるのはこちらだけ。
+// 引数: state=書き込み領域を持つエディタ状態。 返り値: 0以上の桁数。
 static inline int editor_view_cols(struct editor_state *state){
     return (state->write_area.w > 0) ? state->write_area.w : 0;
 }
 
-// editor_line_cap(): 指定行に確保済みの列数を返す。
-// 引数: state=行容量配列を持つエディタ状態、line=調べる論理行番号。
-// 返り値: 確保済み列数。行が不正なら0。
+// 指定行に確保済みの列数を返す。
+// 引数: state=行容量配列を持つエディタ状態、line=調べる論理行番号。 返り値: 確保済み列数。行が不正なら0。
 static inline int editor_line_cap(struct editor_state *state, int line){
     if(state->str.line_cap == NULL || line < 0 || line >= state->str.line_capacity){
         return 0;
@@ -432,10 +420,8 @@ static inline int editor_line_cap(struct editor_state *state, int line){
     return (state->str.line_cap[line] > 0) ? state->str.line_cap[line] : 0;
 }
 
-// editor_line_cells(): 指定行のセル配列先頭を返す。
-// line * col_capacityのような矩形前提の添字計算をこの関数へ集約している。
-// 引数: state=編集バッファと行オフセットを持つエディタ状態、line=対象論理行。
-// 返り値: 行先頭へのポインタ。行が不正、または未確保ならNULL。
+// stateの論理行lineに対応するセル配列先頭への借用ポインタを返す。
+// 不正な行・未確保・不正なオフセットはNULL。返値は解放せず、本文の再確保後は取得し直す。
 static inline wint_t *editor_line_cells(struct editor_state *state, int line){
     if(state->str.wint_line_str_data == NULL || state->str.line_offset == NULL ||
        line < 0 || line >= state->str.line_capacity){
@@ -448,10 +434,8 @@ static inline wint_t *editor_line_cells(struct editor_state *state, int line){
     return &state->str.wint_line_str_data[offset];
 }
 
-// editor_col_limit(): 現在行へ実際に書き込める列数を返す。
-// バッファ容量と可視幅の小さい方。横スクロールが無いため可視幅も上限になる。
-// 引数: state=行容量と書き込み領域を持つエディタ状態、line=対象論理行。
-// 返り値: 0以上の有効列数。
+// stateの論理行lineの確保容量と可視幅の小さい方を、有効セル数として返す。
+// 返り値: 0以上。横スクロール未対応のため、行の保持容量が大きくても可視幅を上限とする。
 static inline int editor_col_limit(struct editor_state *state, int line){
     int limit = editor_view_cols(state);
     int cap   = editor_line_cap(state, line);
@@ -462,16 +446,14 @@ static inline int editor_col_limit(struct editor_state *state, int line){
     return (limit > 0) ? limit : 0;
 }
 
-// get_screen_cursor_pos(): stateに保存されている画面上のカーソル座標を返す。
-// 引数: state=取得元のエディタ状態。
-// 返り値: cursor.screen_posの値。stateがNULLの場合の動作は未定義。
+// stateに保存されている画面上のカーソル座標を返す。
+// 引数: state=取得元のエディタ状態。 返り値: cursor.screen_posの値。stateがNULLの場合の動作は未定義。
 static inline struct pos get_screen_cursor_pos(struct editor_state *state){
     return state->cursor.screen_pos;
 }
 
-// editor_clamp_int(): valueをmin以上max以下に丸める。
-// 引数: value=丸める値、min=下限、max=上限。
-// 返り値: 範囲内に収めた値。
+// valueをmin以上max以下に丸める。
+// 引数: value=丸める値、min=下限、max=上限。 返り値: 範囲内に収めた値。
 static inline int editor_clamp_int(int value, int min, int max){
     if(value < min){
         return min;
@@ -482,11 +464,8 @@ static inline int editor_clamp_int(int value, int min, int max){
     return value;
 }
 
-// editor_line_len(): 指定行が保持している桁数を返す。
-// 画面幅では丸めない。画面外の桁もバッファ上には残っているため、
-// 保存やUTF-8変換はこの長さを使う。
-// 引数: state=行長と行容量を持つエディタ状態、line=調べる論理行番号。
-// 返り値: 行容量で丸めた行長。不正な行なら0。
+// stateの論理行lineが持つセル数を行容量の範囲へ丸めて返す。
+// 返り値: 不正な行は0。表示幅では制限せず、保存時も画面外のセルを含む。
 static inline int editor_line_len(struct editor_state *state, int line){
     if(line < 0 || line >= editor_line_limit(state)){
         return 0;
@@ -494,10 +473,8 @@ static inline int editor_line_len(struct editor_state *state, int line){
     return editor_clamp_int(state->str.line[line], 0, editor_line_cap(state, line));
 }
 
-// editor_clamp_col(): 指定行で有効なカーソル桁へ丸める。
-// 行が可視幅より長い場合は可視幅で止める(横スクロール未実装のため)。
-// 引数: state=書き込み領域と行長を持つエディタ状態、line=対象行、col=丸める桁数。
-// 返り値: 0から行末までの範囲に収めた桁数。
+// 指定行で有効なカーソル桁へ丸める。行が可視幅より長い場合は可視幅で止める(横スクロール未実装のため)。
+// 引数: state=書き込み領域と行長を持つエディタ状態、line=対象行、col=丸める桁数。 返り値: 0から行末までの範囲に収めた桁数。
 static inline int editor_clamp_col(struct editor_state *state, int line, int col){
     int len = editor_line_len(state, line);
     int view = editor_view_cols(state);
@@ -507,9 +484,8 @@ static inline int editor_clamp_col(struct editor_state *state, int line, int col
     return editor_clamp_int(col, 0, len);
 }
 
-// editor_cursor_col_boundary(): 幅2以上の文字の継続セル上にある桁を文字先頭へ戻す。
-// 引数: state=行セル配列、line=対象行、col=補正する画面桁。
-// 返り値: 文字の途中を指さない有効な桁。
+// 幅2以上の文字の継続セル上にある桁を文字先頭へ戻す。
+// 引数: state=行セル配列、line=対象行、col=補正する画面桁。 返り値: 文字の途中を指さない有効な桁。
 static inline int editor_cursor_col_boundary(struct editor_state *state, int line, int col){
     col = editor_clamp_col(state, line, col);
     int len = editor_line_len(state, line);
@@ -523,9 +499,8 @@ static inline int editor_cursor_col_boundary(struct editor_state *state, int lin
     return col;
 }
 
-// editor_previous_char_col(): 直前の文字の先頭セルを返す。
-// 引数: state=行セル配列、line=対象行、col=文字境界。
-// 返り値: 直前の文字の先頭桁。行頭なら0。
+// 直前の文字の先頭セルを返す。
+// 引数: state=行セル配列、line=対象行、col=文字境界。 返り値: 直前の文字の先頭桁。行頭なら0。
 static inline int editor_previous_char_col(struct editor_state *state, int line, int col){
     if(col <= 0){
         return 0;
@@ -541,9 +516,8 @@ static inline int editor_previous_char_col(struct editor_state *state, int line,
     return start;
 }
 
-// editor_next_char_col(): 指定桁の文字幅だけ進んだ桁を返す。
-// 引数: state=行セル配列、line=対象行、col=文字境界。
-// 返り値: 次の文字境界。行末を越えない。
+// 指定桁の文字幅だけ進んだ桁を返す。
+// 引数: state=行セル配列、line=対象行、col=文字境界。 返り値: 次の文字境界。行末を越えない。
 static inline int editor_next_char_col(struct editor_state *state, int line, int col){
     int len = editor_line_len(state, line);
     if(col >= len){
@@ -558,9 +532,8 @@ static inline int editor_next_char_col(struct editor_state *state, int line, int
     return (col + width < len) ? col + width : len;
 }
 
-// editor_cursor_screen_pos(): 論理ファイル座標から画面座標を計算して保持する。
-// 引数: state=カーソル・表示開始行・書き込み領域を持つエディタ状態。
-// 返り値: カーソルを置くべき画面座標。
+// 論理ファイル座標から画面座標を計算して保持する。
+// 引数: state=カーソル・表示開始行・書き込み領域を持つエディタ状態。 返り値: カーソルを置くべき画面座標。
 static inline struct pos editor_cursor_screen_pos(struct editor_state *state){
     state->cursor.screen_pos.x = state->write_area.x_start + state->cursor.file_pos.x;
     state->cursor.screen_pos.y = state->write_area.y_start +
@@ -568,9 +541,8 @@ static inline struct pos editor_cursor_screen_pos(struct editor_state *state){
     return state->cursor.screen_pos;
 }
 
-// editor_cursor_write_area_pos(): 論理カーソル位置を表示領域内の相対座標へ変換する。
-// 引数: state=カーソル位置・表示開始行・書き込み領域を持つエディタ状態。
-// 返り値: 書き込み領域左上を原点とするカーソル座標。
+// 論理カーソル位置を表示領域内の相対座標へ変換する。
+// 引数: state=カーソル位置・表示開始行・書き込み領域を持つエディタ状態。 返り値: 書き込み領域左上を原点とするカーソル座標。
 static inline struct pos editor_cursor_write_area_pos(struct editor_state *state){
     struct pos pos;
     pos.x = state->cursor.file_pos.x;
@@ -578,16 +550,14 @@ static inline struct pos editor_cursor_write_area_pos(struct editor_state *state
     return pos;
 }
 
-// editor_cursor_logical_line_pos(): 現在の論理カーソル行を返す。
-// 引数: state=カーソル位置を持つエディタ状態。
-// 返り値: ファイル先頭を0とする論理行番号。
+// 現在の論理カーソル行を返す。
+// 引数: state=カーソル位置を持つエディタ状態。 返り値: ファイル先頭を0とする論理行番号。
 static inline int editor_cursor_logical_line_pos(struct editor_state *state){
     return state->cursor.file_pos.y;
 }
 
-// editor_cursor_is_visible(): カーソル行が現在の表示範囲に入っているかを返す。
-// 引数: state=カーソル行・表示開始行・書き込み領域を持つエディタ状態。
-// 返り値: 編集領域内に見えているならtrue。
+// カーソル行が現在の表示範囲に入っているかを返す。
+// 引数: state=カーソル行・表示開始行・書き込み領域を持つエディタ状態。 返り値: 編集領域内に見えているならtrue。
 static inline bool editor_cursor_is_visible(struct editor_state *state){
     struct pos pos = editor_cursor_screen_pos(state);
     return (pos.y >= state->write_area.y_start && pos.y < state->write_area.y_end);
@@ -596,9 +566,8 @@ static inline bool editor_cursor_is_visible(struct editor_state *state){
 int cur_pos_push(struct pos pos,struct editor_state *state);
 int set_cur_pos(struct editor_state *state);
 
-// editor_sync_cursor(): 論理カーソル位置から表示座標を計算して反映待ちへ積む。
-// 引数: state=論理カーソル位置と反映待ち座標を持つエディタ状態。
-// 返り値: なし。
+// 論理カーソル位置から表示座標を計算して反映待ちへ積む。
+// 引数: state=論理カーソル位置と反映待ち座標を持つエディタ状態。 返り値: なし。
 static inline void editor_sync_cursor(struct editor_state *state){
     state->cursor.file_pos.x = editor_cursor_col_boundary(state, state->cursor.file_pos.y,
         state->cursor.file_pos.x);
@@ -606,9 +575,8 @@ static inline void editor_sync_cursor(struct editor_state *state){
     cur_pos_push(pos,state);
 }
 
-// editor_set_cursor(): カーソルを指定の論理位置へ置く。行は有効範囲、桁は行長で丸める。
-// 引数: state=更新対象のエディタ状態、line=移動先の論理行、col=移動先の桁。
-// 返り値: なし。
+// stateの論理カーソルを0始まりのline行・colセルへ移し、行範囲・可視幅・文字境界へ丸める。
+// 返り値: なし。有効行がなければ(0,0)。端末への反映はeditor_sync_cursorで行う。
 static inline void editor_set_cursor(struct editor_state *state, int line, int col){
     int line_limit = editor_line_limit(state);
     if(line_limit <= 0){
@@ -619,11 +587,8 @@ static inline void editor_set_cursor(struct editor_state *state, int line, int c
     state->cursor.file_pos.x = editor_cursor_col_boundary(state, state->cursor.file_pos.y, col);
 }
 
-// editor_move_cursor_line(): 論理カーソル行をdelta分だけ動かす。桁は新しい行長へ丸める。
-// cursor.file_pos.yへの書き込みはこの関数かeditor_set_cursor()経由に統一し、
-// 複数箇所からの多重加算を防ぐ。
-// 引数: state=更新対象のエディタ状態、delta=移動量(負値で上へ)。
-// 返り値: 範囲内で移動できたらtrue、範囲外で何もしなかったらfalse。
+// stateの論理カーソル行をdelta行動かし、列を移動先の行長・可視幅・文字境界へ丸める。
+// 返り値: 有効範囲ならtrue、範囲外なら変更せずfalse。端末への反映は別途行う。
 static inline bool editor_move_cursor_line(struct editor_state *state, int delta){
     int next = state->cursor.file_pos.y + delta;
     if(next < 0 || next >= editor_line_limit(state)){

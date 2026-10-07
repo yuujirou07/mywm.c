@@ -4,12 +4,8 @@
 #include <unistd.h>
 #include "path_util.h"
 
-// editor_path_from_exe_dir(): 実行ファイルのディレクトリを基準に相対パスを組み立てる。
-// /proc/self/exeは、プラグイン(.so)の中から呼んでも本体の実行ファイルを指すため、
-// 本体・プラグインのどちらから呼んでも同じディレクトリが基準になる。
-// 引数: buf=結果の書き込み先、buf_size=bufのバイト数、relative=実行ファイルからの相対パス。
-// 返り値: 成功時はbuf。引数不正、実行ファイル位置取得失敗、長さ超過時はNULL。
-// 所有権: bufは呼び出し側所有で、この関数は新たなメモリを確保しない。
+// 実行ファイル位置を/proc/self/exeで取得し、relativeを連結してbuf_sizeバイトのbufへ書く。
+// 返り値: 成功時buf、引数不正・位置取得失敗・長さ超過はNULL。bufは呼び出し側所有で、プラグイン内でも本体が基準。
 char *editor_path_from_exe_dir(char *buf, size_t buf_size, const char *relative){
     if(buf == NULL || buf_size == 0 || relative == NULL){
         return NULL;

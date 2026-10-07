@@ -2,9 +2,8 @@
 #include<stdlib.h>
 #include "json_read.h"
 
-// read_file_all(): 指定ファイル全体を読み込み、NUL終端文字列として返す。
-// 引数: path=読み込むファイルパス。
-// 返り値: mallocした文字列。失敗時はNULL。
+// pathのファイル全体を読み込み、NUL終端の文字列を確保する。
+// 返り値: 成功時は呼び出し側がfreeする文字列、オープン・読込・確保失敗時はNULL。
 char *read_file_all(const char *path){
     FILE *fp = fopen(path, "rb");
     if (fp == NULL) {

@@ -33,10 +33,8 @@ static void end_process(struct editor_state *state);
 static void lsp_poll_events(int *epfd, struct lsp_process *lsp, int timeout_ms);
 
 
-// main(): ncursesを初期化し、エディタ画面・ファイルブラウザ・エラー画面の
-// 入力ループを切り替えながら各処理関数へイベントを振り分ける。
-// 引数: argc=コマンドライン引数数、argv=起動時間ログまたはmylsp指定を含む引数列。
-// 返り値: 正常終了なら0、ncurses初期化やメモリ確保に失敗したら1。
+// argc/argvの起動指定を読み、ncursesと編集状態を初期化して入力・描画ループを実行する。
+// 返り値: 正常終了0、初期化・確保失敗1。終了時に保持資源を解放する。
 int main(int argc, char *argv[])
 {
 
@@ -366,6 +364,10 @@ int main(int argc, char *argv[])
     input_context.start_menu_screen.ascii_data = &ascii_data;
     input_context.start_menu_screen.startup_start_time = startup_timer ? &startup_start_time : NULL;
     input_context.start_menu_screen.startup_log_path = startup_timer ? startuptime_log_file_path_name : NULL;
+
+    input_context.state->key_bord_data.Key_log_data.key_allocate_num = 0;
+    input_context.state->key_bord_data.Key_log_data.key_count  = 0;
+    input_context.state->key_bord_data.Key_log_data.key_log  = NULL;
     
     input_context.dl_data.now_loading_lib_allocate_num = 8;
     input_context.dl_data.now_loading_lib_num = 0;
@@ -456,7 +458,12 @@ int main(int argc, char *argv[])
 
 
         input_result = get_wch(&ch);
-
+        key_log_add(
+            &state,
+            ch,
+            input_result,
+            editor_get_screen_state(&state)
+            );
         
         
         if (input_result == ERR)continue;
@@ -506,10 +513,8 @@ int main(int argc, char *argv[])
     return 0;
 }
 
-// end_process(): 読み込んだファイル行バッファと編集用バッファを解放し、
-// ncursesの画面状態を通常の端末状態へ戻す。
-// 引数: state=解放対象のエディタ状態。
-// 返り値: なし。
+// stateの行・本文・設定項目・アイコン用メモリとログを解放し、端末表示を終了する。
+// 返り値: なし。stateとその参照先は初期化済みであること。
 static void end_process(struct editor_state *state){
     clear();
     for(int i=0;i < state->file_data.file_line_n;i++){
@@ -531,11 +536,8 @@ static void end_process(struct editor_state *state){
     endwin();
 }
 
-// lsp_poll_events(): LSPサーバからの受信をepollで待ち、届いたメッセージを処理する。
-// epoll_waitが失敗した場合はepollインスタンスを閉じ、以降ポーリングしないよう*epfdへ-1を書き戻す。
-// 引数: epfd=epollインスタンスのfd。失敗時に-1へ更新される。
-//       lsp=通信対象のLSPプロセス、timeout_ms=epoll_waitの待ち時間(ミリ秒)。
-// 返り値: なし。
+// *epfdでtimeout_msミリ秒待機し、lspの受信メッセージを処理・解放する。
+// 返り値: なし。epoll_wait失敗時はfdを閉じて*epfdを-1にする。
 static void lsp_poll_events(int *epfd, struct lsp_process *lsp, int timeout_ms)
 {
     /* epoll_waitの結果の格納先 */
@@ -565,9 +567,8 @@ static void lsp_poll_events(int *epfd, struct lsp_process *lsp, int timeout_ms)
     }
 }
 
-// my_mvaddstr(): 指定した画面座標へNUL終端文字列を描画する。
-// 引数: pos=描画開始座標、str=描画する文字列。
-// 返り値: なし。ncursesの描画失敗は呼び出し元へ通知しない。
+// 指定した画面座標へNUL終端文字列を描画する。
+// 引数: pos=描画開始座標、str=描画する文字列。 返り値: なし。ncursesの描画失敗は呼び出し元へ通知しない。
 void my_mvaddstr(struct pos pos,char * str){
     mvaddstr(pos.y,pos.x,str);
 }

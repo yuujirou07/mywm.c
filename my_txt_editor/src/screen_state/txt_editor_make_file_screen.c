@@ -3,9 +3,8 @@
 #include "txt_editor.h"
 #include "txt_editor_screen.h"
 
-// handle_ask_make_file_mode_input(): 未保存ファイル作成確認と新規ファイル名入力を処理する。
-// 引数: ctx=確認ダイアログと編集画面復帰に必要なcontext、input_result=get_wch()の結果、ch=入力文字またはKEY_*。
-// 返り値: 入力ループを続けるならtrue。
+// 未保存ファイル作成確認と新規ファイル名入力を処理する。
+// 引数: ctx=確認ダイアログと編集画面復帰に必要なcontext、input_result=get_wch()の結果、ch=入力文字またはKEY_*。 返り値: 入力ループを続けるならtrue。
 bool handle_ask_make_file_mode_input(struct editor_input_context *ctx, int input_result, wint_t ch){
     struct editor_state *state = ctx->state;
 
@@ -79,9 +78,8 @@ bool handle_ask_make_file_mode_input(struct editor_input_context *ctx, int input
     return true;
 }
 
-// show_make_file_prompt(): 保存先が無いときにファイル作成確認の小画面を描く。
-// 引数: win=描画先、state=画面状態、file_box=作成した確認枠の保存先、screen_center_y/screen_center_pos=配置基準。
-// 返り値: なし。
+// stateと画面中央の基準screen_center_y/screen_center_posから作成確認枠を計算し、*file_boxへ保存する。
+// 返り値: なし。描画は予約し、カーソル表示フラグを下げる。winは未使用で、file_boxは非NULLとする。
 void show_make_file_prompt(WINDOW *win, struct editor_state *state, struct box *file_box,
                                   int screen_center_y, struct pos screen_center_pos){
     (void)win;

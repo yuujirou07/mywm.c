@@ -14,9 +14,8 @@
 #include "txt_editor_icon.h"
 
 
-// clear_icon_lib(): 対応表を解放し、未読み込み状態へ戻す。
-// 引数: icon_data_ptr=対象の対応表。
-// 返り値: なし。
+// 対応表を解放し、未読み込み状態へ戻す。
+// 引数: icon_data_ptr=対象の対応表。 返り値: なし。
 static void clear_icon_lib(icon_data *icon_data_ptr){
     free(icon_data_ptr->icon_lib);
     icon_data_ptr->icon_lib = NULL;
@@ -24,13 +23,8 @@ static void clear_icon_lib(icon_data *icon_data_ptr){
     icon_data_ptr->icon_lib_allocate_num = 0;
 }
 
-// load_icon_data(): アイコン設定JSONを読み込み、拡張子とアイコン文字の対応表を作る。
-// JSONは配列で、各要素は{"file_ext":".h","icon_code":"H"}の形を取る。
-// 引数: path=読み込むJSONのパス、icon_data_ptr=対応表の格納先。
-// 返り値: 成功時0、引数不正・ファイル不正・JSON不正・メモリ確保失敗時-1。
-// 所有権: icon_libをmallocで確保してicon_data_ptrが保持する。
-//         既に読み込み済みの対応表があれば捨てて作り直す。
-//         失敗時は対応表を解放し、件数も0へ戻して未読み込み状態にする。
+// pathのJSON配列からfile_ext/ext_codeを読み、icon_data_ptr所有の対応表を作る。格納先は初期化済みとする。
+// 返り値: 成功0、読込・形式・確保失敗-1。配列確認前の失敗は旧表を保持し、作り直し開始後の失敗は空にする。
 int load_icon_data(char *path,icon_data *icon_data_ptr){
     if(path == NULL)return -1;
     struct stat icon_stat;
@@ -130,6 +124,8 @@ int load_icon_data(char *path,icon_data *icon_data_ptr){
 }
 
 
+// file_extの実在パスを調べ、ディレクトリ用・icon_data_ptrの拡張子対応・既定の順でアイコンを返す。
+// 返値は借用文字列で解放不可。対応表内の返値は表の解放で無効になる。stat失敗は現実装で扱わない。
 const char *get_file_ext_code(char *file_ext,icon_data *icon_data_ptr){
 
     struct stat state;
@@ -150,6 +146,8 @@ const char *get_file_ext_code(char *file_ext,icon_data *icon_data_ptr){
     return return_code;
 }
 
+// icon_data_ptrの対応表を解放する。ポインタと件数は初期化し直さないため、続けて再使用・再解放しない。
+// 返り値: 解放時0、NULLまたは確保数が0以下なら-1。
 int destroy_icon_data(icon_data *icon_data_ptr){
     if(icon_data_ptr == NULL || icon_data_ptr->icon_lib_allocate_num <= 0)return -1;
     free(icon_data_ptr->icon_lib);   

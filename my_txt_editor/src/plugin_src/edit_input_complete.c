@@ -11,10 +11,8 @@
 #include"txt_editor.h"
 
 
-// init_edit_complete_data(): 設定値から補完表示データを初期化し、候補ポインタ配列を確保する。
-// 引数: ctx=stateとsettings_dataが設定済みの入力context。
-// 返り値: 成功時0、候補配列の確保失敗時-1。
-// 所有権: 確保したword_data.worldはstate側に保持される。
+// ctxの設定値で補完状態を初期化し、候補ポインタ配列と各文字列領域をstateへ確保する。
+// 返り値: 成功0、確保失敗-1。途中失敗でも確保済み領域は残り、成功後の領域はstate側で解放する。
 int init_edit_complete_data(struct editor_input_context *ctx){
     edit_input_complete_data *tmp_comp_data =
         &ctx->state->edit_input_complete_data;
@@ -55,17 +53,15 @@ int init_edit_complete_data(struct editor_input_context *ctx){
     return 0;
 }
 
-// change_edit_complete_lang(): 補完対象言語を更新し、入力途中の候補文字列を空にする。
-// 引数: ctx=stateが設定済みの入力context、lang=新しい補完対象言語。
-// 返り値: 候補文字列の初期化結果。現実装では0。
+// 補完対象言語を更新し、入力途中の候補文字列を空にする。
+// 引数: ctx=stateが設定済みの入力context、lang=新しい補完対象言語。 返り値: 候補文字列の初期化結果。現実装では0。
 int change_edit_complete_lang(struct editor_input_context *ctx,language lang){
     ctx->state->edit_input_complete_data.lang = lang;
     return init_edit_comt_candidacy_part_data(ctx->state);
 }
 
-// set_edit_comp_candidacy_part_data(): 入力文字を補完対象文字列の末尾へ追加する。
-// 引数: state=補完データを持つ状態、ch=追加するワイド文字。
-// 返り値: 追加時0、長さ判定に失敗したとき-1。現状は文字数が一致する通常の状態では常に-1。
+// stateの補完入力文字列へワイド文字chを追加し、文字数とNUL終端を更新する。
+// 返り値: 追加0、既存文字列長が上限以上なら-1。文字数と実長を一致させ、文字と終端の2要素分の空きが必要。
 int set_edit_comp_candidacy_part_data(struct editor_state *state,wint_t ch){
     if(COMPLETE_WORLD_CANDIDACY_PART_DATA_MAX_LEN <=
         (int)wcslen(state->edit_input_complete_data.comp_world_candidacy_part_data.complete_world_candidacy_part_str)){
@@ -88,6 +84,8 @@ int set_edit_comp_candidacy_part_data(struct editor_state *state,wint_t ch){
             comp_w_cand_part_d_count++;
     return 0;
 }
+// stateの補完入力文字列の末尾1文字を削除し、文字数を減らす。
+// 返り値: 削除0、既に空なら変更せず1。文字数と文字列は整合していること。
 int reduce_edit_comp_candidacy_part_data(struct editor_state *state){
     if(state->edit_input_complete_data.
         comp_world_candidacy_part_data.
@@ -106,9 +104,8 @@ int reduce_edit_comp_candidacy_part_data(struct editor_state *state){
     return 0;
 }
 
-// init_edit_comt_candidacy_part_data(): 入力途中の候補文字列と文字数を空に戻す。
-// 引数: state=補完データを持つ状態。
-// 返り値: 0。
+// stateの補完入力文字列と文字数を空にし、候補ウィンドウを非表示にする。
+// 返り値: 常に0。候補配列そのものは解放・初期化しない。
 int init_edit_comt_candidacy_part_data(struct editor_state *state){
     state->edit_input_complete_data.
         comp_world_candidacy_part_data.
@@ -124,6 +121,8 @@ int init_edit_comt_candidacy_part_data(struct editor_state *state){
 
 
 
+// stateの確保済み候補配列のline_numへNUL終端のwchrをコピーし、候補数を1増やす。
+// 返り値: 常に0。添字範囲外・空文字・長さ上限以上なら何もしない。上書きでも候補数は増える。
 int set_complete_str(struct editor_state *state,wchar_t *wchr,int line_num){
     if(state->edit_input_complete_data.word_data.world_allocate_num <= line_num || line_num < 0)return 0;
     wchar_t *tmp_comp_world = state->edit_input_complete_data.word_data.world[line_num];    

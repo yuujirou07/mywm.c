@@ -9,16 +9,15 @@
 #include "path_util.h"
 #include "txt_editor.h"
 
+// itemがmin以上max以下で、小数部分のないJSON数値ならtrueを返す。
+// 返り値: NULL・数値以外・範囲外・小数ならfalse。itemは変更しない。
 static bool json_int_in_range(const cJSON *item, int min, int max){
     return cJSON_IsNumber(item) && item->valuedouble >= min &&
         item->valuedouble <= max && item->valuedouble == item->valueint;
 }
 
-// load_custom_editor_settings(): 設定JSONがあれば読み込み、既定値を上書きする。
-// editor_settings/my_txt_editor_settings.jsonをカレントディレクトリ→実行ファイルの隣、
-// の順で探す。
-// 引数: settings_data=上書き対象の設定構造体。
-// 返り値: なし。設定ファイルが無い、または不正な場合は既定値のまま戻る。
+// settings_dataを設定JSONの有効な値で上書きする。探索順はカレント、実行ファイル隣のeditor_settings。
+// 返り値: なし。ファイル読込・JSON解析失敗は元の設定を保持し、個別に不正な値は読み飛ばす。
 void load_custom_editor_settings(struct editor_settings *settings_data){
     const char *settings_name = "editor_settings/my_txt_editor_settings.json";
     char exe_dir_path[PATH_MAX];

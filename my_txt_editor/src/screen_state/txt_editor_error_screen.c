@@ -1,8 +1,7 @@
 #include "txt_editor_screen.h"
 
-// handle_error_screen_input(): エラー画面でEnterが押されたら遷移元に応じて画面へ戻す。
-// 引数: ctx=編集画面復帰に必要なcontext、ch=入力文字またはKEY_*。
-// 返り値: 入力ループを続けるならtrue。
+// エラー画面でEnterが押されたら遷移元に応じて画面へ戻す。
+// 引数: ctx=編集画面復帰に必要なcontext、ch=入力文字またはKEY_*。 返り値: 入力ループを続けるならtrue。
 bool handle_error_screen_input(struct editor_input_context *ctx, wint_t ch){
     struct editor_state *state = ctx->state;
 

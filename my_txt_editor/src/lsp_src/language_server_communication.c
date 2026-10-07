@@ -16,21 +16,8 @@
 
 #define LSP_INVALID_FD (-1) // 言語サーバーとのパイプが未接続であることを表す値。
 #define LSP_HEADER_MAX 8192 // 受信するLSPヘッダーの最大バイト数。
-#define LSP_CONTENT_MAX ((size_t)32 * 1024 * 1024) // 受信本文の上限（32MiB）。
-
-/*
- * 指定した長さのデータをfdへすべて書き込む。
- * write()がシグナルで中断された場合は再試行する。
- *
- * 引数:
- *   fd   : 書き込み先のファイルディスクリプタ。
- *   data : 送信するデータの先頭アドレス。
- *   len  : 送信するデータのバイト数。
- *
- * 返り値:
- *   0  : lenバイトすべてを送信できた。
- *   -1 : 書き込み失敗、または接続先が閉じられた。
- */
+#define LSP_CONTENT_MAX ((size_t)32 * 1024 * 1024) // fdへdataのlenバイトを全て書く。短い書込みは続行し、EINTRは再試行する。
+// 返り値: 完了0、書込失敗・0バイト書込みは-1。blocking fdでは完了まで待機する。
 static int lsp_write_all(int fd, const char *data, size_t len)
 {
     size_t written = 0;
@@ -52,19 +39,8 @@ static int lsp_write_all(int fd, const char *data, size_t len)
     return 0;
 }
 
-/*
- * 指定した長さのデータをfdからすべて読み込む。
- * read()がシグナルで中断された場合は再試行する。
- *
- * 引数:
- *   fd   : 読み込み元のファイルディスクリプタ。
- *   data : 受信データの格納先。
- *   len  : 読み込むデータのバイト数。
- *
- * 返り値:
- *   0  : lenバイトすべてを読み込めた。
- *   -1 : 読み込み失敗、または接続先が閉じられた。
- */
+// fdからlenバイトをdataへ読む。短い読込みは続行し、EINTRは再試行する。
+// 返り値: 完了0、読込失敗・途中EOFは-1。dataにはlenバイト以上の領域が必要。
 static int lsp_read_all(int fd, char *data, size_t len)
 {
     size_t read_size = 0;
@@ -86,16 +62,8 @@ static int lsp_read_all(int fd, char *data, size_t len)
     return 0;
 }
 
-/*
- * LSPメッセージのヘッダからContent-Lengthの値を取り出す。
- *
- * 引数:
- *   header : \r\n\r\nで終わるLSPメッセージヘッダ文字列。
- *
- * 返り値:
- *   SIZE_MAX以外 : JSON本文のバイト数。0は空の本文を表す。
- *   SIZE_MAX      : Content-Lengthが無い、値が不正、または上限を超えている。
- */
+// NUL終端のheaderからContent-Lengthを探し、上限32MiB以内の本文バイト数を返す。
+// 返り値: 未検出・数値変換失敗・負数・上限超過はSIZE_MAX。現実装では数値後の余分な文字を検査しない。
 static size_t lsp_parse_content_length(const char *header)
 {
     const char *line = header;
@@ -130,30 +98,15 @@ static size_t lsp_parse_content_length(const char *header)
     return SIZE_MAX;
 }
 
-/*
- * file URIにそのまま含められる文字かを判定する。
- *
- * 引数:
- *   ch : 判定する1バイト文字。
- *
- * 返り値:
- *   0以外 : パーセントエンコードせずURIにコピーできる。
- *   0     : パーセントエンコードが必要。
- */
+// 1バイトのchが英数字または/・-・.・_・~なら、URIへ直接コピー可能と判定する。
+// 返り値: 直接使用可能なら非0、パーセントエンコードが必要なら0。英数字判定はロケールに従う。
 static int lsp_is_uri_safe(unsigned char ch)
 {
     return isalnum(ch) || ch == '/' || ch == '-' || ch == '.' || ch == '_' || ch == '~';
 }
 
-/*
- * LSPプロセス管理構造体を未接続状態へ初期化する。
- *
- * 引数:
- *   lsp : 初期化するLSPプロセス管理構造体。NULLは何もしない。
- *
- * 返り値:
- *   なし。
- */
+// lspのpid・通信fd・初期化状態・文書情報を未接続の値にする。既存の接続は閉じない。
+// 返り値: なし。NULLは何もしない。接続済みの構造体は事前に終了処理を行う。
 void lsp_process_init(struct lsp_process *lsp)
 {
     if(lsp == NULL){
@@ -169,19 +122,8 @@ void lsp_process_init(struct lsp_process *lsp)
     lsp->lsp_language_id[0] = '\0';
 }
 
-/*
- * Language Serverを子プロセスとして起動し、標準入出力と親プロセスの
- * pipeを接続する。成功後はto_server_fdへ送信し、from_server_fdから受信する。
- *
- * 引数:
- *   lsp     : 起動結果のpidとpipeのfdを格納する構造体。
- *   command : execvp()で実行するLanguage Serverのコマンド名またはパス。
- *   argv    : commandへ渡すNULL終端の引数配列。NULLならcommandだけを渡す。
- *
- * 返り値:
- *   0  : 子プロセスの起動とpipeの接続に成功した。
- *   -1 : 引数不正、pipe()、またはfork()に失敗した。
- */
+// commandをargv（NULLならcommandだけ）でfork/execし、pidと標準入出力のパイプを未接続のlspへ保存する。
+// 返り値: 親側の接続成功0、引数・pipe・fork失敗-1。0でも子のexec成功は保証せず、終了時はlsp_close_serverを呼ぶ。
 int lsp_start_server(struct lsp_process *lsp, const char *command, char *const argv[])
 {
     int to_server[2] = {LSP_INVALID_FD, LSP_INVALID_FD};
@@ -252,15 +194,8 @@ int lsp_start_server(struct lsp_process *lsp, const char *command, char *const a
     return 0;
 }
 
-/*
- * LSPとの通信fdを閉じ、子プロセスを回収できていれば管理構造体を未接続状態に戻す。
- *
- * 引数:
- *   lsp : 閉じるLSPプロセス管理構造体。NULLは何もしない。
- *
- * 返り値:
- *   なし。
- */
+// lspの通信fdを閉じ、waitpid(WNOHANG)で子を一度だけ回収確認してpidを-1にする。
+// 返り値: なし。NULLは何もしない。終了待ち・強制終了はせず、未終了の子でもpidを破棄する。
 void lsp_close_server(struct lsp_process *lsp)
 {
     if(lsp == NULL){
@@ -283,19 +218,8 @@ void lsp_close_server(struct lsp_process *lsp)
     }
 }
 
-/*
- * ローカルファイルパスをLSPで使用するfile URIへ変換する。
- * URIに直接使えない文字はパーセントエンコードする。
- *
- * 引数:
- *   uri      : 変換したURIの出力先バッファ。
- *   uri_size : uriのバイト数。終端NULの領域を含める。
- *   path     : 変換元のNUL終端ファイルパス。
- *
- * 返り値:
- *   0  : 変換に成功した。
- *   -1 : 引数不正、またはuriのバッファ容量不足。uriは空文字列にする。
- */
+// NUL終端のpathにfile://を付けてエンコードし、uri_sizeバイトのuriへ格納する。絶対パス化はしない。
+// 返り値: 成功0、引数不正・容量不足-1。容量不足ではuriを空にし、引数不正時は書き換えない。
 int lsp_path_to_file_uri(char *uri, size_t uri_size, const char *path)
 {
     static const char prefix[] = "file://";
@@ -339,17 +263,8 @@ int lsp_path_to_file_uri(char *uri, size_t uri_size, const char *path)
     return 0;
 }
 
-/*
- * JSON-RPC本文にContent-Lengthヘッダを付け、LSPへ1メッセージ送信する。
- *
- * 引数:
- *   fd   : LSPの標準入力へ接続された書き込み用ファイルディスクリプタ。
- *   json : 送信するNUL終端JSON-RPC本文。ヘッダは含めない。
- *
- * 返り値:
- *   0  : ヘッダとJSON本文をすべて送信できた。
- *   -1 : 引数不正、ヘッダ作成失敗、または書き込み失敗。
- */
+// NUL終端のjsonにContent-Lengthヘッダーを付けて、LSPの書込fdへ全バイト送信する。
+// 返り値: 成功0、NULL・ヘッダー作成・送信失敗-1。jsonの所有権は移動しない。
 int lsp_send(int fd, const char *json)
 {
     char header[128];
@@ -372,19 +287,8 @@ int lsp_send(int fd, const char *json)
     return lsp_write_all(fd, json, json_len);
 }
 
-/*
- * LSPの初期化要求initializeをJSON-RPCメッセージとして送信する。
- *
- * 引数:
- *   fd         : LSPの標準入力へ接続された書き込み用ファイルディスクリプタ。
- *   id         : この要求を識別するJSON-RPCのid。応答のidと対応する。
- *   process_id : エディタプロセスのpid。LSPへ親プロセスとして通知する。
- *   root_uri   : プロジェクトルートを表すfile URI。
- *
- * 返り値:
- *   0  : initialize要求を送信できた。
- *   -1 : 引数不正、メモリ確保、JSON作成、または送信に失敗した。
- */
+// fdへ要求ID=id、エディタPID=process_id、ルートURI=root_uriのinitialize要求を送る。
+// 返り値: 成功0、引数・JSON生成・送信失敗-1。root_uriはJSON内へそのまま埋め込めるエンコード済みURIとする。
 int lsp_send_initialize(int fd, int id, pid_t process_id, const char *root_uri)
 {
     const char *json_format =
@@ -421,17 +325,8 @@ int lsp_send_initialize(int fd, int id, pid_t process_id, const char *root_uri)
     return result;
 }
 
-/*
- * LSPからContent-Lengthヘッダ付きのJSON-RPCメッセージを1件受信する。
- * 戻り値の文字列は呼び出し側がfree()する。
- *
- * 引数:
- *   fd : LSPの標準出力へ接続された読み込み用ファイルディスクリプタ。
- *
- * 返り値:
- *   NULL以外 : NUL終端されたJSON本文。呼び出し側がfree()する。
- *   NULL     : 受信、ヘッダ解析、またはメモリ確保に失敗した。
- */
+// fdからContent-Length付きメッセージを1件読み、NUL終端のJSON本文を確保する。
+// 返り値: 呼び出し側がfreeする本文、受信・解析・確保失敗はNULL。blocking fdでは全本文を受け取るまで待つ。
 char *lsp_read_message(int fd)
 {
     char header[LSP_HEADER_MAX + 1];
@@ -476,10 +371,8 @@ char *lsp_read_message(int fd)
     return json;
 }
 
-// lsp_handle_message(): 受信済みのLSPメッセージ1件を種類別に振り分ける。
-// initialize応答にはinitialized通知を返し、診断通知はエラーログへ書き出す。
-// 引数: lsp=送信先fdとinitialized状態を持つLSPプロセス、msg='\0'終端のJSON文字列。
-// 返り値: なし。
+// 受信済みのLSPメッセージ1件を種類別に振り分ける。initialize応答にはinitialized通知を返し、診断通知はエラーログへ書き出す。
+// 引数: lsp=送信先fdとinitialized状態を持つLSPプロセス、msg='\0'終端のJSON文字列。 返り値: なし。
 void lsp_handle_message(struct lsp_process *lsp, char *msg){
     cJSON *root;
     cJSON *jsonrpc;
@@ -531,9 +424,8 @@ void lsp_handle_message(struct lsp_process *lsp, char *msg){
     cJSON_Delete(root);
 }
 
-// initialize_id(): LSP要求ID履歴を1始まりの連番で初期化する。
-// 引数: id_data=ID配列と現在位置を持つ送受信状態。
-// 返り値: なし。id_dataがNULLの場合の動作は未定義。
+// LSP要求ID履歴を1始まりの連番で初期化する。
+// 引数: id_data=ID配列と現在位置を持つ送受信状態。 返り値: なし。id_dataがNULLの場合の動作は未定義。
 void initialize_id(struct lsp_send_receve_id_data *id_data){
     int size = sizeof(id_data->used_id_history);
     int arry_size = size/sizeof(int);
@@ -543,9 +435,8 @@ void initialize_id(struct lsp_send_receve_id_data *id_data){
     id_data->id_storage_counter = 0;
 }
 
-// set_lsp_use_language(): LSPへ通知する言語IDをプロセス状態へコピーする。
-// 引数: lsp=設定先、language=NUL終端された言語ID。
-// 返り値: なし。languageがNULLまたは格納先より長い場合は変更しない。
+// LSPへ通知する言語IDをプロセス状態へコピーする。
+// 引数: lsp=設定先、language=NUL終端された言語ID。 返り値: なし。languageがNULLまたは格納先より長い場合は変更しない。
 void set_lsp_use_language(struct lsp_process *lsp,char *language){
     if(language == NULL)return;
     
@@ -560,9 +451,8 @@ void set_lsp_use_language(struct lsp_process *lsp,char *language){
          "%s", language);
 }
 
-// lsp_send_did_open(): 文書を開いたことと全文をLSPサーバへ通知する。
-// 引数: fd=書き込みfd、uri=文書URI、language_id=言語ID、text=UTF-8の全文。
-// 返り値: 送信成功時0、引数不正・JSON生成・送信失敗時-1。
+// 文書を開いたことと全文をLSPサーバへ通知する。
+// 引数: fd=書き込みfd、uri=文書URI、language_id=言語ID、text=UTF-8の全文。 返り値: 送信成功時0、引数不正・JSON生成・送信失敗時-1。
 int lsp_send_did_open(int fd, const char *uri,
                       const char *language_id, const char *text)
 {
@@ -599,9 +489,8 @@ int lsp_send_did_open(int fd, const char *uri,
 }
 
 
-// lsp_send_did_change(): 文書の新しい版と全文をLSPサーバへ通知する。
-// 引数: fd=書き込みfd、uri=文書URI、version=1以上の版番号、text=UTF-8の全文。
-// 返り値: 送信成功時0、引数不正・JSON生成・送信失敗時-1。
+// 文書の新しい版と全文をLSPサーバへ通知する。
+// 引数: fd=書き込みfd、uri=文書URI、version=1以上の版番号、text=UTF-8の全文。 返り値: 送信成功時0、引数不正・JSON生成・送信失敗時-1。
 int lsp_send_did_change(int fd, const char *uri, int version, const char *text)
 {
     int result = -1;
@@ -668,10 +557,8 @@ int lsp_send_did_change(int fd, const char *uri, int version, const char *text)
     return result;
 }
 
-// lsp_make_msg(): 要求データからLSP用JSON文字列を生成する。
-// 引数: msg_data=要求ID・method・URI・位置、msg=生成文字列の返却先。
-// 返り値: 成功時0、引数不正またはJSON生成失敗時-1。失敗時の*msgはNULL。
-// 所有権: 成功時の*msgは呼び出し側がfree()する。
+// 要求データからLSP用JSON文字列を生成する。
+// 引数: msg_data=要求ID・method・URI・位置、msg=生成文字列の返却先。 返り値: 成功時0、引数不正またはJSON生成失敗時-1。失敗時の*msgはNULL。 所有権: 成功時の*msgは呼び出し側がfree()する。
 int lsp_make_msg(lsp_send_msg_data msg_data, char **msg){
     cJSON *root;
     cJSON *params;
@@ -744,10 +631,8 @@ int lsp_make_msg(lsp_send_msg_data msg_data, char **msg){
     return 0;
 }
 
-// lsp_send_completion(): 現在のファイルパスとカーソル位置で補完要求を生成して送信する。
-// 引数: lsp_fd=LSPサーバへの書き込みfd、state=ファイルパスとカーソル位置。
-// 返り値: 送信成功時0、JSON生成または送信失敗時-1。
-// 所有権: 生成したJSON文字列は送信後にこの関数が解放する。
+// 現在のファイルパスとカーソル位置で補完要求を生成して送信する。
+// 引数: lsp_fd=LSPサーバへの書き込みfd、state=ファイルパスとカーソル位置。 返り値: 送信成功時0、JSON生成または送信失敗時-1。 所有権: 生成したJSON文字列は送信後にこの関数が解放する。
 int lsp_send_completion(int lsp_fd,struct editor_state *state){
     lsp_send_msg_data msg_data = {0};
     msg_data.id = 3;

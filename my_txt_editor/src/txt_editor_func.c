@@ -1,9 +1,11 @@
 #include <limits.h>
 #include <ncurses.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <wchar.h>
 #include <wctype.h>
 #include "default_settings.h"
@@ -19,11 +21,8 @@
 
 static int limit = 0;
 
-// resize_file_browser(): 画面サイズに合わせてファイルブラウザの外枠と内側領域を作り直す。
-// 一覧テーブルは1行DIR_ENTRY_NAME_MAXバイト固定の2次元配列なので、幅が変わっても
-// 既存の内容はそのまま使える。行数が足りなくなったときだけ確保し直して読み直す。
-// 引数: state=画面サイズ・ブラウザ状態・一覧テーブルを持つエディタ状態。
-// 返り値: なし。
+// stateの画面寸法からブラウザの枠・入力欄・内側領域を再計算し、高さ変更時に一覧を再読込する。
+// 返り値: なし。一覧の容量不足は再確保し、失敗時は表示行数を既存容量へ制限する。
 void resize_file_browser(struct editor_state *state){
     struct file_browse_state *browse = &state->file_browse;
 
@@ -76,12 +75,8 @@ void resize_file_browser(struct editor_state *state){
     }
 }
 
-// handle_resize(): 端末サイズ変更後に画面サイズと書き込み領域を更新し、
-// 新しい区切り線の端点をctx->edit_screenへ書き戻す。
-// カーソルはstate->cursorが論理位置で持っているため、リサイズで退避・復元する必要はない。
-// 新しい可視幅で桁が溢れる場合だけ丸める。
-// 引数: win=操作対象のncursesウィンドウ、ctx=更新するエディタ状態と区切り線座標を持つ入力context。
-// 返り値: なし。
+// winの寸法からctxの編集領域・各画面配置・カーソル列を更新し、再描画を要求する。
+// 返り値: なし。幅61セル・高さ25行未満では、サイズが足りるまで入力を待ち続ける。
 void handle_resize(WINDOW *win, struct editor_input_context *ctx){
 
     struct editor_state *state = ctx->state;
@@ -144,10 +139,8 @@ void handle_resize(WINDOW *win, struct editor_input_context *ctx){
     update_screen_ratio(ctx);
 }
 
-// handle_backspace(): カーソル左の1文字を削除し、行バッファを左へ詰める。
-// 行頭では前の行末へカーソルを移動する。
-// 引数: ctx=ウィンドウ、文字バッファ、行情報を持つ入力context。
-// 返り値: なし。
+// ctxのカーソル左の1文字をセル幅ごと削除する。行頭では前行へ結合して結合位置へ移動する。
+// 返り値: なし。不正な行・セルや結合失敗では処理を打ち切り、変更時は本文の再描画を要求する。
 void handle_backspace(struct editor_input_context *ctx) {
     struct editor_state *state = ctx->state;
     int line = state->cursor.file_pos.y;
@@ -218,10 +211,8 @@ void handle_backspace(struct editor_input_context *ctx) {
     state->render_flags |= RENDER_FILE_DATA;
 }
 
-// handle_newline(): カーソル位置で現在行を分割し、右側の文字列を下の新しい行へ移す。
-// その後、カーソルを次の行の行頭(col=0)へ進める。
-// 引数: ctx=ウィンドウ、カーソル行、書き込み領域を持つ入力context。
-// 返り値: なし。
+// カーソル位置で現在行を分割し、右側の文字列を下の新しい行へ移す。その後、カーソルを次の行の行頭(col=0)へ進める。
+// 引数: ctx=ウィンドウ、カーソル行、書き込み領域を持つ入力context。 返り値: なし。
 void handle_newline(struct editor_input_context *ctx) {
     struct editor_state *state = ctx->state;
     int line = state->cursor.file_pos.y;
@@ -254,12 +245,8 @@ void handle_newline(struct editor_input_context *ctx) {
     state->render_flags |= RENDER_FILE_DATA;
 }
 
-// handle_tab(): indent_range個の空白をカーソル位置へ挿入する。
-// 以前はaddch(' ')で画面へ出すだけでバッファへ書いていなかったため、
-// 再描画で消え、保存にも残らなかった。空白1文字の挿入を繰り返す形にして、
-// バッファへの書き込み・行長更新・容量伸長をhandle_char_input()へ一本化する。
-// 引数: win=描画先ウィンドウ、state=編集バッファ。
-// 返り値: なし。
+// stateのカーソル位置へindent_range個の空白を、handle_char_inputを通して順に挿入する。
+// 引数: win=文字入力関数へ渡すウィンドウ、state=編集状態。返り値: なし。挿入できない文字があっても通知しない。
 void handle_tab(WINDOW *win, struct editor_state *state) {
     int line = state->cursor.file_pos.y;
     if(line < 0 || line >= editor_line_limit(state)){
@@ -271,10 +258,8 @@ void handle_tab(WINDOW *win, struct editor_state *state) {
     }
 }
 
-// handle_char_input(): 通常文字をカーソル位置へ挿入する。
-// 既存文字がある場所では後続文字を右へずらしてから書き込む。
-// 引数: win=描画先ウィンドウ、ch=挿入するwide文字、state=編集バッファ。
-// 返り値: なし。
+// stateのカーソル位置へワイド文字chを挿入し、後続セル・行長・カーソル・補完状態を更新する。winは未使用。
+// 返り値: なし。行が無効、表示幅不足、容量確保失敗なら挿入しない。全角の継続セルは0を格納する。
 void handle_char_input(WINDOW *win, wchar_t ch, struct editor_state *state){
     (void)win;
 
@@ -370,10 +355,8 @@ void handle_char_input(WINDOW *win, wchar_t ch, struct editor_state *state){
     state->render_flags |= RENDER_FILE_DATA;
 }
 
-// handle_mouse(): マウスホイールで表示開始行を上下に動かし、
-// カーソルが表示範囲外へ出る場合は一時的に非表示にする。
-// 引数: ctx=ウィンドウ、マウスイベント、表示状態を持つ入力context、dir_num=ディレクトリ選択行。
-// 返り値: なし。
+// getmouseで取得したイベントをctxの現在画面へ振り分ける。dir_numはブラウザの表示項目数。
+// 返り値: なし。イベント取得失敗や未対応画面では何もしない。
 void handle_mouse(struct editor_input_context *ctx,int dir_num) {
     WINDOW *win = ctx->win;
     MEVENT *event = ctx->mouse_event;
@@ -406,10 +389,8 @@ void handle_mouse(struct editor_input_context *ctx,int dir_num) {
     }
 }
 
-// handle_input_allow(): 矢印キー入力を処理し、行長を超えない位置へカーソルを移動する。
-// 画面端ではスクロールしながら表示内容を補う。
-// 引数: ctx=カーソルと表示位置を持つ入力context、ch=KEY_UP/DOWN/LEFT/RIGHT。
-// 返り値: なし。
+// 矢印キー入力を処理し、行長を超えない位置へカーソルを移動する。画面端ではスクロールしながら表示内容を補う。
+// 引数: ctx=カーソルと表示位置を持つ入力context、ch=KEY_UP/DOWN/LEFT/RIGHT。 返り値: なし。
 void handle_input_allow(struct editor_input_context *ctx,wchar_t ch){
     struct editor_state *state = ctx->state;
     int line_limit = get_line_limit();
@@ -470,27 +451,21 @@ void handle_input_allow(struct editor_input_context *ctx,wchar_t ch){
     state->render_flags |= RENDER_LINE_STATUS;
 }
 
-// set_line_limit(): カーソル移動などが参照する共有行数上限を更新する。
-// 引数: line_limit=新しい行数上限。
-// 返り値: なし。
+// カーソル移動などが参照する共有行数上限を更新する。
+// 引数: line_limit=新しい行数上限。 返り値: なし。
 void set_line_limit(int line_limit){
     limit = line_limit;
 }
 
-// get_line_limit(): 共有されている行数上限を返す。
-// 引数: なし。
-// 返り値: set_line_limit()で最後に設定した値。
+// 共有されている行数上限を返す。
+// 引数: なし。 返り値: set_line_limit()で最後に設定した値。
 int get_line_limit(){
     return limit;
 }
 
 
-// remove_line_join_str_data(): remove_line_num行目を削除し、内容を直前の行の末尾へ連結する。
-// 連続レイアウトなので削除行のセルは前の行の直後に隣接している。
-// セル自体は前の行の末尾へ詰めるだけでよく、後続行のデータやline_offsetは動かさない
-// (削除行の領域を前の行がまるごと吸収するので、境界が1つ消えるだけで済む)。
-// 引数: state=編集バッファ、remove_line_num=削除する論理行番号(1以上)。
-// 返り値: 連結後の前行の桁数。引数が不正なら-1。
+// stateのremove_line_num行（1以上）を直前の行へ結合し、後続の行情報を前へ詰める。
+// 返り値: 結合後のセル数、状態・行・セルが不正なら-1。結合した行が削除行の容量も引き継ぐ。
 int remove_line_join_str_data(struct editor_state *state,long remove_line_num){
     if(state == NULL || state->str.line_offset == NULL || state->str.line_cap == NULL ||
        state->str.line == NULL || remove_line_num < 1 ||
@@ -557,13 +532,8 @@ int remove_line_join_str_data(struct editor_state *state,long remove_line_num){
 }
 
 
-// make_new_line_space(): make_space_line_num行目をカーソル位置で分割し、
-// カーソルから右側の文字列を新しい行(make_space_line_num+1)として下に作る。
-// remove_line_join_str_data()が2行の容量域を1つへ併合するのの逆操作にあたり、
-// 連続レイアウトなので物理セルは一切動かさず、元の行が持っていた容量域を
-// 2つに割り直すだけで済む(左側=元の行、右側=新しい行)。
-// 引数: state=編集バッファ、make_space_line_num=分割する論理行(カーソルがいる行)。
-// 返り値: 新しくできた行の桁数。引数が不正・確保失敗なら-1。
+// stateのmake_space_line_num行を現在のカーソル列で分割し、後半を直後の新しい行とする。
+// 返り値: 新しい行のセル数、行・状態不正や行情報確保失敗は-1。本文の所有権はstateに残る。
 int make_new_line_space(struct editor_state *state,long make_space_line_num){
     if(state == NULL || state->str.line == NULL || state->str.line_offset == NULL ||
        state->str.line_cap == NULL || make_space_line_num < 0 ||
@@ -648,11 +618,8 @@ int make_new_line_space(struct editor_state *state,long make_space_line_num){
 
 
 
-// editor_screen_mouse_event(): ホイールで表示開始行だけを動かす。
-// スクロールは編集位置を変えないため、cursorは書き換えない。カーソルの画面座標は
-// scr_start_numから自動的にずれるので、表示可否だけを取り直す。
-// 引数: ctx=ウィンドウ、getmouse()済みのイベント、表示位置とカーソルを持つ入力context。
-// 返り値: なし。
+// ctxの取得済みマウスイベントでスクロール・本文クリック・ツリーへの移行を処理する。
+// 返り値: なし。ホイールは表示開始行だけ、本文クリックは論理カーソルを動かし、最後にカーソル表示可否を更新する。
 void editor_screen_mouse_event(struct editor_input_context *ctx){
     MEVENT *event = ctx->mouse_event;
     struct editor_state *state = ctx->state;
@@ -743,9 +710,8 @@ void editor_screen_mouse_event(struct editor_input_context *ctx){
     my_cur_set(state,editor_cursor_is_visible(state));
 }
 
-// file_browse_screen_mouse_event(): ホイール入力でファイルブラウザの選択行を循環移動する。
-// 引数: win=描画先。現在は未使用、event=マウスイベント、state=選択状態、dir_num=表示項目数。
-// 返り値: なし。選択行の強調表示が無効なら何もしない。
+// ホイール入力でファイルブラウザの選択行を循環移動する。
+// 引数: win=描画先。現在は未使用、event=マウスイベント、state=選択状態、dir_num=表示項目数。 返り値: なし。選択行の強調表示が無効なら何もしない。
 void file_browse_screen_mouse_event(WINDOW *win, MEVENT *event, struct editor_state *state,int dir_num){
     //ホイールで選択行を動かすだけなので描画先ウィンドウは使わない
     (void)win;
@@ -777,47 +743,44 @@ void file_browse_screen_mouse_event(WINDOW *win, MEVENT *event, struct editor_st
 }
 
 
-// set_file_browse_path_input_mode(): ファイルブラウザのパス入力モードを設定する。
-// 引数: file_browse=更新対象、flag=設定する有効状態。
-// 返り値: なし。file_browseがNULLなら何もしない。
+// ファイルブラウザのパス入力モードを設定する。
+// 引数: file_browse=更新対象、flag=設定する有効状態。 返り値: なし。file_browseがNULLなら何もしない。
 void set_file_browse_path_input_mode(struct file_browse_state *file_browse,bool flag){
     if(file_browse == NULL)return;
     file_browse->path_input_mode = flag;
 }
 
-// get_file_browse_path_input_mode(): ファイルブラウザのパス入力モードを取得する。
-// 引数: file_browse=取得元。
-// 返り値: 現在の有効状態。file_browseがNULLならfalse。
+// ファイルブラウザのパス入力モードを取得する。
+// 引数: file_browse=取得元。 返り値: 現在の有効状態。file_browseがNULLならfalse。
 bool get_file_browse_path_input_mode(struct file_browse_state *file_browse){
     if(file_browse == NULL)return 0;
     return file_browse->path_input_mode;
 }
 
-// my_cur_set(): エディタ状態とncursesのカーソル表示状態を同時に更新する。
-// 引数: state=更新対象、set=trueで表示、falseで非表示。
-// 返り値: なし。stateがNULLなら何もしない。curs_set()の失敗は通知しない。
+// エディタ状態とncursesのカーソル表示状態を同時に更新する。
+// 引数: state=更新対象、set=trueで表示、falseで非表示。 返り値: なし。stateがNULLなら何もしない。curs_set()の失敗は通知しない。
 void my_cur_set(struct editor_state *state,bool set){
     if(state == NULL)return;
     state->is_cur_show = set;
     curs_set(set);
 }
 
-// cur_pos_push(): 次回ncursesへ反映する画面カーソル座標をstateへ保存する。
-// 引数: pos=保存する画面座標、state=保存先のエディタ状態。posは値コピーされる。
-// 返り値: 常に0。stateがNULLの場合の動作は未定義。
+// 次回ncursesへ反映する画面カーソル座標をstateへ保存する。
+// 引数: pos=保存する画面座標、state=保存先のエディタ状態。posは値コピーされる。 返り値: 常に0。stateがNULLの場合の動作は未定義。
 int cur_pos_push(struct pos pos, struct editor_state *state){
     state->cursor.show_cur_pos_queue = pos;
     return 0;
 }
 
-// set_cur_pos(): stateに保存された画面カーソル座標をncursesへ反映する。
-// 引数: state=反映する座標を持つエディタ状態。
-// 返り値: 常に0。move()の失敗は呼び出し元へ通知しない。
+// stateに保存された画面カーソル座標をncursesへ反映する。
+// 引数: state=反映する座標を持つエディタ状態。 返り値: 常に0。move()の失敗は呼び出し元へ通知しない。
 int set_cur_pos(struct editor_state *state){
     move(state->cursor.show_cur_pos_queue.y,state->cursor.show_cur_pos_queue.x);
     return 0;
 }
 
+// ctxのマウスイベントでツリーの開閉・ファイル読込・境界のドラッグ開始・編集画面への移行を処理する。
+// 返り値: 常に0。イベントはgetmouseで取得済みとし、必要な再描画と構文情報更新を要求する。
 int filetree_mouse_event(struct editor_input_context *ctx){
     MEVENT *ev = ctx->mouse_event;
     struct editor_state *state = ctx->state;
@@ -901,19 +864,16 @@ int filetree_mouse_event(struct editor_input_context *ctx){
 }
 
 
-// box_contains_point(): 指定座標がボックスの範囲内か判定する。
-// 引数: b=画面座標と幅・高さを持つボックス、p=判定する画面座標。
-// 返り値: pが左上から右下の境界を含む範囲内ならtrue、それ以外はfalse。
+// 指定座標がボックスの範囲内か判定する。
+// 引数: b=画面座標と幅・高さを持つボックス、p=判定する画面座標。 返り値: pが左上から右下の境界を含む範囲内ならtrue、それ以外はfalse。
 bool box_contains_point(struct box b,struct pos p){
     if(b.pos.x <= p.x && b.pos.x + b.w >= p.x && 
         b.pos.y <= p.y && b.pos.y + b.h >= p.y)return true;
     return false;
 }
 
-// editor_mouse_to_buffer_pos(): マウスの画面座標を編集領域の左上基準の座標へ変換する。
-// 引数: state=編集領域の画面上の位置と大きさ、mouse_pos=変換する画面座標。
-// 返り値: 編集領域内なら領域左上を(0,0)とする座標、範囲外なら(-1,-1)。
-// スクロール開始行は加算しない。
+// マウスの画面座標を編集領域の左上基準の座標へ変換する。
+// 引数: state=編集領域の画面上の位置と大きさ、mouse_pos=変換する画面座標。 返り値: 編集領域内なら領域左上を(0,0)とする座標、範囲外なら(-1,-1)。 スクロール開始行は加算しない。
 struct pos editor_mouse_to_buffer_pos(struct editor_state *state,
                                     struct pos mouse_pos){
     struct box write_area = 
@@ -929,16 +889,16 @@ struct pos editor_mouse_to_buffer_pos(struct editor_state *state,
     return tmp_pos;  
 }
 
-// screen_pos_to_box_pos(): 画面座標を指定ボックスの左上基準の座標へ変換する。
-// 引数: b1=変換先ボックス、p1=画面座標、rt1=変換結果の格納先。
-// 返り値: 変換成功ならfalse、p1がb1の範囲外ならtrue。
-// 失敗時はrt1の値を変更しない。rt1がNULLの場合の動作は未定義。
+// 画面座標p1をb1左上からの相対座標へ変換して非NULLのrp1へ格納する。右下境界も範囲に含む。
+// 返り値: 成功false、範囲外true。失敗時は*rp1を変更しない。
 bool screen_pos_to_box_pos(struct box b1,struct pos p1,struct pos *rp1){
     if(!box_contains_point(b1,p1))return 1;
     *rp1 = (struct pos){p1.x - b1.pos.x,p1.y - b1.pos.y};
     return 0;
 }
 
+// stateの表示開始行をeditor_pos.yへ加え、編集領域の相対位置から論理位置を返す。
+// 返り値: xが論理行、yが列のpos。通常の座標と順序が逆で、範囲検査は行わない。
 struct pos editor_pos_to_buffer_pos(
                 struct editor_state *state,
                 struct pos editor_pos){
@@ -948,9 +908,8 @@ struct pos editor_pos_to_buffer_pos(
 
 
 
-// editor_set_env_lang(): 言語を保存し、有効な構文着色と補完データを初期化する。
-// 引数: ctx=stateとsettings_dataが設定済みの入力context、lang=新しい言語。
-// 返り値: 常に0。現実装では補完データの初期化失敗を返さない。
+// 言語を保存し、有効な構文着色と補完データを初期化する。
+// 引数: ctx=stateとsettings_dataが設定済みの入力context、lang=新しい言語。 返り値: 常に0。現実装では補完データの初期化失敗を返さない。
 int editor_set_env_lang(struct editor_input_context *ctx,language lang){
     if(ctx->state->settings_data->built_in_syntax){
         init_syntax(&ctx->syntax_data);
@@ -966,6 +925,8 @@ int editor_set_env_lang(struct editor_input_context *ctx,language lang){
 
 
 
+// ctx->state->settings_dataへ既定値を設定してから、設定JSONの有効な項目で上書きする。
+// 返り値: 常に0。ctx・state・settings_dataは呼び出し前に接続しておく。
 int init_settings_data(struct editor_input_context *ctx){
     //最初にデフォルト設定を読み込みユーザーが設定している項目だけ更新する
     load_default_editor_settings(ctx->state->settings_data);
@@ -974,7 +935,7 @@ int init_settings_data(struct editor_input_context *ctx){
 }
 
 
-// get_env_language(): env_language_ctl()に保存された現在の言語を取得する。
+// env_language_ctl()に保存された現在の言語を取得する。
 // 返り値: 未設定ならUNKNOWN、設定済みなら最後に保存した言語。
 language get_env_language(){
     language tmp_lang;
@@ -983,9 +944,8 @@ language get_env_language(){
 }
 
 
-// env_language_ctl(): getなら保存済み言語をlangへ書き、setならlangの値を保存する。
-// 引数: lang=読み書き先の有効なポインタ、flags=getまたはset。
-// 返り値: 現実装ではflagsにかかわらず0。
+// getなら保存済み言語をlangへ書き、setならlangの値を保存する。
+// 引数: lang=読み書き先の有効なポインタ、flags=getまたはset。 返り値: 現実装ではflagsにかかわらず0。
 int env_language_ctl(language *lang,enum flags flags){
     static language static_env_lang = UNKNOWN;
     if(flags == get){
@@ -1001,6 +961,8 @@ int env_language_ctl(language *lang,enum flags flags){
 
 
 
+// stateのキー履歴へ文字ch・get_wch結果result・入力時のscreen_stateを追加する。
+// 返り値: 通常0、再確保失敗-1。確保容量が設定上限以上なら、空きがあっても追加せず0を返す。
 int key_log_add(struct editor_state *state,wchar_t ch,int result,screen_state screen_state){
     if(state->key_bord_data.Key_log_data.key_allocate_num >= 
             state->settings_data->key_log_settings.key_log_buffer_size){
@@ -1010,30 +972,30 @@ int key_log_add(struct editor_state *state,wchar_t ch,int result,screen_state sc
     }
     if(state->key_bord_data.Key_log_data.key_allocate_num <= 
         state->key_bord_data.Key_log_data.key_count){
+        uint16_t tmp_realloc_num = 
+            (state->key_bord_data.Key_log_data.key_count * 2 >= 
+                state->settings_data->key_log_settings.key_log_buffer_size)?
+                state->settings_data->key_log_settings.key_log_buffer_size:
+                state->key_bord_data.Key_log_data.key_count * 2;
+
         key_data *tmp_key_data = 
             realloc(
                 state->key_bord_data.Key_log_data.key_log,
-                sizeof(key_data) * state->key_bord_data.Key_log_data.key_count * 2
+                sizeof(key_data) * tmp_realloc_num
             );
         if(tmp_key_data == NULL){
             error_log("malloc");
             return -1;
         }
         state->key_bord_data.Key_log_data.key_log = tmp_key_data;
-        state->key_bord_data.Key_log_data.key_allocate_num *= 2;
+        state->key_bord_data.Key_log_data.key_allocate_num = tmp_realloc_num;
     }
 
-    key_data *tmp_key_log = &state->key_bord_data.Key_log_data.key_log[state->key_bord_data.Key_log_data.key_count];
+    key_data *tmp_key_log = 
+        &state->key_bord_data.Key_log_data.key_log[state->key_bord_data.Key_log_data.key_count];
     tmp_key_log->screen_state = screen_state;
     tmp_key_log->input_result = result;
     tmp_key_log->key = ch;
     state->key_bord_data.Key_log_data.key_count++;
-    return 0;
-}
-
-int key_log_write_file(){
-
-
-
     return 0;
 }

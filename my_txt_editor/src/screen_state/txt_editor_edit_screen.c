@@ -15,9 +15,8 @@
 
 static void send_lsp_did_change(struct editor_input_context *ctx);
 
-// handle_edit_screen_input(): 通常編集画面のキー入力を処理する。
-// 引数: ctx=編集画面の描画・状態更新に必要なcontext、input_result=get_wch()の結果、ch=入力文字またはKEY_*。
-// 返り値: 入力ループを続けるならtrue、qで終了するならfalse。
+// 通常編集画面のキー入力を処理する。
+// 引数: ctx=編集画面の描画・状態更新に必要なcontext、input_result=get_wch()の結果、ch=入力文字またはKEY_*。 返り値: 入力ループを続けるならtrue、qで終了するならfalse。
 bool handle_edit_screen_input(struct editor_input_context *ctx, int input_result, wint_t ch){
     struct editor_state *state = ctx->state;
     WINDOW *win = ctx->win;
@@ -163,10 +162,8 @@ bool handle_edit_screen_input(struct editor_input_context *ctx, int input_result
     return true;
 }
 
-// send_lsp_did_change(): 編集バッファ全体をUTF-8化してLSPへ変更通知を送る。
-// 引数: ctx=編集状態とLSP通信状態を持つ入力context。
-// 返り値: なし。LSP未使用・未初期化・送信準備失敗時は通知しない。
-// 所有権: 送信成功時のUTF-8文字列はstateが保持し、失敗時はこの関数が解放する。
+// 編集バッファ全体をUTF-8化してLSPへ変更通知を送る。
+// 引数: ctx=編集状態とLSP通信状態を持つ入力context。 返り値: なし。LSP未使用・未初期化・送信準備失敗時は通知しない。 所有権: 送信成功時のUTF-8文字列はstateが保持し、失敗時はこの関数が解放する。
 static void send_lsp_did_change(struct editor_input_context *ctx){
 
 
@@ -203,12 +200,16 @@ static void send_lsp_did_change(struct editor_input_context *ctx){
 }
 
 
+// ctx->state->status_barへ画面上の矩形boxを値コピーする。
+// 返り値: 常に0。各ポインタは有効であること。範囲検査や再描画要求は行わない。
 int set_status_bar_size(struct editor_input_context *ctx,struct box box){
     *ctx->state->status_bar = box;
     return 0;
 }
 
 
+// NUL終端のワイド文字列strをstateのカーソル位置から1文字ずつ入力する。
+// 返り値: 空文字列なら-1、それ以外0。各文字の挿入失敗は返り値へ反映しない。
 int editor_input_str(struct editor_state *state,wchar_t *str){
     int str_len = wcslen(str);
     if(str_len <= 0)return -1;

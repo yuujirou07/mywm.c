@@ -23,14 +23,8 @@
 #include"default_settings.h"
 #include"txt_editor_syntax.h"
 
-// load_dir_table(): path_name配下のディレクトリエントリを読み込み、
-// ファイルブラウザ表示用テーブルへ全エントリの名前と種別を保持する。
-// 表示幅に合わせた切り詰めはdraw_box_inside_dir()が描画時に行う。
-// tableは必要ならrealloc()で拡張し、更新後のポインタと行数を呼び出し元へ書き戻す。
-// 引数: state=表示領域、table/table_rows=一覧配列と容量、path_name=対象ディレクトリ、
-//       start_num=表示開始添字、dir_num=全件数、table_num=表示可能件数の返却先。
-// 返り値: 成功時は0。引数不正、ディレクトリを開けない、再確保失敗時は-1。
-// 所有権: tableは呼び出し側所有のまま。再確保時は更新したポインタを*tableへ返す。
+// path_nameの全項目を呼び出し側所有の*tableへ読み、*table_rowsを必要時拡張する。stateはブラウザ状態。
+// start_num以降の可視件数を*table_num、全件数を*dir_numへ返す。返り値: 成功0、引数・読込・確保の失敗-1。
 int load_dir_table(struct editor_state *state,struct dir_entry **table,int *table_rows,char *path_name,int start_num,int *dir_num,int *table_num){
     if(table == NULL || table_rows == NULL || dir_num == NULL || table_num == NULL)return -1;
     *dir_num = 0;
@@ -81,12 +75,8 @@ int load_dir_table(struct editor_state *state,struct dir_entry **table,int *tabl
     return 0;
 }
 
-// load_file(): ファイルブラウザで選択中の名前を取り出し、通常ファイルなら読み込み用に開く。
-// 開けない場合や対象外の拡張子ならエラー画面へ切り替える。
-// 引数: state=選択行とファイル状態、table=ディレクトリエントリ一覧、path_name=現在ディレクトリ、select_state=選択結果の書き込み先。
-// tableがNULLの場合はpath_nameを完成済みのパスとして直接読み込む。
-// 返り値: なし。結果はselect_stateに格納する。
-// 所有権: ファイル選択成功時は先に開いていたFILE*を閉じ、新しいFILE*をstateが保持する。
+// stateの選択行をtable/table_numから開く。tableがNULLならpath_nameを直接使い、それ以外は親パスとする。
+// 返り値: なし。種類・名前をselect_stateへ返し、成功時のFILEは旧FILEを閉じてstateが所有する。失敗はerror。
 void load_file(struct editor_state *state,struct dir_entry *table,int table_num,
                     char *path_name,struct file_browse_select_state *select_state){
     select_state->select_name[0] = '\0';
@@ -167,9 +157,8 @@ void load_file(struct editor_state *state,struct dir_entry *table,int table_num,
     return;
 }
 
-// editor_free_text_buffer(): 編集バッファと行情報配列をまとめて解放する。
-// 引数: state=解放対象のエディタ状態。
-// 返り値: なし。NULLのstateは何もしない。解放後の各ポインタはNULLに戻す。
+// 編集バッファと行情報配列をまとめて解放する。
+// 引数: state=解放対象のエディタ状態。 返り値: なし。NULLのstateは何もしない。解放後の各ポインタはNULLに戻す。
 void editor_free_text_buffer(struct editor_state *state){
     if(state == NULL){
         return;
@@ -186,12 +175,8 @@ void editor_free_text_buffer(struct editor_state *state){
     state->str.line_capacity      = 0;
 }
 
-// editor_alloc_text_buffer(): 合計容量total_capacity分の連続バッファと、
-// line_count行分の行情報配列(長さ・開始位置・行容量)を確保する。
-// line_offsetとline_capは0のままなので、呼び出し側がレイアウトを決めて埋める。
-// 引数: state=確保先、line_count=扱う行数、total_capacity=バッファ全体の要素数。
-// 返り値: 確保できたらtrue。確保失敗時は全バッファを解放済みの状態に戻す。引数不正時は旧バッファを変更しない。
-// 所有権: stateが保持していた旧バッファを解放し、新しいバッファをstateの所有にする。
+// stateの旧バッファを解放し、line_count行分の情報とtotal_capacity個のwint_tをゼロ初期化して確保する。
+// 返り値: 成功true、失敗false。引数不正は旧領域を保持、確保失敗は全解放。成功後の行オフセット・容量は呼び出し側で設定する。
 bool editor_alloc_text_buffer(struct editor_state *state, int line_count, long total_capacity){
     if(state == NULL || line_count < 1 || total_capacity < 1){
         return false;
@@ -218,11 +203,8 @@ bool editor_alloc_text_buffer(struct editor_state *state, int line_count, long t
     return true;
 }
 
-// editor_ensure_line_cap(): 指定行がneed列を保持できるよう、必要なら容量を伸ばす。
-// 連続レイアウトなので、伸ばした行より後ろのデータをまとめて後方へずらし、
-// 後続行のline_offsetへ差分を加算する。倍々で伸ばして再配置の頻度を抑える。
-// 引数: state=編集バッファ、line=対象論理行、need=必要な列数。
-// 返り値: need列を確保できたらtrue。上限超過やrealloc失敗ならfalse(バッファは無変更)。
+// stateの論理行lineにneedセル以上を確保し、後続行のデータとオフセットも更新する。
+// 返り値: 成功true、不正な状態・上限超過・確保失敗false。失敗時は保持し、成功時は既存セルポインタが無効になり得る。
 bool editor_ensure_line_cap(struct editor_state *state, int line, int need){
     if(state == NULL || state->str.wint_line_str_data == NULL ||
        state->str.line_offset == NULL || state->str.line_cap == NULL){
@@ -279,11 +261,8 @@ bool editor_ensure_line_cap(struct editor_state *state, int line, int need){
     return true;
 }
 
-// editor_ensure_row_capacity(): 行情報配列(line/line_offset/line_cap)がneed_rows行分の
-// スロットを持つよう、必要なら伸長する。editor_ensure_line_cap()の行方向版にあたる。
-// 引数: state=編集バッファ、need_rows=最低限確保したい行スロット数。
-// 返り値: need_rows行を確保できたらtrue。realloc失敗時はfalse。
-// reallocが一部だけ成功した場合、成功分のポインタはstateへ反映するがline_capacityは変更しない。
+// stateの行情報配列をneed_rows行以上へ拡張する。本文セルの容量は増やさない。
+// 返り値: 成功true、不正な状態・確保失敗false。一部の再確保だけ成功した場合もポインタは更新されるが行容量は保持する。
 bool editor_ensure_row_capacity(struct editor_state *state, int need_rows){
     if(state == NULL || state->str.line == NULL || state->str.line_offset == NULL ||
        state->str.line_cap == NULL || need_rows < 0){
@@ -326,11 +305,8 @@ bool editor_ensure_row_capacity(struct editor_state *state, int need_rows){
     return true;
 }
 
-// count_line_cells(): 1行分の文字列が画面上で占める桁数の上限を数える。
-// UTF-8ではバイト数が表示桁数以上になるため、バイト数を桁数の上限として使える。
-// タブは展開後の幅で数える。改行文字はバッファへ入れないので除く。
-// 引数: buff='\0'終端の行データ、indent_range=タブ1個の展開幅。
-// 返り値: 桁数の上限。
+// NUL終端のbuffをバイト単位で数え、タブをindent_rangeセルに展開した必要セル数の上限を返す。
+// CR/LFは除外する。UTF-8入力を想定し、buffは非NULL、indent_rangeは正の値とする。
 static size_t count_line_cells(const char *buff, int indent_range){
     size_t cells = 0;
     for(const char *p = buff; *p != '\0'; p++){
@@ -342,10 +318,8 @@ static size_t count_line_cells(const char *buff, int indent_range){
     return cells;
 }
 
-// set_line_memory(): ファイル各行の開始位置(ftell)を保存し、後で任意行へfseekできるようにする。
-// 併せて全行の合計桁数を数え、file_total_str_sizeへ書き込む。
-// 引数: state=開いているFILE*と、default_load_line_size要素以上の行開始位置配列を持つ状態。
-// 返り値: なし。
+// stateの現在のFILE位置から行頭オフセットと必要セル数の上限を収集する。読込上限はdefault_load_line_size行。
+// 返り値: なし。有効なFILEと行頭配列が必要で、再走査時のFILE位置と行カウンタは呼び出し側で戻す。
 void set_line_memory(struct editor_state *state){
     int max_line_size = state->settings_data->max_line_size;
     // 危険: max_line_sizeは設定JSONで上限を検査していない。
@@ -387,10 +361,8 @@ void set_line_memory(struct editor_state *state){
     return;
 }
 
-// load_string_data(): 保存済みの行開始位置から指定行数分だけ読み込み、
-// file_str_dataへ文字列として格納する。
-// 引数: state=読み込み元FILE*と確保済みfile_str_data、load_start_line=開始行、load_size=読み込む行数。
-// 返り値: なし。load_start_lineが記録済み行数以上ならプロセスを終了する。
+// stateの記録済みload_start_lineへシークし、最大load_size回のfgetsで確保済みfile_str_dataへ読み込む。
+// 返り値: なし。開始行が記録数以上ならexit(1)。1回の読込幅はwrite_area.wで、EOF・NULLの格納先で打ち切る。
 void load_string_data(struct editor_state *state,long load_start_line,int load_size){
     if(load_start_line >= state->file_data.file_line_start_num_counter){
         exit(1);
@@ -406,13 +378,8 @@ void load_string_data(struct editor_state *state,long load_start_line,int load_s
     }
 }
 
-// load_all_lines(): 開いたファイル全体を編集用のwide-char行バッファへ読み込む。
-// バッファはset_line_memory()が数えた合計桁数(+行ごとの余白)分だけ確保し、
-// 各行を先頭から詰めながらline_offset/line_capを確定させる。
-// 画面幅には一切依存しないため、リサイズしても再読み込みは不要。
-// 引数: state=開いているFILE*・行開始位置・編集バッファ。
-// 返り値: なし。ファイル読み込み失敗時はエラー画面へ移行し、編集バッファ確保失敗時はプロセスを終了する。
-// 所有権: 読み込み成功時はchr_file_all_str_dataと編集バッファをstateが所有する。
+// stateのファイル全文と、記録済み行数分の編集セル配列を読み直す。タブは空白、全角の後続セルは0にする。
+// 返り値: なし。確保した本文はstateが所有し、ファイル読込失敗はエラー画面、編集バッファ確保失敗はexit(1)。
 void load_all_lines(struct editor_state *state){
     long line_count = (state->file_data.file_line_start_num_counter < 1 )
         ?1:state->file_data.file_line_start_num_counter;
@@ -530,11 +497,8 @@ void load_all_lines(struct editor_state *state){
     }
 }
 
-// editor_buffer_to_utf8(): 編集中のwide-char行バッファをUTF-8文字列へ変換する。
-// 各論理行の末尾に'\n'を付け、セル値0は出力しない。
-// 引数: state=変換元の編集バッファと行数を持つエディタ状態。
-// 返り値: 成功時はNUL終端されたUTF-8文字列。引数不正、容量超過、確保・変換失敗時はNULL。
-// 所有権: 成功時の返値は呼び出し側がfree()する。
+// stateの編集セルを現在のロケールでマルチバイト化し、各行末に改行を付ける。UTF-8利用時は対応ロケールが必要。
+// 返り値: 呼び出し側がfreeするNUL終端文字列、状態不正・容量超過・確保・変換失敗はNULL。値0のセルは出力しない。
 char *editor_buffer_to_utf8(struct editor_state *state)
 {
     int line_count;
@@ -595,9 +559,8 @@ char *editor_buffer_to_utf8(struct editor_state *state)
     return text;
 }
 
-// save_file(): 編集バッファを同じディレクトリの一時ファイルに書き、成功時だけ置き換える。
-// 引数: state=保存先パスと編集バッファを持つエディタ状態。
-// 返り値: なし。
+// stateの本文を保存先と同じディレクトリの一時ファイルへ書き、成功時だけ置き換えてFILEを更新する。
+// 返り値: なし。保存先未指定は設定に応じて作成確認かエラー画面へ、保存失敗はエラー画面へ遷移する。NULLは何もしない。
 void save_file(struct editor_state *state){
     if(state == NULL)return;
 
@@ -695,10 +658,8 @@ void save_file(struct editor_state *state){
     set_line_memory(state);
 }
 
-// load_screen_size(): ファイル読み込み後に行開始位置と編集バッファを作り直し、
-// 表示開始行とカーソル行を先頭へ戻す。
-// 引数: state=ファイル読み込み後に初期化するエディタ状態。
-// 返り値: なし。
+// ファイル読み込み後に行開始位置と編集バッファを作り直し、表示開始行とカーソル行を先頭へ戻す。
+// 引数: state=ファイル読み込み後に初期化するエディタ状態。 返り値: なし。
 void load_screen_size(struct editor_state *state){
     state->file_data.file_line_start_num_counter = 0;
     set_line_memory(state);
@@ -707,9 +668,8 @@ void load_screen_size(struct editor_state *state){
     state->cursor.file_pos = (struct pos){0,0};
 }
 
-// load_default_editor_settings(): エディタ設定へコンパイル時の既定値を入れる。
-// 引数: settings_data=初期化する設定構造体。
-// 返り値: なし。
+// エディタ設定へコンパイル時の既定値を入れる。
+// 引数: settings_data=初期化する設定構造体。 返り値: なし。
 void load_default_editor_settings(struct editor_settings *settings_data){
     settings_data->default_load_line_size       = DEFAULT_LOAD_LINE_SIZE;
     settings_data->load_buffer_lines            = LOAD_BUFFER_LINES;
@@ -739,19 +699,16 @@ void load_default_editor_settings(struct editor_settings *settings_data){
     settings_data->key_log_settings.key_log_buffer_size = DEFAULT_KEY_LOG_BUFFER_SIZE;
 }
 
-// file_select_line_update(): 現在の選択行をprevious_lineに保存し、新しい選択行を設定する。
-// 引数: file_select_line=更新対象の選択行状態、line=新しい行番号。NULLは指定できない。
-// 返り値: なし。
+// 現在の選択行をprevious_lineに保存し、新しい選択行を設定する。
+// 引数: file_select_line=更新対象の選択行状態、line=新しい行番号。NULLは指定できない。 返り値: なし。
 void file_select_line_update(struct file_select_line *file_select_line,int line){
     file_select_line->previous_line = file_select_line->now_line;
     file_select_line->now_line = line;
 }
 
 
-// input_mode_tmp_path(): set時にpathポインタを内部の一時パスとして保存する。
-// get時はpathが値渡しのため、現実装では呼び出し側へ保存値を返せない。
-// 引数: path=set時に保存する文字列ポインタ、flags=setまたはget。pathがNULLなら何もしない。
-// 返り値: なし。文字列は複製・解放せず、所有権は呼び出し側に残る。
+// flagsがsetならpathを借用して内部に保持する。NULLは何もしない。
+// 返り値: なし。getは値渡しのローカル変数だけを書き換えるため、呼び出し側へパスを返さない。
 void input_mode_tmp_path(char *path,enum flags flags){
     if(path == NULL)return;
     static char *tmp_path = NULL;
@@ -765,12 +722,8 @@ void input_mode_tmp_path(char *path,enum flags flags){
 }
 
 
-// now_open_path_name(): 現在パスの設定・取得と、wide-char文字列への変換を行う。
-// set時はpath->path_nameと末尾名を内部へ複製し、get時にpathがあれば内部パスポインタと名前・種類を格納する。
-// 引数: path=set時はpath_nameが必須の入力、get時は保存情報の出力先。flags=setまたはget。
-// 返り値: 成功時は現在パスのwide-char文字列。引数不正、メモリ確保、文字変換失敗時はNULL。
-// 所有権: 返値とget時に格納するpath_nameは内部保持であり、呼び出し側はfree()しない。
-// wide-charの返値は次回呼び出しで上書きされ、get時のpath_nameは次回setで無効になる。
+// flags=setでpathのパスを内部複製し、getでpathがあれば借用パス・名前・種類を書き戻す。
+// 返り値: 次回呼出しまで有効なワイド文字列、失敗NULL。返値は解放不可、getのpath_nameは次回setで無効になる。
 const wchar_t *now_open_path_name(struct dir_table *path,enum flags flags){
     if((path == NULL || path->path_name == NULL) && flags == set)return NULL;
 
@@ -834,9 +787,8 @@ const wchar_t *now_open_path_name(struct dir_table *path,enum flags flags){
     return wide_path;
 }
 
-// check_dir_mem(): 現在パスの末尾名を含むディレクトリエントリを最大size件収集する。
-// 引数: dir_table=結果の格納先配列、size=配列の要素数。0以下は無効。
-// 返り値: 格納した件数。引数不正、文字変換、ディレクトリオープン失敗時は-1。
+// 現在パスの末尾名を含むディレクトリエントリを最大size件収集する。
+// 引数: dir_table=結果の格納先配列、size=配列の要素数。0以下は無効。 返り値: 格納した件数。引数不正、文字変換、ディレクトリオープン失敗時は-1。
 int check_dir_mem(struct dir_table *dir_table,int size){
     if(dir_table == NULL || size <= 0)return -1;
     memset(dir_table,0,(size_t)size * sizeof(*dir_table));
@@ -887,9 +839,8 @@ int check_dir_mem(struct dir_table *dir_table,int size){
     return dir_mem_counter;
 }
 
-// get_path_state(): パスの実体をstat()で調べ、ファイルまたはディレクトリへ分類する。
-// 引数: path=判定するNUL終端パス。
-// 返り値: 通常ファイルならfile、ディレクトリならfolder、その他はunkown、NULLならerror。
+// パスの実体をstat()で調べ、ファイルまたはディレクトリへ分類する。
+// 引数: path=判定するNUL終端パス。 返り値: 通常ファイルならfile、ディレクトリならfolder、その他はunkown、NULLならerror。
 enum select_state get_path_state(const char *path){
     if(path == NULL)return error;
     struct stat stat_state = {0};
@@ -911,9 +862,8 @@ enum select_state get_path_state(const char *path){
     else return unkown;
 }
 
-// now_input_path_open(): パス入力欄の完成済みパスを開き、種類に応じて画面状態を更新する。
-// 引数: state=読込先の編集状態、ctx=ファイルブラウザと描画状態を持つ入力context。
-// 返り値: 成功時0、引数不正・判定失敗時-1。完成パスが無い場合はtrue。
+// パス入力欄の完成済みパスを開き、種類に応じて画面状態を更新する。
+// 引数: state=読込先の編集状態、ctx=ファイルブラウザと描画状態を持つ入力context。 返り値: 成功時0、引数不正・判定失敗時-1。完成パスが無い場合はtrue。
 int now_input_path_open(struct editor_state *state,struct editor_input_context *ctx){
     if(state == NULL || ctx == NULL)return -1;
     struct dir_table dir_info = {0};
@@ -959,9 +909,8 @@ int now_input_path_open(struct editor_state *state,struct editor_input_context *
 }
 
 
-// file_browser_show_mem_start_num(): ファイルブラウザの表示開始位置を保存または取得する。
-// 引数: start_num=set時に保存する位置、flags=getまたはset。
-// 返り値: get時は保存値、それ以外は-1。set時も保存後に-1を返す。
+// ファイルブラウザの表示開始位置を保存または取得する。
+// 引数: start_num=set時に保存する位置、flags=getまたはset。 返り値: get時は保存値、それ以外は-1。set時も保存後に-1を返す。
 int file_browser_show_mem_start_num(int start_num,enum flags flags){
     static int static_start_num = 0;
     if(flags == get)return static_start_num;

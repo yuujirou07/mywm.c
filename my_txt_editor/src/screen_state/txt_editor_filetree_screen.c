@@ -10,6 +10,8 @@
 
 
 
+// pathを起点とするツリーと直下項目の開閉状態を、未確保のfile_treeへ作成する。
+// 返り値: 成功0、作成・確保失敗-1。成功後は呼び出し側でroot_nodeをclose_treeし、open_check_dataをfreeする。
 int get_root_file_tree_data(file_tree_data *file_tree,char *path){
     file_tree->root_node = create_tree(path);
     if(file_tree->root_node == NULL){
@@ -40,6 +42,8 @@ int get_root_file_tree_data(file_tree_data *file_tree,char *path){
     return 0;
 }
 
+// file_treeからtable_ptrの開閉情報を探し、なければ配列を拡張して閉じた状態で追加する。
+// 返り値: 内部要素の借用ポインタ、確保失敗NULL。後の追加で再確保されると以前の返値は無効になり得る。
 ft_path_open_check_data *get_filetree_item_data(file_tree_data *file_tree,
                                                 struct table *table_ptr){
     for(int i = 0;i < file_tree->open_count_num;i++){
@@ -62,9 +66,8 @@ ft_path_open_check_data *get_filetree_item_data(file_tree_data *file_tree,
     return &new_data[new_count - 1];
 }
 
-// show_filetree(): 画面左端にファイルツリーの枠を作り、編集領域をその幅だけ右へ寄せる。
-// 引数: ctx=画面サイズ・編集領域・ファイルツリーを持つ入力context。
-// 返り値: なし。
+// ctxのツリーを画面上のft_boxに表示する状態へ変更し、編集領域・ステータスバー・カーソルを合わせる。
+// 返り値: なし。本文と枠の再描画を要求し、ツリーの内容は解放しない。
 void show_filetree(struct editor_input_context *ctx,struct box ft_box){
     struct editor_state *state = ctx->state;
 
@@ -92,9 +95,8 @@ void show_filetree(struct editor_input_context *ctx,struct box ft_box){
     state->render_flags |= RENDER_FILE_DATA;
 }
 
-// hide_filetree(): ファイルツリーを閉じ、編集領域を元の位置へ戻す。
-// 引数: ctx=画面サイズ・編集領域・ファイルツリーを持つ入力context。
-// 返り値: なし。
+// ファイルツリーを閉じ、編集領域を元の位置へ戻す。
+// 引数: ctx=画面サイズ・編集領域・ファイルツリーを持つ入力context。 返り値: なし。
 void hide_filetree(struct editor_input_context *ctx){
     struct editor_state *state = ctx->state;
 
@@ -121,6 +123,8 @@ void hide_filetree(struct editor_input_context *ctx){
 
 
 
+// ctxのツリー画面でchの開閉・幅変更・マウス操作・行ジャンプを処理する。input_resultは未使用。
+// 返り値: qによる終了要求はfalse、それ以外はtrue。ctxの各画面状態とウィンドウは設定済みとする。
 bool handle_filetree_screen_input(struct editor_input_context *ctx,wint_t ch,int input_result){
     (void)input_result;
     struct editor_state *state = ctx->state;
@@ -160,6 +164,8 @@ bool handle_filetree_screen_input(struct editor_input_context *ctx,wint_t ch,int
 }
 
 
+// filetree_dataの枠を画面上の矩形filetree_boxへ値コピーする。
+// 返り値: 常に0。範囲検査・描画・編集領域の更新は行わない。
 int set_filetree_box(file_tree_data *filetree_data,struct box filetree_box){
     filetree_data->ft_box = filetree_box;
     return 0;
@@ -167,6 +173,8 @@ int set_filetree_box(file_tree_data *filetree_data,struct box filetree_box){
 
 
 
+// tree_tableの子の名前を、filetree_box左上にlayer列・pos_y行を加えた位置へ順に描く。
+// 返り値: 常に0。現実装は各項目の座標を進めず、同じ場所へ重ねて描く。
 int set_tree_item(struct box filetree_box,int layer,int pos_y,struct table *tree_table){
     int x = filetree_box.pos.x + layer;
     int y = filetree_box.pos.y + pos_y;
@@ -178,6 +186,8 @@ int set_tree_item(struct box filetree_box,int layer,int pos_y,struct table *tree
 }
 
 
+// ctxの既存ツリー幅が画面内なら、幅をwidthへ更新して編集領域と再描画要求を設定する。
+// 返り値: 更新0、既存幅が0以下または画面幅以上なら-1。新しいwidthの範囲は呼び出し側で保証する。
 int change_file_tree_width(struct editor_input_context *ctx,int width){
     int x = getmaxx(stdscr);
     
