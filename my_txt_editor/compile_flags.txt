@@ -3,3 +3,4 @@
 -Iinclude
 -Iinclude/lsp_src
 -Isrc/screen_state
+-Iftj_temp
