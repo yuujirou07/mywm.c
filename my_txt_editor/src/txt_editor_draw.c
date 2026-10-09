@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <dirent.h>
 #include <ncurses.h>
 #include <stddef.h>
@@ -1165,7 +1166,16 @@ int clear_status_bar_outline(struct editor_state *state){
 }
 
 
+// 補完候補枠(編集領域内座標)を画面座標へ変換して返す。
+static struct box complete_box_screen(struct editor_state *state){
+    struct box b = state->edit_input_complete_data.box;
+    b.pos.x += state->write_area.x_start;
+    b.pos.y += state->write_area.y_start;
+    return b;
+}
+
 // stateの補完表示設定とカーソル位置から候補枠を配置・保存し、内部消去と枠描画を行う。
+// 枠の位置は編集領域内座標で保存する(描画時に画面座標へ変換する)。
 // 返り値: 常に0。縦の配置余地が足りない場合はエラー画面へ遷移する。
 int draw_editor_complete_word_box(struct editor_state *state){
 
@@ -1176,46 +1186,40 @@ int draw_editor_complete_word_box(struct editor_state *state){
     //補完ウィンドウが動く前に消しておく
     if(state->edit_input_complete_data.box.h > 0 && 
         state->edit_input_complete_data.box.w > 0){
-        clear_box_area(state->edit_input_complete_data.box);
+        clear_box_area(complete_box_screen(state));
     }
 
     struct box old_box = {0};
     if(state->edit_input_complete_data.show_data.pos_mode == EDIT_COMP_TRACKING){
         old_box = state->edit_input_complete_data.box;
     }
-        
+
     switch(state->edit_input_complete_data.show_data.pos_mode){
         case EDIT_COMP_TRACKING:
         case EDIT_COMP_UNKNOWN:
             tmp_mouse_pos = tmp_pos;
-            tmp_mouse_pos.x += state->write_area.x_start;
-            tmp_mouse_pos.y += state->write_area.y_start + 1;
+            tmp_mouse_pos.y += 1;
             break;
 
         case EDIT_COMP_FIXED_TOP_LEFT:
-            tmp_mouse_pos =
-                (struct pos){state->write_area.x_start,state->write_area.y_start};
+            tmp_mouse_pos = (struct pos){0,0};
             break;
 
         case EDIT_COMP_FIXED_TOP_RIGHT:
-            tmp_mouse_pos =
-                (struct pos){state->write_area.x_end,state->write_area.y_start};
+            tmp_mouse_pos = (struct pos){state->write_area.w,0};
             break;
 
         case EDIT_COMP_FIXED_BOTTOM_LEFT:
-            tmp_mouse_pos =
-                (struct pos){state->write_area.x_start,state->write_area.y_end};
+            tmp_mouse_pos = (struct pos){0,state->write_area.h};
             break;
 
         case EDIT_COMP_FIXED_BOTTOM_RIGH:
-            tmp_mouse_pos =
-                (struct pos){state->write_area.x_end,state->write_area.y_end};
+            tmp_mouse_pos = (struct pos){state->write_area.w,state->write_area.h};
             break;
 
         default:
             tmp_mouse_pos = tmp_pos;
-            tmp_mouse_pos.x += state->write_area.x_start;
-            tmp_mouse_pos.y += state->write_area.y_start + 1;
+            tmp_mouse_pos.y += 1;
     }
 
 
@@ -1229,24 +1233,27 @@ int draw_editor_complete_word_box(struct editor_state *state){
     if(tmp_comp_box.pos.x < 0 ){
         tmp_comp_box.pos.x = 0;
     }
-    else if(tmp_comp_box.pos.x + tmp_comp_box.w >= state->write_area.x_end){
-        tmp_comp_box.pos.x = state->write_area.x_end - tmp_comp_box.w;
+
+    else if(tmp_comp_box.pos.x + tmp_comp_box.w >= state->write_area.w){
+        tmp_comp_box.pos.x = state->write_area.w - tmp_comp_box.w;
     }   
+
     //編集画面下とカーソルの間がウィンドウの縦サイズより小さくなった場合上に表示する
-    if(state->write_area.y_end - tmp_comp_box.pos.y < tmp_comp_box.h){
-        if(tmp_comp_box.pos.y - state->write_area.y_start < tmp_comp_box.h){
+    if(state->write_area.h - tmp_comp_box.pos.y < tmp_comp_box.h){
+        if(tmp_comp_box.pos.y < tmp_comp_box.h){
             editor_error_screen(state,"youre screen is so small resize bigger");
             return 0;
         }
-        tmp_comp_box.pos.y = state->write_area.y_start + tmp_pos.y - tmp_comp_box.h;
+        tmp_comp_box.pos.y = tmp_pos.y - tmp_comp_box.h;
     }
     state->edit_input_complete_data.box = tmp_comp_box;
 
-    //補完ウィンドウ移動後の下の文字の再描画
-    if(!(old_box.pos.x == 0 || old_box.pos.y == 0)){
+    //補完ウィンドウ移動後の下の文字の再描画(未表示なら旧枠はw,hが0)
+    if(old_box.w > 0 && old_box.h > 0){
         redraw_write_area_line_str(state,old_box.pos.y,old_box.h);
     }
-    draw_box(state->edit_input_complete_data.box,stdscr);
+
+    draw_box(complete_box_screen(state),stdscr);
     state->render_flags |= RENDER_BOX;
     return 0;
 }
@@ -1270,7 +1277,7 @@ int clear_box_area(struct box b){
 // 返り値: 常に0。候補数が0以下なら描画せず、空文字の候補行は飛ばす。
 int draw_edit_complete_world(struct editor_state *state){
     complete_world_data *cmp_data = &state->edit_input_complete_data.word_data;
-    struct box tmp_cmp_box = state->edit_input_complete_data.box;
+    struct box tmp_cmp_box = complete_box_screen(state);
 
     if(state->edit_input_complete_data.word_data.world_num <= 0)return 0;
     
@@ -1281,19 +1288,22 @@ int draw_edit_complete_world(struct editor_state *state){
     return 0;
 }
 
+// stateの編集領域のline行目からsize行分を、ファイル文字列から再描画する。sizeは編集領域の高さで切り詰める。
+// 引数: state=描画対象、line=再描画を始める編集領域内の相対行、size=再描画する行数。
+// 返り値: 成功なら0、ファイル未オープンまたはlineが表示・ファイル範囲外なら-1。
 int redraw_write_area_line_str(struct editor_state *state,uint16_t line,uint16_t size){
     if(state->file_data.is_open_file == false)return -1;
 
     if(state->file_data.file_str_line_end <= line || 
-        state->scr.scr_start_num >= line || 
-            state->scr.scr_start_num + state->write_area.h <= line){
+            state->scr.scr_start_num <= line){
         return -1;
     }
 
     size = (size > state->write_area.h)?state->write_area.h:size;
     for(int i = 0;i < size;i++){
+
         //論理行数
-        uint16_t ligical_line_num = state->scr.scr_start_num + line; 
+        uint16_t ligical_line_num = state->scr.scr_start_num + line + i; 
         long line_start_num = state->file_data.file_line_start_num[ligical_line_num];
         char *line_start_ptr = state->file_data.file_str_data[line_start_num];
 

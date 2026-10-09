@@ -135,6 +135,7 @@ bool handle_edit_screen_input(struct editor_input_context *ctx, int input_result
             }
             move_view_to_line(state, state->cursor.file_pos.y, state->cursor.file_pos.x);
             my_cur_set(state,true);
+
             handle_char_input(win, (wchar_t)ch, state);
             if(state->settings_data->lsp.lsp_use){
                 send_lsp_did_change(ctx);
@@ -153,6 +154,14 @@ bool handle_edit_screen_input(struct editor_input_context *ctx, int input_result
             if(state->settings_data->built_in_syntax){
                 set_syntax_data(&ctx->syntax_data,ctx);
             }
+            
+            if(state->settings_data->auto_complete_settings_data.auto_complete_enabled){
+
+                state->edit_input_complete_data.show = true;
+                state->render_flags |= RENDER_EDIT_COMPLETE_WINDOW;
+                state->render_flags |= RENDER_FILE_DATA;
+            }
+
         }
     }
     if(ch == 'q') {

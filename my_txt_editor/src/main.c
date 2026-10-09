@@ -166,6 +166,10 @@ int main(int argc, char *argv[])
         settings_data.auto_complete_settings_data.auto_complete_window_size.x;
 
 
+
+
+
+    
     my_cur_set(&state,true);
     raw();
     scrollok(win, TRUE);
@@ -442,7 +446,9 @@ int main(int argc, char *argv[])
     
 
         update_screen(&input_context);
-        if(editor_get_screen_state(&state) == edit_screen || editor_get_screen_state(&state) == filetree_screen){
+        if(editor_get_screen_state(&state) == edit_screen || 
+            editor_get_screen_state(&state) == filetree_screen){
+                
             if(state.settings_data->built_in_syntax){
                 apply_syntax_color(&input_context,input_context.syntax_data);
             }

@@ -40,7 +40,7 @@ static int lsp_write_all(int fd, const char *data, size_t len)
 }
 
 // fdからlenバイトをdataへ読む。短い読込みは続行し、EINTRは再試行する。
-// 返り値: 完了0、読込失敗・途中EOFは-1。dataにはlenバイト以上の領域が必要。
+// 返り値: 完了0、読込失敗・途中EOFは-1。成功時はdata[len]に'\0'を書くため、len+1バイトの領域が必要。
 static int lsp_read_all(int fd, char *data, size_t len)
 {
     size_t read_size = 0;
@@ -58,7 +58,7 @@ static int lsp_read_all(int fd, char *data, size_t len)
         }
         read_size += (size_t)result;
     }
-
+    data[len] = '\0';
     return 0;
 }
 
@@ -327,8 +327,8 @@ int lsp_send_initialize(int fd, int id, pid_t process_id, const char *root_uri)
 
 // fdからContent-Length付きメッセージを1件読み、NUL終端のJSON本文を確保する。
 // 返り値: 呼び出し側がfreeする本文、受信・解析・確保失敗はNULL。blocking fdでは全本文を受け取るまで待つ。
-char *lsp_read_message(int fd)
-{
+char *lsp_read_message(int fd){
+
     char header[LSP_HEADER_MAX + 1];
     size_t header_len = 0;
     size_t content_length;
@@ -341,7 +341,6 @@ char *lsp_read_message(int fd)
             return NULL;
         }
         header_len++;
-        header[header_len] = '\0';
 
         if(header_len >= 4 && strcmp(&header[header_len - 4], "\r\n\r\n") == 0){
             break;
@@ -367,7 +366,6 @@ char *lsp_read_message(int fd)
         return NULL;
     }
 
-    json[content_length] = '\0';
     return json;
 }
 
