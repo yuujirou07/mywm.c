@@ -106,6 +106,8 @@ int main(int argc, char *argv[])
     }
     init_pair(2, COLOR_BLACK, COLOR_WHITE);
     init_pair(3, COLOR_BLACK, COLOR_RED);
+    init_pair(4,COLOR_WHITE,COLOR_BLACK);
+    // 色ペア1〜4は本文・選択・エラー・枠消去用に固定。構文色はその次の番号から登録する。
     init_syntax_colors();
     init_pair(SETTINGS_ACCENT_COLOR_PAIR, COLOR_CYAN, COLOR_BLACK);
 
@@ -173,7 +175,7 @@ int main(int argc, char *argv[])
     my_cur_set(&state,true);
     raw();
     scrollok(win, TRUE);
-    mouseinterval(1);
+    mouseinterval(1); // クリックの判定待ちを最小にして、ダブルクリックを待たず即反応させる。
     mousemask(ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION, NULL);  
     
     // ファイルブラウザ初期ディレクトリの絶対パスを取得する。
@@ -281,6 +283,7 @@ int main(int argc, char *argv[])
 
     Start_Menu start_menu = NULL;
     bool open_start_menu = state.settings_data->show_start_menu;
+    // スタートメニューは共有ライブラリ(プラグイン)として実行時に読み込む。
     if(state.settings_data->show_start_menu){
         const char *plugin_name = "so_file/start_menu_plug.so";
         handle = dlopen(plugin_name, RTLD_NOW);
@@ -403,6 +406,7 @@ int main(int argc, char *argv[])
     get_root_file_tree_data(&state.file_tree_data,now_dir);
     free(now_dir);
 
+    // メインループ: LSP受信 → 補完枠の表示判定 → 描画 → 構文色の重ね塗り → キー入力待ち。
     int running = true;
     
     wint_t ch = 0;
@@ -442,9 +446,6 @@ int main(int argc, char *argv[])
         set_complete_str(&state,state.edit_input_complete_data.
                 comp_world_candidacy_part_data.complete_world_candidacy_part_str,1);
 
-
-    
-
         update_screen(&input_context);
         if(editor_get_screen_state(&state) == edit_screen || 
             editor_get_screen_state(&state) == filetree_screen){
@@ -456,6 +457,7 @@ int main(int argc, char *argv[])
             set_cur_pos(&state);
         }
 
+        // refresh中に端末カーソルが途中位置で点滅しないよう、一度隠してから戻す。
         bool is_cur_hide = false;
         if(input_context.state->is_cur_show){
             my_cur_set(&state,false);
@@ -482,6 +484,7 @@ int main(int argc, char *argv[])
 
         if (input_result == KEY_CODE_YES && ch == KEY_RESIZE) {
             handle_resize(win, &input_context);
+            // 画面寸法が変わると表示範囲が変わるため、構文情報を全再計算する。
             set_syntax_data(&input_context.syntax_data,&input_context);
             continue;
         }
@@ -489,6 +492,7 @@ int main(int argc, char *argv[])
         running = editor_handle_screen_input(&input_context, input_result, ch);
         continue;
     }
+    // 終了処理。確保した順の逆に解放し、最後にend_processでncursesを終了する。
     // resize_file_browser()がreallocした場合、最新のポインタはstate側にある。
     free(state.file_browse.dir_name_table);
     free(input_context.syntax_data.syntax_list_data.syntax_data);
@@ -574,6 +578,7 @@ static void lsp_poll_events(int *epfd, struct lsp_process *lsp, int timeout_ms)
 
         char *msg = lsp_read_message(lsp->from_server_fd);
         if(msg == NULL){
+            // 1件分の読み取りに失敗したら、壊れたストリームを読み続けないよう残りのイベントも打ち切る。
             //lspとの通信エラーが起きたことを画面に表示する
             break;
         }

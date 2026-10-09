@@ -1,7 +1,9 @@
 #include <ncurses.h>
+#include <stdint.h>
 #include<stdio.h>
 #include<string.h>
 #include<stdlib.h>
+#include <sys/types.h>
 #include <time.h>
 #include <wctype.h>
 #include<wchar.h>
@@ -31,6 +33,7 @@ static const struct {
 syntax_data **syntax_data_collection = NULL;
 static int garbage_collection_allocate_num = 256;
 static int collection_count = 0;
+static void color_text_cells(struct editor_state *state,int y,int x,int width,short color);
 
 
 // ncursesとstart_color初期化後に、利用可能な構文色ペアを4番以降へ登録する。
@@ -39,7 +42,7 @@ void init_syntax_colors(void){
     if(!has_colors())return;
     for(size_t i = 0;i < sizeof(syntax_colors) / sizeof(syntax_colors[0]);i++){
         short pair = (short)(4 + i);
-        if(pair >= COLOR_PAIRS)break;
+        if(pair >= COLOR_PAIRS)break; // 端末のペア上限を超える分は登録しない(syntax_color_pairが本文色へ退避)。
         short foreground = (COLORS >= 256)
             ? syntax_colors[i].color_256 : syntax_colors[i].color_8;
         init_pair(pair,foreground,COLOR_BLACK);
@@ -146,17 +149,18 @@ static int add_syntax_data(syntax *syntax,int x,int y,int word_len,syntax_type w
         list->syntax_list_allocate_num = count + 1;
     }
     
+    // 同じ始点の登録は後勝ちで上書きする。set_syntax_dataの呼び出し順が色の優先度になる。
     syntax_data *data = &list->syntax_data[count];
     bool use_new_arry = true; 
     for(int i = 0; i < count;i++){
-        if(list->syntax_data[i].area.st_x == x &&
-            list->syntax_data[i].area.st_y == y){
+        if(list->syntax_data[i].area.pos.x == x &&
+            list->syntax_data[i].area.pos.y == y){
                 data = &list->syntax_data[i];
                 memset(data,0,sizeof(syntax_data));
                 use_new_arry = false;
         }
     }
-    data->area = (syntax_area){.st_x = x,.st_y = y,.end_x = x + word_len - 1,.end_y = y};
+    data->area = (struct box){.pos = {x,y},.w = word_len,.h = 1};
     data->type = word_type;
     list->syntax_list_num = (use_new_arry)
         ?list->syntax_list_num+1:list->syntax_list_num;
@@ -233,6 +237,8 @@ int set_syntax_data(syntax *syntax,struct editor_input_context *ctx){
     syntax->syntax_list_data.syntax_list_num = 0;
     if(syntax->syntax_list_data.syntax_data == NULL)return -1;
 
+    // 色は画面に見えている行だけ計算する(hは画面相対、ファイル行はscr_start_numからのオフセット)。
+    // 同じ始点は後のscanが上書きするため、literal・コメント等の優先したい種別を後ろに置く。
     for(int h = 0;h < ctx->state->write_area.h;h++){
         int now_file_line_num = ctx->state->scr.scr_start_num + h;
         if(now_file_line_num < 0 || now_file_line_num >= editor_line_limit(ctx->state))break;
@@ -272,6 +278,7 @@ int update_line_syntax_data(struct editor_input_context *ctx,int line){
     if(syntax == NULL)return -1;
     if(syntax->syntax_list_data.syntax_data == NULL)return -1;
 
+    // 1行編集のたびに全画面を再解析しないよう、対象行の旧データだけを詰め直して再計算する。
     int h = line;
     int now_file_line_num = ctx->state->scr.scr_start_num + h;
     if(now_file_line_num < 0 || now_file_line_num >= editor_line_limit(ctx->state))return -1;
@@ -279,7 +286,7 @@ int update_line_syntax_data(struct editor_input_context *ctx,int line){
     int write_index = 0;
     for(int read_index = 0;read_index < list->syntax_list_num;read_index++){
         syntax_data *data = &list->syntax_data[read_index];
-        if(data->area.st_y == h)continue;
+        if(data->area.pos.y == h)continue;
         if(write_index != read_index)list->syntax_data[write_index] = *data;
         write_index++;
     }
@@ -303,11 +310,65 @@ int update_line_syntax_data(struct editor_input_context *ctx,int line){
     return syntax->syntax_list_data.syntax_list_num;
 }
 
+
+
+void set_syntax_color_line(struct editor_input_context *ctx,uint16_t line,uint16_t size){
+    syntax *tmp_syntax = &ctx->syntax_data;    
+    struct editor_state *state = ctx->state;
+
+    for(int i = 0;i < tmp_syntax->syntax_list_data.syntax_list_num;i++){
+
+        syntax_data tmp_syntax_data = tmp_syntax->syntax_list_data.syntax_data[i];
+        struct box syntax_box = tmp_syntax_data.area;
+
+        if(syntax_box.pos.y >= line && syntax_box.pos.y + syntax_box.h <= line + size){
+            int view_cols = editor_view_cols(state);
+            int col = syntax_box.pos.x;
+            if(syntax_box.pos.y >= state->write_area.h ||
+                col < 0 || col >= view_cols || syntax_box.w <= 0){
+                    continue;
+            }
+            
+            int end = col + (syntax_box.w < view_cols - col ? syntax_box.w : view_cols - col);
+            int logical_line = state->scr.scr_start_num + syntax_box.pos.y;
+            int len = editor_line_len(state,logical_line);
+            wint_t *cells = editor_line_cells(state,logical_line);
+            
+            if(cells == NULL)continue;
+            // 全角文字は2セル目が0で埋まっているため、着色範囲が文字の途中で切れないよう両端を広げる。
+            while(col > 0 && col < len && cells[col] == 0)col--;
+            while(end < len && end < view_cols && cells[end] == 0)end++;
+
+            
+            short syntax_color = syntax_color_pair(tmp_syntax_data.type);
+            color_text_cells(state,
+                syntax_box.pos.y + state->write_area.y_start,
+                col + state->write_area.x_start,
+                end - col,
+                syntax_color
+            );
+        }
+    }
+
+}
+
 // 画面座標(x,y)からwidthセルへ色ペアcolorを適用し、ACS罫線の属性は保持する。
 // 返り値: なし。ncurses初期化済みで有効な画面範囲を渡す。描画失敗は通知しない。
-static void color_text_cells(int y,int x,int width,short color){
+static void color_text_cells(struct editor_state *state,int y,int x,int width,short color){
     int start = -1;
     for(int i = 0;i < width;i++){
+
+        // 補完ウィンドウ上のセルは補完側の色を使うため、本文の構文色で上書きしない。
+        // start--は、ここで打ち切る時点でstartが未設定(-1)でも末尾の着色が走らないようにするため。
+        if(state->settings_data->auto_complete_settings_data.auto_complete_enabled &&
+            state->edit_input_complete_data.show){
+            struct box complete_box = complete_box_screen(state);
+            if(box_contains_point(complete_box,(struct pos){x + i,y}) == true){
+                start--;
+                break;
+            }
+        }
+        // 枠線(ACS文字)は属性を変えると崩れるので、その手前までで着色を区切る。
         if(mvinch(y,x + i) & A_ALTCHARSET){
             if(start >= 0){
                 mvchgat(y,x + start,i - start,A_NORMAL,color,NULL);
@@ -318,6 +379,7 @@ static void color_text_cells(int y,int x,int width,short color){
             start = i;
         }
     }
+
     if(start >= 0){
         mvchgat(y,x + start,width - start,A_NORMAL,color,NULL);
     }
@@ -331,24 +393,26 @@ int apply_syntax_color(struct editor_input_context *ctx,syntax syntax){
 
     int syntax_num = syntax.syntax_list_data.syntax_list_num;
     
-    // 前回の着色を戻してから、本文描画後の画面へ適用する。
+    // 本文描画の後に色だけを重ねる方式なので、まず色ペア1(通常色)に戻して前回の着色を消す。
     for(int h = 0;h < state->write_area.h;h++){
-        if(state->write_area.w > 0)
-            color_text_cells(state->write_area.y_start + h,state->write_area.x_start,
+        if(state->write_area.w > 0){
+            color_text_cells(state,state->write_area.y_start + h,state->write_area.x_start,
                 state->write_area.w,1);
+            }
     }
     if(syntax.lang == UNKNOWN)return 0;
 
     for(int i = 0;i < syntax_num;i++){
         syntax_data *data = &syntax.syntax_list_data.syntax_data[i];
-        syntax_area *area = &data->area;
-        if(area->st_y < 0 || area->end_y < 0)continue;
-        else if(area->st_y >= state->write_area.h || area->end_y >= state->write_area.h)continue;
+        struct box *area = &data->area;
+        if(area->pos.y < 0 || area->pos.y + area->h - 1 < 0)continue;
+
+        else if(area->pos.y >= state->write_area.h || area->pos.y + area->h - 1 >= state->write_area.h)continue;
 
         short syntax_color = syntax_color_pair(data->type); 
-        color_text_cells(state->write_area.y_start + area->st_y,
-            state->write_area.x_start + area->st_x,
-            area->end_x - area->st_x + 1,syntax_color);
+        color_text_cells(state,state->write_area.y_start + area->pos.y,
+            state->write_area.x_start + area->pos.x,
+            area->w,syntax_color);
     }
     return 0;
 }
@@ -368,7 +432,7 @@ int scan_syntax_method(syntax *syntax,wint_t *line_st_ptr,
         int word_len = x - start_x;
         while(x < line_len && iswspace(line_st_ptr[x]))x++;
         int next_x = x;
-        x--;
+        x--; // forのx++と合わせ、空白の次の文字から再走査する。
         if(next_x >= line_len || line_st_ptr[next_x] != L'(')continue;
         if(find_syntax_word(line_st_ptr,line_len,start_x,reserved_words,
             sizeof(reserved_words) / sizeof(reserved_words[0])) > 0)continue;
@@ -381,6 +445,7 @@ int scan_syntax_method(syntax *syntax,wint_t *line_st_ptr,
         int prev_x = start_x - 1;
         while(prev_x >= 0 && iswspace(line_st_ptr[prev_x]))prev_x--;
         syntax_type method_type = mthod;
+        // 直前が「.」「->」なら関数ではなくメンバー呼び出しとして別色にする。
         if(prev_x >= 0 && (line_st_ptr[prev_x] == L'.' ||
             (prev_x > 0 && line_st_ptr[prev_x] == L'>' && line_st_ptr[prev_x - 1] == L'-'))){
             method_type = member_method;
@@ -430,12 +495,13 @@ int scan_syntax_variable(syntax *syntax,wint_t *line_st_ptr,
             sizeof(type_words) / sizeof(type_words[0]));
         if(type_len == 0)continue;
 
+        // 「int *p」「int a, b」の変数名を色付けするため、型名とポインタ記号・空白を読み飛ばす。
         i += type_len;
         while(i < limit && (iswspace(line_st_ptr[i]) || line_st_ptr[i] == L'*'))i++;
         if(i >= limit)break;
         if(find_syntax_word(line_st_ptr,line_len,i,type_words,
             sizeof(type_words) / sizeof(type_words[0])) > 0){
-            i--;
+            i--; // 「unsigned int」のように型が続く場合は次ループで後ろの型から数え直す。
             continue;
         }
         if(!iswalpha(line_st_ptr[i]) && line_st_ptr[i] != L'_')continue;
@@ -444,10 +510,10 @@ int scan_syntax_variable(syntax *syntax,wint_t *line_st_ptr,
         while(i < limit && is_word_char(line_st_ptr[i]))i++;
         int word_len = i - st_pos_x;
         while(i < limit && iswspace(line_st_ptr[i]))i++;
-        if(i < limit && line_st_ptr[i] == L'(')continue;
+        if(i < limit && line_st_ptr[i] == L'(')continue; // 関数宣言は変数色にしない(Method側が着色する)。
 
         if(add_syntax_data(syntax,st_pos_x,h,word_len,comment) < 0)return -1;
-        i--;
+        i--; // forのi++で名前の直後の文字(,など)を読み飛ばさないための補正。
     }
     return 0;
 }
@@ -458,8 +524,7 @@ int move_syntax_pos_data(syntax *syntax,int y){
     if(syntax == NULL)return -1;
     syntax_list_data *syntax_list = &syntax->syntax_list_data;
     for(int i = 0;i <syntax_list->syntax_list_num;i++){
-        syntax_list->syntax_data[i].area.st_y +=y;
-        syntax_list->syntax_data[i].area.end_y += y;
+        syntax_list->syntax_data[i].area.pos.y += y;
     }
     return 0;
 }
@@ -494,9 +559,10 @@ int scroll_syntax_pos_data(syntax *syntax_ptr,int y,int view_rows){
 
     syntax_list_data *list = &syntax_ptr->syntax_list_data;
     int write_index = 0;
+    // スクロール後も再解析せず使い回し、画面外に出た分だけを前へ詰めて捨てる。
     for(int read_index = 0;read_index < list->syntax_list_num;read_index++){
         syntax_data *data = &list->syntax_data[read_index];
-        if(data->area.end_y < 0 || data->area.st_y >= view_rows)continue;
+        if(data->area.pos.y + data->area.h - 1 < 0 || data->area.pos.y >= view_rows)continue;
         if(write_index != read_index)list->syntax_data[write_index] = *data;
         write_index++;
     }

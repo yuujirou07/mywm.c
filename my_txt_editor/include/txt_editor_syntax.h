@@ -5,7 +5,7 @@
 
 #include <stddef.h>
 #include <wchar.h>
-
+#include<stdint.h>
 #include "editor_types.h"
 
 struct editor_input_context;
@@ -26,18 +26,9 @@ typedef enum{
 }syntax_type;
 
 
-// 本文表示領域の左上を原点とする0始まりの範囲。終端も範囲に含む。
-// xは行のwint_t配列の添字で、文字の端末表示幅を換算した座標ではない。
-typedef struct{
-    int st_x; // 開始列。
-    int st_y; // 開始行。ファイル行番号ではなく表示領域内の行番号。
-    int end_x; // 終了列。
-    int end_y; // 終了行。現在の解析ではst_yと同じ。
-}syntax_area;
-
 // 1つの着色範囲と、その分類。
 typedef struct{
-    syntax_area area; // 表示幅に切り詰めた着色範囲。
+    struct box area; // 本文表示領域内の範囲。pos.xとwはwint_t配列の添字と要素数、pos.yとhは行単位。
     syntax_type type; // 使用する色ペアを決める分類。
 }syntax_data;
 
@@ -140,4 +131,8 @@ int scroll_syntax_pos_data(syntax *syntax,int y,int view_rows);
 // 引数: ctxは有効なstateとsyntax_dataを持つコンテキスト、lineは表示領域先頭を0とする行。配列確保が必要。
 // 戻り値: 更新後の登録件数。無効な引数・未確保・追加失敗なら-1。
 int update_line_syntax_data(struct editor_input_context *ctx,int line);
+
+
+void set_syntax_color_line(struct editor_input_context *ctx,uint16_t line,uint16_t size);
+
 #endif

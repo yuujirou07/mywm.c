@@ -86,6 +86,8 @@ static void fix_line_damage(struct pos start_pos, int range, int step_x, int ste
                                       start_pos.x + (range - i) * step_x,
                                       line_ch);
 
+        // fix_line_cellは「既に正しい」で1を返す。両端から1セルずつ見て正常なセルが
+        // 2つ続いたら、それ以上内側は無事とみなして走査を打ち切る(毎回全セルを確認しない)。
         if(is_fixed_all >= 2){
             break;
         }
@@ -93,8 +95,9 @@ static void fix_line_damage(struct pos start_pos, int range, int step_x, int ste
 }
 
 // 指定した論理行を画面上の1行へ描画する。
-// 引数: state=文字バッファと書き込み領域、line=描画する論理行、screen_y=描画先の画面y座標。 返り値: なし。
-void draw_editor_buffer_line(struct editor_state *state, int line, int screen_y){
+// 引数: state=文字バッファと書き込み領域、line=描画する論理行、write_y=描画先の編集領域内y座標(write_area上端が0)。 返り値: なし。
+void draw_editor_buffer_line(struct editor_state *state, int line, int write_y){
+    int screen_y = state->write_area.y_start + write_y;
     //描画に使うのは可視幅だけ。バッファ側の容量とは無関係。
     int col_limit = editor_view_cols(state);
     if(screen_y < state->write_area.y_start || screen_y >= state->write_area.y_end || col_limit <= 0){
@@ -267,6 +270,8 @@ void draw_now_path_name(struct box file_browse_box,char *path_name){
     int inner_w = w - 2;
     int len = (int)strlen(path_name);
     if (len > inner_w && inner_w > 3) {
+        // 長いパスは先頭を"..."に置き換え、末尾側を残す(ファイル名側のほうが重要なため)。
+        // 残す先頭はなるべく'/'で区切り、ディレクトリ名が途中で切れないようにする。
         addstr("...");
         int diff = len - inner_w+strlen("...");
         char *path_start_ptr = strchr(&path_name[diff],'/');
@@ -365,6 +370,7 @@ void draw_select_dir_scene_color(struct editor_state *state,int dir_num,int num)
 
     if(state->file_browse.select_line.previous_line != state->file_browse.select_line.now_line){
         int previous_line = state->file_browse.area.pos.y + state->file_browse.select_line.previous_line;
+        // 色ペア1は通常の本文色。選択が移った前の行をここで元に戻す。
         mvchgat(previous_line,state->file_browse.area.pos.x,state->file_browse.area.w,A_NORMAL,1,NULL);
     }
     move(cur_y,cur_x);
@@ -409,6 +415,7 @@ void editor_screen_move_line(struct editor_input_context *ctx,int num){
         state->cursor.file_pos.x);
     state->scr.scr_start_num = next_scr_start;
 
+    // 表示がnum行ずれるので構文情報は逆向きにずらし、新しく見える端の1行だけ解析し直す。
     if(state->settings_data->built_in_syntax){
         scroll_syntax_pos_data(&ctx->syntax_data,-num,state->write_area.h);
         int update_line = num > 0 ? state->write_area.h - 1 : 0;
@@ -450,7 +457,7 @@ void editor_error_screen(struct editor_state *state,char *error_comment){
 void draw_file_data(struct editor_state *state){
     for(int i = 0; i < state->write_area.h; i++){
         int line = state->scr.scr_start_num + i;
-        draw_editor_buffer_line(state, line, state->write_area.y_start + i);
+        draw_editor_buffer_line(state, line, i);
     }
 }
 
@@ -617,6 +624,7 @@ void update_screen(struct editor_input_context *ctx){
     struct editor_state *state = ctx->state;
     WINDOW *win = ctx->win;
 
+    // 各描画でカーソルが動くため、先にカーソル位置を確定させて描画後に反映させる。
     editor_sync_cursor(state);
 
     if(flags & RENDER_ALL){
@@ -646,6 +654,7 @@ void update_screen(struct editor_input_context *ctx){
             if(is_cur_move)cur_pos_push(mouse_pos,state);
         }
 
+        // 順序に意味がある。本文を描いた後で枠・ブラウザなどを重ねる(後から描く方が上に出る)。
         if(flags & RENDER_FILE_DATA){
             draw_file_data(state);
         }
@@ -688,6 +697,8 @@ void update_screen(struct editor_input_context *ctx){
                 const wchar_t *path = now_open_path_name(NULL,get);
                 //マウスカーソル分を確保するため両サイド合わせて-3する
                 int show_path_size = search_box.w - 3;
+                // 入力欄に収まらない長いパスは、入力中の末尾が見えるよう後ろから表示幅分だけ残す。
+                // 全角はセル幅2なので文字数ではなくwcwidthの合計で数える。
                 size_t path_start = wcslen(path);
                 int path_width = 0;
                 while(path_start > 0){
@@ -715,7 +726,7 @@ void update_screen(struct editor_input_context *ctx){
             draw_make_file_dialog(ctx);
         }
         if(flags & RENDER_EDIT_COMPLETE_WINDOW){
-            draw_editor_complete_word_box(state);
+            draw_editor_complete_word_box(ctx);
             draw_edit_complete_world(state);
 
         }
@@ -1011,6 +1022,7 @@ static void draw_settings_explanation_box(struct editor_input_context *ctx){
     if(explanation_str_len <= 0)return;
     //説明ウィンドウの座標から画面下までのセル数
     int explanation_box_max_h = (y - st_scr_data.box.pos.y);
+    // 説明枠の最小幅で説明文を折り返した場合の必要行数。これを満たす最小の枠サイズを下で探す。
     //説明ウィンドウの横幅に説明文を入れきれるかの計算
     int explanation_str_h = (explanation_str_len/(SETTINGS_EXPLATAION_BOX_MIN_W - 2)) + 1;
     
@@ -1040,6 +1052,7 @@ static void draw_explanation_str(const char *str,struct box box){
     int str_len = strlen(str);
     if(str_len <= 0)return;
 
+    // 枠線の左右1セルずつを除いた内側幅(box.w-2)で割り、切り上げた行数が必要行数になる。
     int loop_h = (str_len + box.w - 3) / (box.w - 2);
     int offset = 0;
     for(int h = 0;h < loop_h;h++){
@@ -1127,6 +1140,7 @@ static int draw_filetree(struct editor_input_context *ctx,file_tree_data *filetr
         //未実装   
     }
 
+    // 画面行は描画のたびに振り直す。-1のまま残った項目は画面外で、クリック判定に当たらない。
     for(int i = 0;i < filetree_data->open_count_num;i++){
         filetree_data->open_check_data[i].screen_y = -1;
     }
@@ -1167,7 +1181,7 @@ int clear_status_bar_outline(struct editor_state *state){
 
 
 // 補完候補枠(編集領域内座標)を画面座標へ変換して返す。
-static struct box complete_box_screen(struct editor_state *state){
+struct box complete_box_screen(struct editor_state *state){
     struct box b = state->edit_input_complete_data.box;
     b.pos.x += state->write_area.x_start;
     b.pos.y += state->write_area.y_start;
@@ -1177,12 +1191,14 @@ static struct box complete_box_screen(struct editor_state *state){
 // stateの補完表示設定とカーソル位置から候補枠を配置・保存し、内部消去と枠描画を行う。
 // 枠の位置は編集領域内座標で保存する(描画時に画面座標へ変換する)。
 // 返り値: 常に0。縦の配置余地が足りない場合はエラー画面へ遷移する。
-int draw_editor_complete_word_box(struct editor_state *state){
+int draw_editor_complete_word_box(struct editor_input_context *ctx){
+    struct editor_state *state = ctx->state;
 
     struct pos tmp_mouse_pos;
     state->edit_input_complete_data.show = true;
     struct pos tmp_pos = editor_cursor_write_area_pos(state);
 
+    // 枠は入力のたびに位置が変わるため、動く前に旧枠を消し、下に隠れていた本文は後で描き直す。
     //補完ウィンドウが動く前に消しておく
     if(state->edit_input_complete_data.box.h > 0 && 
         state->edit_input_complete_data.box.w > 0){
@@ -1238,6 +1254,7 @@ int draw_editor_complete_word_box(struct editor_state *state){
         tmp_comp_box.pos.x = state->write_area.w - tmp_comp_box.w;
     }   
 
+    // 下に収まらないときはカーソルの上側へ反転表示する(上にも収まらなければ画面が小さすぎる)。
     //編集画面下とカーソルの間がウィンドウの縦サイズより小さくなった場合上に表示する
     if(state->write_area.h - tmp_comp_box.pos.y < tmp_comp_box.h){
         if(tmp_comp_box.pos.y < tmp_comp_box.h){
@@ -1251,8 +1268,11 @@ int draw_editor_complete_word_box(struct editor_state *state){
     //補完ウィンドウ移動後の下の文字の再描画(未表示なら旧枠はw,hが0)
     if(old_box.w > 0 && old_box.h > 0){
         redraw_write_area_line_str(state,old_box.pos.y,old_box.h);
+        if(state->settings_data->built_in_syntax){
+            set_syntax_color_line(ctx,old_box.pos.y,old_box.h);
+        }
     }
-
+    clear_box_area(complete_box_screen(state));
     draw_box(complete_box_screen(state),stdscr);
     state->render_flags |= RENDER_BOX;
     return 0;
@@ -1263,11 +1283,9 @@ int draw_editor_complete_word_box(struct editor_state *state){
 // 返り値: 幅・高さが2以下なら-1、それ以外0。ncursesの描画失敗は通知しない。
 int clear_box_area(struct box b){
     if(b.h <= 2 || b.w <= 2)return -1;
-    wchar_t clear_line[b.w + 1];
-    wmemset(clear_line,L' ',b.w);
-    clear_line[b.w] = L'\0';
     for(int i = 0;i < b.h;i++){
-        mvaddnwstr(b.pos.y + i,b.pos.x,clear_line,b.w);
+        // 色ペア4(構文色の先頭)で塗る。b.w-1にして右端の枠線列は残す。
+        mvhline(b.pos.y + i,b.pos.x,L' '|COLOR_PAIR(4),b.w - 1);
     }
     return 0;
 }
@@ -1292,24 +1310,19 @@ int draw_edit_complete_world(struct editor_state *state){
 // 引数: state=描画対象、line=再描画を始める編集領域内の相対行、size=再描画する行数。
 // 返り値: 成功なら0、ファイル未オープンまたはlineが表示・ファイル範囲外なら-1。
 int redraw_write_area_line_str(struct editor_state *state,uint16_t line,uint16_t size){
-    if(state->file_data.is_open_file == false)return -1;
 
-    if(state->file_data.file_str_line_end <= line || 
-            state->scr.scr_start_num <= line){
+    if(line > state->write_area.h){
         return -1;
     }
 
-    size = (size > state->write_area.h)?state->write_area.h:size;
+    size = (size > state->write_area.h - line)?state->write_area.h - line:size;
     for(int i = 0;i < size;i++){
-
-        //論理行数
-        uint16_t ligical_line_num = state->scr.scr_start_num + line + i; 
-        long line_start_num = state->file_data.file_line_start_num[ligical_line_num];
-        char *line_start_ptr = state->file_data.file_str_data[line_start_num];
-
-        int line_y = state->write_area.y_start + line + i; 
-        int line_x = state->write_area.x_start;
-        mvaddnstr(line_y,line_x,line_start_ptr,strlen(line_start_ptr) + 1);
+        //行の範囲外はdraw_editor_buffer_line()が空行として扱う
+        draw_editor_buffer_line(state,state->scr.scr_start_num + line + i,line + i);
+        
     }
+
+
+
     return 0;
 }

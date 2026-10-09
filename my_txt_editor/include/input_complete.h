@@ -70,7 +70,7 @@ typedef struct{
 // 実行中の補完候補、入力途中の文字列、言語と表示設定。
 typedef struct{
     bool show; // 候補ウィンドウの表示状態。
-    struct box box; // 現在の候補ウィンドウの画面上の矩形。
+    struct box box; // 現在の候補ウィンドウの矩形。基準は編集領域(write_area)の左上=(0,0)。画面座標へはx_start/y_startを足す。
     complete_world_data word_data; // 補完候補の配列と件数。
     complete_world_candidacy_part_data comp_world_candidacy_part_data; // 入力途中の文字列。
     language lang; // 現在の補完対象言語。

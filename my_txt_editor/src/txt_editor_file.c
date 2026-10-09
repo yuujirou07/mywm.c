@@ -42,6 +42,7 @@ int load_dir_table(struct editor_state *state,struct dir_entry **table,int *tabl
     }
     struct dirent *ent;
     int entry_num = 0;
+    // 先に件数だけ数えて一度でテーブルを確保し、rewinddirで読み直す2パス方式にしている。
     while(readdir(dir) != NULL){
         entry_num++;
     }
@@ -145,6 +146,7 @@ void load_file(struct editor_state *state,struct dir_entry *table,int table_num,
     }
     select_state->select_state = file;
     //初回はNULLなので除外する
+    // 新しいファイルを開けた後で旧FILEを閉じる。開けなかったときに現在のファイルを失わないため。
     if(state->file_data.now_open_file != NULL){
         fclose(state->file_data.now_open_file);
     }
@@ -220,6 +222,8 @@ bool editor_ensure_line_cap(struct editor_state *state, int line, int need){
         return false;
     }
 
+    // 全行の本文は1本の連続バッファに詰めて持つ。1行だけ伸ばすと後続行を丸ごとずらし、
+    // 各行のoffsetも更新する必要がある。倍々で伸ばすのはこの高コストな操作の回数を減らすため。
     int old_cap = state->str.line_cap[line];
     int new_cap = (old_cap > 0) ? old_cap : EDITOR_LINE_COL_SLACK;
     while(new_cap < need){
@@ -307,6 +311,7 @@ bool editor_ensure_row_capacity(struct editor_state *state, int need_rows){
 
 // NUL終端のbuffをバイト単位で数え、タブをindent_rangeセルに展開した必要セル数の上限を返す。
 // CR/LFは除外する。UTF-8入力を想定し、buffは非NULL、indent_rangeは正の値とする。
+// 全角文字はUTF-8で複数バイトだが、バイト数のまま数えれば実セル数(1〜2)以上になり、確保不足を起こさない。
 static size_t count_line_cells(const char *buff, int indent_range){
     size_t cells = 0;
     for(const char *p = buff; *p != '\0'; p++){
@@ -331,6 +336,7 @@ void set_line_memory(struct editor_state *state){
     bool reached_eof = false;
     for(int i = 0; i < state->settings_data->default_load_line_size; i++){
         size_t dummy_buff_size = 0;
+        // 行頭のファイル位置を先に控える。後でfseekして必要な行だけ読み直すための目次になる。
         state->file_data.file_line_start_num[state->file_data.file_line_start_num_counter++]
             = ftell(state->file_data.now_open_file);
         if(fgets(dummy_buff, max_line_size, state->file_data.now_open_file) == NULL){
@@ -340,6 +346,7 @@ void set_line_memory(struct editor_state *state){
         }
         dummy_buff_size += count_line_cells(dummy_buff, indent_range);
 
+        // 1行がmax_line_sizeより長いとfgetsが途中で切れるため、改行に着くまで読み継いで1行分のセル数を数える。
         while(strlen(dummy_buff) == (size_t)(max_line_size - 1) && dummy_buff[max_line_size - 2] != '\n'){
             if(fgets(dummy_buff, max_line_size, state->file_data.now_open_file) == NULL){
                 //i行目の途中でEOFに達したので、i行目までが保存対象
@@ -582,6 +589,8 @@ void save_file(struct editor_state *state){
         return;
     }
 
+    // 保存は「同じディレクトリに一時ファイルを書いてrename」で置き換える。
+    // 書込み途中で失敗・停電しても元ファイルが壊れず、同一ディレクトリなのでrenameがアトミックになる。
     struct stat st;
     char resolved_path[PATH_MAX];
     const char *save_path = now_open_path_name;
@@ -592,9 +601,11 @@ void save_file(struct editor_state *state){
             editor_error_screen(state, "can not save file");
             return;
         }
+        // シンボリックリンクはrealpathで実体へ解決する。そのままrenameするとリンク自体が通常ファイルに置き換わる。
         save_path = resolved_path;
     }
     else{
+        // 新規作成時は、ENOENT以外の失敗や壊れたシンボリックリンクの上書きを避けて中止する。
         struct stat link_st;
         if(errno != ENOENT || lstat(now_open_path_name, &link_st) == 0 || errno != ENOENT){
             free(text);
@@ -634,6 +645,7 @@ void save_file(struct editor_state *state){
     size_t text_len = strlen(text);
     bool write_ok = fwrite(text, 1, text_len, file) == text_len;
     free(text);
+    // mkstempは0600で作るため、既存ファイルの権限(実行ビット等)を引き継ぐ。
     if(write_ok && existed && fchmod(fd, st.st_mode & 0777) != 0)write_ok = false;
     if(write_ok && fflush(file) != 0)write_ok = false;
     if(write_ok && fsync(fd) != 0)write_ok = false;
@@ -652,6 +664,7 @@ void save_file(struct editor_state *state){
         return;
     }
 
+    // renameで中身(inode)が入れ替わったため、開き直したFILEに差し替えて行頭位置も取り直す。
     if(state->file_data.now_open_file != NULL)fclose(state->file_data.now_open_file);
     state->file_data.now_open_file = replacement;
     state->file_data.file_line_start_num_counter = 0;

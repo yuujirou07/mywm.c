@@ -91,10 +91,10 @@ struct file_data{
     // 新規作成時は入力された相対パスまたは絶対パスをそのまま保持する。
     // now_open_path_name()内のファイルブラウザ用パスとは別に保持する。
     char    now_open_path_name[DEFAULT_PATH_NAME_MAX_SIZE];
-    long*   file_line_start_num;  // ファイル内で各行が始まるバイト位置。
+    long*   file_line_start_num;  // 論理行番号(0始まり)で引く、その行がfile_str_dataで始まる添字。
     long    file_line_start_num_counter; // file_line_start_numに登録済みの行数。
-    long    description_line_end; // 保存対象として扱う論理行数。
-    long    file_str_line_end;    // 可視文字がある最終行番号。
+    long    description_line_end; // 保存対象として扱う論理行数(論理行基準)。
+    long    file_str_line_end;    // 可視文字がある最終行番号(論理行基準。画面・スクロール位置とは無関係)。
     long    file_total_str_size;  //ファイル内の合計文字数
     bool    is_open_file;         // ファイルを開いて編集しているならtrue。
 };
@@ -162,9 +162,9 @@ struct file_select_line {
 // ファイルブラウザ画面の状態。外枠・内側領域・一覧テーブル・現在パス・選択行を
 // 1箇所にまとめる。描画側と入力側が同じ実体を直接見るので、実体を指す別名ポインタは持たない。
 struct file_browse_state{
-    struct box box; // ブラウザ全体の外枠。
-    struct box search_box; // パス入力欄の枠。
-    struct box area; // 外枠の内側で一覧を描く領域。
+    struct box box; // ブラウザ全体の外枠(画面座標)。
+    struct box search_box; // パス入力欄の枠(画面座標)。
+    struct box area; // 外枠の内側で一覧を描く領域(画面座標)。
     struct dir_entry *dir_name_table; // 一覧に出す名前と種別。
     int dir_name_table_rows; // dir_name_tableの確保済み行数。
     int dir_num; // ディレクトリ内の全エントリ数。
@@ -179,26 +179,26 @@ struct file_browse_state{
 
 // 文字入力・描画が許可される編集領域。
 struct write_possible_area {
-    int x_start; // 入力可能範囲の左端。
-    int y_start; // 入力可能範囲の上端。
-    int x_end; // 入力可能範囲の右端。
-    int y_end; // 入力可能範囲の下端。
-    int w; // 入力可能範囲の幅。
-    int h; // 入力可能範囲の高さ。
+    int x_start; // 入力可能範囲の左端(画面座標)。
+    int y_start; // 入力可能範囲の上端(画面座標)。
+    int x_end; // 入力可能範囲の右端(画面座標)。
+    int y_end; // 入力可能範囲の下端(画面座標)。
+    int w; // 入力可能範囲の幅(セル数)。
+    int h; // 入力可能範囲の高さ(行数)。
 };
 
 // 画面サイズ・スクロール開始行。
 // カーソル位置はここには持たない(struct cursorが唯一の保持場所)。
 struct scr_data {
-    struct pos scr_size; // 現在の画面サイズ。
-    int scr_start_num; // 画面先頭に表示している論理行番号。
+    struct pos scr_size; // 現在の画面サイズ(x=幅、y=高さ。座標ではなくセル数)。
+    int scr_start_num; // 編集領域の先頭行に表示している論理行番号(論理行基準)。
 };
 
 // 編集カーソルの論理ファイル座標と、描画時に計算した画面座標。
 struct cursor {
-    struct pos file_pos; // x=行頭からの桁、y=ファイル先頭からの論理行。
-    struct pos screen_pos; // x/y=画面上のカーソル座標。
-    struct pos show_cur_pos_queue; // refresh直前にmove()へ渡す画面上の退避座標。
+    struct pos file_pos; // 論理座標。x=行頭からの桁、y=ファイル先頭からの論理行(スクロールの影響を受けない)。
+    struct pos screen_pos; // 画面座標。file_posからwrite_areaの開始位置とscr_start_numで換算した値。
+    struct pos show_cur_pos_queue; // 画面座標。refresh直前にmove()へ渡す退避値。
 };
 
 // 編集バッファ本体と、行ごとの文字数・容量情報。
@@ -208,23 +208,23 @@ struct cursor {
 struct str_data {
     wint_t *wint_line_str_data; // 編集中テキストを保持するワイド文字バッファ。
     char   *chr_file_all_str_data; // ファイル全体をUTF-8文字列化するときの作業バッファ。
-    int    *line; // 各論理行の表示桁数。
-    long   *line_offset; // 各論理行がwint_line_str_data内で始まるインデックス。
-    int    *line_cap; // 各論理行に確保済みの列数。
+    int    *line; // 各論理行の表示桁数(論理行番号で引く)。
+    long   *line_offset; // 論理行番号で引く、その行がwint_line_str_data内で始まるインデックス。
+    int    *line_cap; // 論理行番号で引く、その行に確保済みの列数。
     long    total_capacity; // wint_line_str_data全体の要素数。
     int     line_capacity; // 扱える最大行数。
 };
 
 // 後で消去する矩形領域を一時的に保持する。
 struct clear_box_data{
-    struct box clear_box[box_retention_max]; // 消去予定の矩形配列。
+    struct box clear_box[box_retention_max]; // 消去予定の矩形配列(画面座標)。
     int clear_box_counter; // clear_boxに積まれている数。
 };
 
 // 次回更新で描く枠を積むキュー。配列と件数を分けて持つと
 // 「件数 <= 確保数」を呼び出し側が守る必要があるため、1つにまとめる。
 struct box_queue{
-    struct box box[DRAW_BOX_REQUEST_MAX]; // 積まれた枠。先頭からcount個が有効。
+    struct box box[DRAW_BOX_REQUEST_MAX]; // 積まれた枠(画面座標)。先頭からcount個が有効。
     int count; // boxに入っている有効な数。
 };
 
@@ -262,8 +262,8 @@ struct editor_state {
     struct box_queue           draw_box_queue; // 次回描画する枠のキュー。
     struct file_browse_state   file_browse; // ファイルブラウザ画面の状態。
     struct box                *status_bar; // main()が所有するステータスバー領域への借用ポインタ。
-    struct box                 ask_make_file_box; // 新規ファイル作成ダイアログ外枠。
-    struct box                 write_file_name_area; // 新規ファイル名入力欄。
+    struct box                 ask_make_file_box; // 新規ファイル作成ダイアログ外枠(画面座標)。
+    struct box                 write_file_name_area; // 新規ファイル名入力欄(画面座標)。
     struct file_data           file_data; // 現在開いているファイルと行情報。
     struct jump_mode           jump_mode_data; // 行ジャンプ入力状態。
     struct clear_box_data      clear_box_data; // 次回消去する矩形領域。
@@ -320,14 +320,14 @@ static inline void editor_set_screen_state(struct editor_state *state,
 
 // 編集画面の行番号欄と本文の境界線を描く端点。
 struct edit_screen_context {
-    struct pos line_start_pos; // 境界線の画面上の始点。
-    struct pos line_end_pos; // 境界線の画面上の終点。
+    struct pos line_start_pos; // 境界線の始点(画面座標)。
+    struct pos line_end_pos; // 境界線の終点(画面座標)。
 };
 
 // 新規ファイル作成ダイアログを配置するための画面中央座標。
 struct ask_make_file_mode_context {
-    int screen_center_y; // 画面中央のy座標。
-    struct pos screen_center_pos; // 画面中央のx/y座標。
+    int screen_center_y; // 画面中央のy座標(画面座標)。
+    struct pos screen_center_pos; // 画面中央のx/y座標(画面座標)。
 };
 
 typedef struct{
@@ -603,7 +603,7 @@ enum line_mode {
 };
 
 // txt_editor_draw.c
-void draw_editor_buffer_line(struct editor_state *state, int line, int screen_y);
+void draw_editor_buffer_line(struct editor_state *state, int line, int write_y);
 void draw_line_numbers(struct editor_state *state);
 void draw_line(struct pos start_pos,struct pos end_pos,WINDOW *win,enum line_mode mode);
 void draw_box(struct box box,WINDOW *win);
@@ -627,7 +627,8 @@ void draw_line_jump(struct editor_state *state);
 int set_clear_box(struct clear_box_data *clear_box_data,struct box box);
 int clear_status_bar_outline(struct editor_state *state);
 int clear_box_area(struct box b);
-int draw_editor_complete_word_box(struct editor_state *state);
+struct box complete_box_screen(struct editor_state *state);
+int draw_editor_complete_word_box(struct editor_input_context *ctx);
 int draw_edit_complete_world(struct editor_state *state);
 int redraw_write_area_line_str(struct editor_state *state,uint16_t line,uint16_t size);
 

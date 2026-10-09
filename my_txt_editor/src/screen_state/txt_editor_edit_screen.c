@@ -156,9 +156,7 @@ bool handle_edit_screen_input(struct editor_input_context *ctx, int input_result
             }
             
             if(state->settings_data->auto_complete_settings_data.auto_complete_enabled){
-
                 state->edit_input_complete_data.show = true;
-                state->render_flags |= RENDER_EDIT_COMPLETE_WINDOW;
                 state->render_flags |= RENDER_FILE_DATA;
             }
 

@@ -644,6 +644,7 @@ void editor_screen_mouse_event(struct editor_input_context *ctx){
         }
         if(is_cur_on_edit_screen){
             state->scr.scr_start_num++;
+            // 構文情報は画面相対行で持つため、既存分を1行ずらし、新しく見える最下行だけ解析する。
             if(state->settings_data->built_in_syntax){
                 scroll_syntax_pos_data(&ctx->syntax_data,-1,state->write_area.h);
                 update_line_syntax_data(ctx,state->write_area.h - 1);
@@ -664,6 +665,7 @@ void editor_screen_mouse_event(struct editor_input_context *ctx){
         }
         if(is_cur_on_edit_screen){ 
             state->scr.scr_start_num--;
+            // 下スクロールの逆。既存分を1行下げ、新しく見える最上行(0)だけ解析する。
             if(state->settings_data->built_in_syntax){
                 scroll_syntax_pos_data(&ctx->syntax_data,+1,state->write_area.h);
                 update_line_syntax_data(ctx,0);
@@ -768,6 +770,7 @@ void my_cur_set(struct editor_state *state,bool set){
 // 次回ncursesへ反映する画面カーソル座標をstateへ保存する。
 // 引数: pos=保存する画面座標、state=保存先のエディタ状態。posは値コピーされる。 返り値: 常に0。stateがNULLの場合の動作は未定義。
 int cur_pos_push(struct pos pos, struct editor_state *state){
+    // 描画中にカーソルを動かすと表示がちらつくため、座標は貯めておき最後にset_cur_posで反映する。
     state->cursor.show_cur_pos_queue = pos;
     return 0;
 }
@@ -867,6 +870,7 @@ int filetree_mouse_event(struct editor_input_context *ctx){
 // 指定座標がボックスの範囲内か判定する。
 // 引数: b=画面座標と幅・高さを持つボックス、p=判定する画面座標。 返り値: pが左上から右下の境界を含む範囲内ならtrue、それ以外はfalse。
 bool box_contains_point(struct box b,struct pos p){
+    // 右端・下端も含める(<=)。枠線を含む箱でクリック判定をするための仕様。
     if(b.pos.x <= p.x && b.pos.x + b.w >= p.x && 
         b.pos.y <= p.y && b.pos.y + b.h >= p.y)return true;
     return false;
@@ -962,6 +966,7 @@ int env_language_ctl(language *lang,enum flags flags){
 
 
 // stateのキー履歴へ文字ch・get_wch結果result・入力時のscreen_stateを追加する。
+// 履歴は設定上限までで打ち止めにし、長時間使ってもメモリが増え続けないようにしている。
 // 返り値: 通常0、再確保失敗-1。確保容量が設定上限以上なら、空きがあっても追加せず0を返す。
 int key_log_add(struct editor_state *state,wchar_t ch,int result,screen_state screen_state){
     if(state->key_bord_data.Key_log_data.key_allocate_num >= 
@@ -1037,3 +1042,4 @@ int get_write_screen_pos_chr(struct editor_state *state,struct pos pos,char *chr
     *chr = str_line_start_ptr[pos.x];
     return pos.x;
 }
+
