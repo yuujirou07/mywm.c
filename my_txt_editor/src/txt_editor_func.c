@@ -1031,8 +1031,9 @@ int get_write_screen_pos_chr(struct editor_state *state,struct pos pos,char *chr
     char *str_line_start_ptr = state->file_data.file_str_data[line_start_num];
     if((int)strlen(str_line_start_ptr) < pos.x){
         chr = NULL;
-        return 0;
+        return -1;
     }
+    
     *chr = str_line_start_ptr[pos.x];
     return pos.x;
 }
