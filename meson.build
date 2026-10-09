@@ -130,15 +130,17 @@ executable(
 # --- txt_editor ---
 ncursesw_dep = dependency('ncursesw')
 cjson_dep = meson.get_compiler('c').find_library('cjson')
+dl_dep = meson.get_compiler('c').find_library('dl')
 txt_editor_inc = include_directories(
     'my_txt_editor/include',
     'my_txt_editor/include/lsp_src',
+    'my_txt_editor/ftj_temp',
 )
 executable(
     'txt_editor',
     [
         'my_txt_editor/src/main.c',
-        'my_txt_editor/src/ftj.c',
+        'my_txt_editor/ftj_temp/ftj.c',
         'my_txt_editor/src/screen_state/txt_editor_state.c',
         'my_txt_editor/src/screen_state/txt_editor_edit_screen.c',
         'my_txt_editor/src/screen_state/txt_editor_file_browse_screen.c',
@@ -147,14 +149,22 @@ executable(
         'my_txt_editor/src/screen_state/txt_editor_make_file_screen.c',
         'my_txt_editor/src/screen_state/txt_editor_start_menu_screen.c',
         'my_txt_editor/src/screen_state/txt_editor_settings_screen.c',
+        'my_txt_editor/src/screen_state/txt_editor_filetree_screen.c',
         'my_txt_editor/src/txt_editor_func.c',
         'my_txt_editor/src/txt_editor_draw.c',
         'my_txt_editor/src/txt_editor_file.c',
+        'my_txt_editor/src/txt_editor_syntax.c',
         'my_txt_editor/src/json_read.c',
-        'my_txt_editor/src/my_cui_lib_linux.c',
         'my_txt_editor/src/error_log.c',
+        'my_txt_editor/src/path_util.c',
         'my_txt_editor/src/lsp_src/language_server_communication.c',
+        'my_txt_editor/src/settings_parse_src/editor_settings_parse.c',
+        'my_txt_editor/src/settings_parse_src/settings_items_parse.c',
+        'my_txt_editor/src/settings_parse_src/editor_icon_parse.c',
+        'my_txt_editor/src/plugin_src/edit_input_complete.c',
+        'my_txt_editor/src/public_settings_src/c_settings_src.c/c_settings_settings.c',
     ],
+    c_args: ['-D_DEFAULT_SOURCE', '-D_XOPEN_SOURCE=600'],
     include_directories: txt_editor_inc,
-    dependencies: [ncursesw_dep, cjson_dep],
+    dependencies: [ncursesw_dep, cjson_dep, dl_dep],
 )
