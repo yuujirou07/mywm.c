@@ -123,11 +123,6 @@ void close_table(struct table *table,int table_num){
 }
 
 
-
-
-
-
-
 // close_tree(): create_treeで作った木を全て解放する。
 // 引数: tree=create_treeの返り値(NULL可)。
 // 返り値: なし。呼び出し後のtreeは使用不可。
