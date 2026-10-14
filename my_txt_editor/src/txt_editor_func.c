@@ -969,9 +969,9 @@ int env_language_ctl(language *lang,enum flags flags){
 // 履歴は設定上限までで打ち止めにし、長時間使ってもメモリが増え続けないようにしている。
 // 返り値: 通常0、再確保失敗-1。確保容量が設定上限以上なら、空きがあっても追加せず0を返す。
 int key_log_add(struct editor_state *state,wchar_t ch,int result,screen_state screen_state){
-    if(state->key_bord_data.Key_log_data.key_allocate_num >= 
+    if(state->key_bord_data.Key_log_data.key_count >= 
             state->settings_data->key_log_settings.key_log_buffer_size){
-        return 0; 
+        return -1; 
     }
 
     if(state->key_bord_data.Key_log_data.key_log == NULL){

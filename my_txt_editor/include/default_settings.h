@@ -35,7 +35,7 @@
 
 #define DEFAULT_SETTINGS_LANGUAGE 2
 
-#define DEFAULT_USE_KEY_LOG false
+#define DEFAULT_USE_KEY_LOG true
 #define DEFAULT_KEY_LOG_BUFFER_SIZE 1024
 
 
@@ -101,6 +101,10 @@ struct editor_settings{
     icon_data icon_data; // 読み込んだ拡張子別アイコン配列を所有する。
     settings_lang settings_lang;
 };
+
+
+
+
 
 
 #endif 

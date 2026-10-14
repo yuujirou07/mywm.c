@@ -472,13 +472,21 @@ int main(int argc, char *argv[])
 
 
         input_result = get_wch(&ch);
-        key_log_add(
-            &state,
-            ch,
-            input_result,
-            editor_get_screen_state(&state)
-            );
         
+        //キーログスタックに追加する
+        if(state.settings_data->key_log_settings.use_key_log){
+            if(input_result == OK && iswalnum(ch)){
+                key_log_add(
+                    &state,
+                    ch,
+                    input_result,
+                    editor_get_screen_state(&state)
+                );
+            }
+        }
+        
+
+
         
         if (input_result == ERR)continue;
 
@@ -500,6 +508,8 @@ int main(int argc, char *argv[])
         close_tree(state.file_tree_data.root_node);
         state.file_tree_data.root_node = NULL;
     }
+
+
     if(state.file_tree_data.open_check_data != NULL){
         free(state.file_tree_data.open_check_data);
         state.file_tree_data.open_check_data = NULL;
@@ -509,6 +519,7 @@ int main(int argc, char *argv[])
             free(state.edit_input_complete_data.word_data.world[i]);
         }
     }
+
     if(state.edit_input_complete_data.word_data.world != NULL){
         free(state.edit_input_complete_data.word_data.world);
         state.edit_input_complete_data.word_data.world_allocate_num = 0;
@@ -528,6 +539,7 @@ int main(int argc, char *argv[])
     end_process(&state);
     return 0;
 }
+
 
 // stateの行・本文・設定項目・アイコン用メモリとログを解放し、端末表示を終了する。
 // 返り値: なし。stateとその参照先は初期化済みであること。
