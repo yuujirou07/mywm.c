@@ -1004,7 +1004,7 @@ static void draw_settings_explanation_box(struct editor_input_context *ctx){
     getyx(ctx->win,set_mouse_pos_y,set_mouse_pos_x);
 
     bool is_cur_showed = false;
-    if(state->is_cur_show){
+    if(state->cursor.is_cur_show){
         my_cur_set(state,false);
         is_cur_showed = true;
     }

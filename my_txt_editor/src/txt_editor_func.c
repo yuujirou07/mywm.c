@@ -80,7 +80,7 @@ void resize_file_browser(struct editor_state *state){
 void handle_resize(WINDOW *win, struct editor_input_context *ctx){
 
     struct editor_state *state = ctx->state;
-    bool is_cur_show = state->is_cur_show;
+    bool is_cur_show = state->cursor.is_cur_show;
     int right_margin = state->scr.scr_size.x - state->write_area.x_end;
     int bottom_margin = state->scr.scr_size.y - state->write_area.y_end;
 
@@ -763,7 +763,7 @@ bool get_file_browse_path_input_mode(struct file_browse_state *file_browse){
 // 引数: state=更新対象、set=trueで表示、falseで非表示。 返り値: なし。stateがNULLなら何もしない。curs_set()の失敗は通知しない。
 void my_cur_set(struct editor_state *state,bool set){
     if(state == NULL)return;
-    state->is_cur_show = set;
+    state->cursor.is_cur_show = set;
     curs_set(set);
 }
 
@@ -1043,3 +1043,41 @@ int get_write_screen_pos_chr(struct editor_state *state,struct pos pos,char *chr
     return pos.x;
 }
 
+
+
+
+
+int SetCursorModeScreen(struct editor_state *state,screen_state screen_state){
+    switch(screen_state){
+        case edit_screen:
+            SetCursorMode(state,CURSOR_INPUT_MODE);
+            SetCursorColor(state,CURSOR_COLOR_WHITE);
+            break;
+        default:
+            SetCursorMode(state,CURSOR_DEFAULT_MODE);
+            SetCursorColor(state,CURSOR_COLOR_DEFAULT);
+            break;
+    }
+    return 0;
+}
+
+
+int SetCursorMode(struct editor_state *state,CURSOR_MODE CurMode){
+    state->cursor.CurMode = CurMode;
+    fputs(CURSOR_SHAPE[state->cursor.CurMode],stdout);
+    fflush(stdout);
+    return 0;
+}
+
+int SetCursorColor(struct editor_state *state,CURSOR_COLOR color){
+
+    if((sizeof(CURSOR_COLOR_ESC)/sizeof(CURSOR_COLOR_ESC[0])) <= color){
+        error_log("cursor color error");
+        return -1;
+    }
+
+    state->cursor.Color = color;
+    fputs(CURSOR_COLOR_ESC[color],stdout);
+    fflush(stdout);
+    return 0;
+}

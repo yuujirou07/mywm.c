@@ -54,6 +54,34 @@ static const char *const SETTINGS_LANGUAGE_JSON_KEY_STR[] =
         "unknown",
     };
 
+static const char *const CURSOR_SHAPE[] = 
+    {
+        "\033[6 q",
+        "\033[2 q",
+        "\033[0 q",
+    };
+
+typedef enum{
+    CURSOR_INPUT_MODE   = 0,
+    CURSOR_NORMAL_MODE  = 1,
+    CURSOR_DEFAULT_MODE = 2,
+}CURSOR_MODE;
+
+
+
+static const char *const CURSOR_COLOR_ESC[] = 
+    {
+        "\033]12;#ffffff\a",
+        "\033]112\a",
+    };
+
+
+typedef enum{
+    CURSOR_COLOR_WHITE   = 0,
+    CURSOR_COLOR_DEFAULT = 1,
+}CURSOR_COLOR;
+
+
 
 
 // LSPの有効状態、起動方法、ポーリング条件を保持する設定。

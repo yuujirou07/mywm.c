@@ -19,7 +19,7 @@ bool handle_ask_make_file_mode_input(struct editor_input_context *ctx, int input
             state->make_file_mode_status.new_file_name[index + 1] = '\0';
             state->render_flags |= RENDER_MAKE_FILE;
         }
-        else if (input_result == KEY_CODE_YES && ch == KEY_BACKSPACE && state->is_cur_show
+        else if (input_result == KEY_CODE_YES && ch == KEY_BACKSPACE && state->cursor.is_cur_show
             && state->make_file_mode_status.new_file_name_counter > 0){
             state->make_file_mode_status.new_file_name_counter--;
             state->make_file_mode_status.new_file_name[
@@ -59,7 +59,7 @@ bool handle_ask_make_file_mode_input(struct editor_input_context *ctx, int input
     else{
         if(ch == 'y'){
             state->make_file_mode_status.is_input_scene = true;
-            state->is_cur_show = true;
+            state->cursor.is_cur_show = true;
             state->render_flags |= RENDER_MAKE_FILE;
             return true;
 
@@ -95,6 +95,6 @@ void show_make_file_prompt(WINDOW *win, struct editor_state *state, struct box *
     make_file_box.w = box_w;
 
     state->render_flags |= RENDER_MAKE_FILE;
-    state->is_cur_show = false;
+    state->cursor.is_cur_show = false;
     *file_box = make_file_box;
 }

@@ -19,6 +19,7 @@
 #include<sys/epoll.h>
 #include "c_settings.h"
 #include "ascii_art_comb.h"
+#include "default_settings.h"
 #include "ftj.h"
 #include "lsp_src/language_server_communication.h"
 #include "public_data/c_settings/c_settings_setting.h"
@@ -175,7 +176,7 @@ int main(int argc, char *argv[])
     my_cur_set(&state,true);
     raw();
     scrollok(win, TRUE);
-    mouseinterval(1); // クリックの判定待ちを最小にして、ダブルクリックを待たず即反応させる。
+    mouseinterval(0); // クリックの判定待ちを最小にして、ダブルクリックを待たず即反応させる。
     mousemask(ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION, NULL);  
     
     // ファイルブラウザ初期ディレクトリの絶対パスを取得する。
@@ -372,6 +373,9 @@ int main(int argc, char *argv[])
     state.file_browse.search_box.h = 3;
     state.file_browse.path_input_mode = false;
 
+    state.cursor.CurMode = CURSOR_INPUT_MODE;
+    state.cursor.Color   = CURSOR_COLOR_WHITE;
+
     input_context.start_menu_screen.open = &open_start_menu;
     input_context.start_menu_screen.has_plugin = (start_menu != NULL);
     input_context.start_menu_screen.plugin = start_menu;
@@ -459,7 +463,7 @@ int main(int argc, char *argv[])
 
         // refresh中に端末カーソルが途中位置で点滅しないよう、一度隠してから戻す。
         bool is_cur_hide = false;
-        if(input_context.state->is_cur_show){
+        if(input_context.state->cursor.is_cur_show){
             my_cur_set(&state,false);
             is_cur_hide = true;
             refresh();
@@ -472,7 +476,7 @@ int main(int argc, char *argv[])
 
 
         input_result = get_wch(&ch);
-        
+
         //キーログスタックに追加する
         if(state.settings_data->key_log_settings.use_key_log){
             if(input_result == OK && iswalnum(ch)){
@@ -537,6 +541,10 @@ int main(int argc, char *argv[])
         close(epfd);
     lsp_close_server(&lsp);
     end_process(&state);
+
+    fputs(CURSOR_SHAPE[CURSOR_DEFAULT_MODE],stdout);
+    fflush(stdout);
+
     return 0;
 }
 

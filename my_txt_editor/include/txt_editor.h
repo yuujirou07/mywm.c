@@ -59,6 +59,9 @@ enum render_flags {
     RENDER_EDIT_COMPLETE_WINDOW = 1 << 14,//入力補完ウィンドウの描画
 };
 
+
+
+
 // ファイルツリーは編集画面の左端に重ねて出し、編集領域をその幅だけ右へ寄せる。
 // 描画側でwrite_areaを書き換えると再描画やリサイズで位置がずれるため、
 // レイアウトの計算はeditor_apply_write_area()へ集約する。
@@ -199,6 +202,9 @@ struct cursor {
     struct pos file_pos; // 論理座標。x=行頭からの桁、y=ファイル先頭からの論理行(スクロールの影響を受けない)。
     struct pos screen_pos; // 画面座標。file_posからwrite_areaの開始位置とscr_start_numで換算した値。
     struct pos show_cur_pos_queue; // 画面座標。refresh直前にmove()へ渡す退避値。
+    bool is_cur_show; // カーソル表示中ならtrue。
+    CURSOR_MODE CurMode;
+    CURSOR_COLOR Color;
 };
 
 // 編集バッファ本体と、行ごとの文字数・容量情報。
@@ -214,6 +220,7 @@ struct str_data {
     long    total_capacity; // wint_line_str_data全体の要素数。
     int     line_capacity; // 扱える最大行数。
 };
+
 
 // 後で消去する矩形領域を一時的に保持する。
 struct clear_box_data{
@@ -273,7 +280,6 @@ struct editor_state {
     edit_input_complete_data   edit_input_complete_data;//入力補完データ
     key_bord_data              key_bord_data; //入力関連データ
     int                        render_flags; // update_screen()へ渡す再描画要求。
-    bool                       is_cur_show; // カーソル表示中ならtrue。
     bool                       mylsp_use; // 起動引数でLSP使用を要求されたならtrue。
 };
 
@@ -296,10 +302,17 @@ static inline enum screen_state editor_get_screen_state(struct editor_state *sta
     return editor_get_screen_state_log(state,0);
 }
 
+
+int SetCursorModeScreen(struct editor_state *state,screen_state screen_state);
+
 // stateの履歴へnext_stateを追加する。同じ画面への連続遷移は記録せず、満杯なら最古を捨てる。
 // 返り値: なし。stateの履歴件数と配列が初期化済みであること。
 static inline void editor_set_screen_state(struct editor_state *state,
                                         enum screen_state next_state){
+
+    
+    SetCursorModeScreen(state,next_state);
+
     struct screen_state_log *log = &state->screen_log;
 
     if(log->screen_state_log_counter > 0 &&
@@ -696,5 +709,8 @@ void my_mvaddstr(struct pos pos,char *str);
 
 
 int get_write_screen_pos_chr(struct editor_state *state,struct pos pos,char *chr);
+int SetCursorMode(struct editor_state *state,CURSOR_MODE CurMode);
+int SetCursorColor(struct editor_state *state,CURSOR_COLOR color);
 
+int SetCursorModeScreen(struct editor_state *state,screen_state screen_state);
 #endif

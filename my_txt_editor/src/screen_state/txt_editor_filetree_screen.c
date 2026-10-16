@@ -128,7 +128,7 @@ void hide_filetree(struct editor_input_context *ctx){
 bool handle_filetree_screen_input(struct editor_input_context *ctx,wint_t ch,int input_result){
     (void)input_result;
     struct editor_state *state = ctx->state;
-    if(state->is_cur_show)my_cur_set(state,false);
+    if(state->cursor.is_cur_show)my_cur_set(state,false);
     
     if(ch == CTRL('n')){
         // ツリーを出したキーと同じキーで閉じる。
