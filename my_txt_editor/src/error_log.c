@@ -11,7 +11,7 @@ void set_error_log_file(char *file_path){
         return;
     }
 
-    file = fopen(file_path,"w");
+    file = fopen(file_path,"a");
     if(file == NULL){
         //開けなかったことを通知する
         return;

@@ -965,58 +965,6 @@ int env_language_ctl(language *lang,enum flags flags){
 
 
 
-// stateのキー履歴へ文字ch・get_wch結果result・入力時のscreen_stateを追加する。
-// 履歴は設定上限までで打ち止めにし、長時間使ってもメモリが増え続けないようにしている。
-// 返り値: 通常0、再確保失敗-1。確保容量が設定上限以上なら、空きがあっても追加せず0を返す。
-int key_log_add(struct editor_state *state,wchar_t ch,int result,screen_state screen_state){
-    if(state->key_bord_data.Key_log_data.key_count >= 
-            state->settings_data->key_log_settings.key_log_buffer_size){
-        return -1; 
-    }
-
-    if(state->key_bord_data.Key_log_data.key_log == NULL){
-        state->key_bord_data.Key_log_data.key_allocate_num = 32;
-        state->key_bord_data.Key_log_data.key_count = 0;
-        state->key_bord_data.Key_log_data.key_log = 
-            malloc(sizeof(key_data) * 
-                state->key_bord_data.Key_log_data.key_allocate_num);
-
-        if(state->key_bord_data.Key_log_data.key_log == NULL){
-            error_log("malloc");
-            return -1;
-        }
-    }
-    else if(state->key_bord_data.Key_log_data.key_allocate_num <= 
-        state->key_bord_data.Key_log_data.key_count){
-        uint16_t tmp_realloc_num = 
-            (state->key_bord_data.Key_log_data.key_count * 2 >= 
-                state->settings_data->key_log_settings.key_log_buffer_size)?
-                state->settings_data->key_log_settings.key_log_buffer_size:
-                state->key_bord_data.Key_log_data.key_count * 2;
-        
-
-        key_data *tmp_key_data = 
-            realloc(
-                state->key_bord_data.Key_log_data.key_log,
-                sizeof(key_data) * tmp_realloc_num
-            );
-        if(tmp_key_data == NULL){
-            error_log("malloc");
-            return -1;
-        }
-        state->key_bord_data.Key_log_data.key_log = tmp_key_data;
-        state->key_bord_data.Key_log_data.key_allocate_num = tmp_realloc_num;
-    }
-
-    key_data *tmp_key_log = 
-        &state->key_bord_data.Key_log_data.key_log[state->key_bord_data.Key_log_data.key_count];
-    tmp_key_log->screen_state = screen_state;
-    tmp_key_log->input_result = result;
-    tmp_key_log->key = ch;
-    state->key_bord_data.Key_log_data.key_count++;
-    return 0;
-}
-
 int get_write_screen_pos_chr(struct editor_state *state,struct pos pos,char *chr){
     if(state->file_data.is_open_file == false){
         chr = NULL;

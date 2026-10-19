@@ -21,7 +21,7 @@
     }
   },
   "key_log": {
-    "enabled": false,
+    "enabled": true,
     "buffer_size": 1024
   },
   "settings_language":"c"

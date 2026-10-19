@@ -124,12 +124,12 @@ int load_icon_data(char *path,icon_data *icon_data_ptr){
 }
 
 
-// file_extの実在パスを調べ、ディレクトリ用・icon_data_ptrの拡張子対応・既定の順でアイコンを返す。
+// file_extの実在パスを調べ、ディレクトリまたはシンボリックリンクならフォルダ用、それ以外はicon_data_ptrの拡張子対応・既定の順でアイコンを返す。
 // 返値は借用文字列で解放不可。対応表内の返値は表の解放で無効になる。stat失敗時は拡張子対応・既定へ進む。
 const char *get_file_ext_code(char *file_ext,icon_data *icon_data_ptr){
 
     struct stat state;
-    if(stat(file_ext,&state) == 0 && S_ISDIR(state.st_mode))return "\U0001F4C2";
+    if(stat(file_ext,&state) == 0 && (S_ISDIR(state.st_mode) || S_ISLNK(state.st_mode)))return "\U0001F4C2";
     
     const char *return_code = "\uef4c";
     for(int i = 0;i < icon_data_ptr->icon_lib_num;i++){

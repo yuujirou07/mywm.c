@@ -9,6 +9,7 @@
 #include <dirent.h>
 #include <limits.h>
 #include"default_settings.h"
+#include "kbd_input_log.h"
 #include"lsp_src/language_server_communication.h"
 #include "editor_types.h"
 #include "settings_screen.h"
@@ -111,20 +112,6 @@ enum select_state{
 };
 
 
-// 現在表示している画面・入力モード。
-enum screen_state{
-    edit_screen,        // 通常の編集画面。
-    file_browse_screen, // ファイルブラウザ画面。
-    filetree_screen,    // ファイルツリー画面。
-    start_menu_screen,  // start menu pluginの画面。
-    error_screen,       // エラー表示画面。
-    line_jump_mode,     // 行ジャンプ番号入力中。
-    ask_make_file_mode, // 新規ファイル作成確認中。
-    setting_screen,     // 設定画面。
-    screen_state_log_error, // 指定された履歴位置が範囲外。
-};
-
-typedef enum screen_state screen_state;
 
 
 
@@ -240,23 +227,6 @@ struct screen_state_log{
     enum screen_state screen_state_log[screen_state_log_storage]; // 画面遷移履歴。
     int screen_state_log_counter; // 記録済みの遷移数。
 };
-
-typedef struct{
-    wchar_t key;
-    int input_result;
-    screen_state screen_state;
-}key_data;
-
-typedef struct{
-    key_data *key_log;
-    uint16_t key_count;
-    uint16_t key_allocate_num;
-}key_log_data;
-
-
-typedef struct{
-    key_log_data Key_log_data;
-}key_bord_data;
 
 // エディタ全体で共有する実行時状態。
 struct editor_state {
@@ -697,8 +667,6 @@ int init_settings_data(struct editor_input_context *ctx);
 int editor_set_env_lang(struct editor_input_context *ctx,language lang);
 int env_language_ctl(language *lang,enum flags flags);
 language get_env_language();
-int key_log_add(struct editor_state *state,wchar_t ch,int result,screen_state screen_state);
-int key_log_write_file();
 
 // screen_state/txt_editor_edit_screen.c
 int editor_input_str(struct editor_state *state,wchar_t *str);

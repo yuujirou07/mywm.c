@@ -5,6 +5,7 @@
 #include "input_complete.h"
 #include<ncurses.h>
 #include<editor_types.h>
+#include <stddef.h>
 
 #define MAX_LINES    1000 // 初期設定で扱う最大行数。
 #define MAX_LINE_SIZE 1024 // ファイル読込み時の1行バッファ長。
@@ -36,7 +37,7 @@
 #define DEFAULT_SETTINGS_LANGUAGE 2
 
 #define DEFAULT_USE_KEY_LOG true
-#define DEFAULT_KEY_LOG_BUFFER_SIZE 1024
+#define DEFAULT_KEY_LOG_BUFFER_SIZE 2048
 
 
 
@@ -101,9 +102,10 @@ typedef struct{
 }auto_complete_settings_data;
 
 
+// キー履歴の記録設定。
 typedef struct{
-    bool use_key_log;
-    int key_log_buffer_size;
+    bool use_key_log; // キー履歴を記録するならtrue。
+    size_t key_log_buffer_size; // 記録する最大件数。設定JSONでは1〜65535。
 }key_log_settings;
 
 // 既定値と設定JSONを統合した、実行中のエディタ設定。

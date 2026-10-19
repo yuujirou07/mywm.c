@@ -72,6 +72,11 @@ bool handle_edit_screen_input(struct editor_input_context *ctx, int input_result
             {(struct pos){0,0},x/10,y};
         show_filetree(ctx,tmp_ft_box);
     }
+    else if(ch == CTRL('u')){
+        
+
+
+    }
     else if(ch == CTRL(' ')){
        lsp_send_completion(ctx->lsp_data->to_server_fd,state);
     }

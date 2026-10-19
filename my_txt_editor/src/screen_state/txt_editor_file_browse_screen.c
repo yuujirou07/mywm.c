@@ -5,6 +5,7 @@
 #include <wchar.h>
 #include <wctype.h>
 #include "error_log.h"
+#include "txt_editor.h"
 #include "txt_editor_screen.h"
 #include "txt_editor_syntax.h"
 
@@ -13,6 +14,7 @@
 bool handle_file_browse_screen_input(struct editor_input_context *ctx, int input_result, wint_t ch){
     struct editor_state *state = ctx->state;
     struct file_browse_state *file_browse = &state->file_browse;
+
 
     //もしインプットモードなら英数字のキーには反応させない
     bool input_mode = get_file_browse_path_input_mode(file_browse);
@@ -25,7 +27,6 @@ bool handle_file_browse_screen_input(struct editor_input_context *ctx, int input
 
     //パスインプットモード判定
     if(ch == 'i' && !input_mode){
-        my_cur_set(state,true);
         set_file_browse_path_input_mode(
             file_browse,
             true
@@ -198,7 +199,7 @@ bool handle_file_browse_screen_input(struct editor_input_context *ctx, int input
                 state->render_flags |= RENDER_FILE_BROWSE;
             }
         }
-        if(ch == '\t' || ch == '\0' || ch == '\r' || ch == '\n' || ch == KEY_ENTER){
+        else if(ch == '\t' || ch == '\0' || ch == '\r' || ch == '\n' || ch == KEY_ENTER){
             
             const wchar_t *path = now_open_path_name(NULL,get);
             if(path == NULL)return true;
@@ -261,7 +262,7 @@ bool handle_file_browse_screen_input(struct editor_input_context *ctx, int input
         }
 
         //親ディレクトリ内の候補の更新
-        if(ch == KEY_BACKSPACE || (input_result == OK && iswprint(ch)) || ch == '\n'){
+        if(ch == KEY_BACKSPACE || (input_result == OK && iswprint(ch)) || ch == '\n' || ch == '\t'){
             int table_rows = file_browse->dir_name_table_rows;
             struct dir_table table[table_rows];
             int men_num = check_dir_mem(table,table_rows);

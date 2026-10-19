@@ -20,7 +20,6 @@ bool editor_handle_screen_input(struct editor_input_context *ctx, int input_resu
             return handle_settings_screen_input(ctx,ch,input_result);
         case filetree_screen:
             return handle_filetree_screen_input(ctx,ch,input_result);
-            // 未実装。入力を処理せずそのまま継続する。
             return true;
         case screen_state_log_error:
             return true;

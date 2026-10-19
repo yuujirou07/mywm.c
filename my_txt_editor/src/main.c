@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <bits/types/idtype_t.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <ncurses.h>
 #include <locale.h>
@@ -20,7 +21,9 @@
 #include "c_settings.h"
 #include "ascii_art_comb.h"
 #include "default_settings.h"
+#include "editor_types.h"
 #include "ftj.h"
+#include "kbd_input_log.h"
 #include "lsp_src/language_server_communication.h"
 #include "public_data/c_settings/c_settings_setting.h"
 #include "txt_editor.h"
@@ -97,6 +100,7 @@ int main(int argc, char *argv[])
 
     cbreak();
     noecho();
+    nodelay(stdscr,false);
     keypad(win, TRUE); 
     my_cur_set(&state,false);
     
@@ -386,6 +390,7 @@ int main(int argc, char *argv[])
     input_context.state->key_bord_data.Key_log_data.key_allocate_num = 0;
     input_context.state->key_bord_data.Key_log_data.key_count  = 0;
     input_context.state->key_bord_data.Key_log_data.key_log  = NULL;
+    KL_open_key_log_file("log_data/key_event.log");
     
     input_context.dl_data.now_loading_lib_allocate_num = 8;
     input_context.dl_data.now_loading_lib_num = 0;
@@ -417,6 +422,7 @@ int main(int argc, char *argv[])
     int input_result = 0;
     
 
+
     while (running) {
         
         //もしlspを使用する設定だったら
@@ -435,7 +441,7 @@ int main(int argc, char *argv[])
             continue;
         }
         
-
+        //補完候補があるか確認し、あれば補完ウィンドウを有効にする
         if(state.settings_data->auto_complete_settings_data.auto_complete_enabled){
             if(state.edit_input_complete_data.show){
                 if(state.edit_input_complete_data.comp_world_candidacy_part_data.comp_w_cand_part_d_count <= 0){
@@ -447,9 +453,11 @@ int main(int argc, char *argv[])
             }
         }
     
+        //デバッグ用
         set_complete_str(&state,state.edit_input_complete_data.
                 comp_world_candidacy_part_data.complete_world_candidacy_part_str,1);
 
+    
         update_screen(&input_context);
         if(editor_get_screen_state(&state) == edit_screen || 
             editor_get_screen_state(&state) == filetree_screen){
@@ -476,11 +484,11 @@ int main(int argc, char *argv[])
 
 
         input_result = get_wch(&ch);
-
+        
         //キーログスタックに追加する
         if(state.settings_data->key_log_settings.use_key_log){
             if(input_result == OK && iswalnum(ch)){
-                key_log_add(
+                KL_add(
                     &state,
                     ch,
                     input_result,
@@ -488,12 +496,16 @@ int main(int argc, char *argv[])
                 );
             }
         }
-        
 
 
         
+        size_t n = 0;
+        KL_GetScreenLog(edit_screen,&state,NULL,&n);
+        if(n > 0){
+        
+        }
+    
         if (input_result == ERR)continue;
-
         if (input_result == KEY_CODE_YES && ch == KEY_RESIZE) {
             handle_resize(win, &input_context);
             // 画面寸法が変わると表示範囲が変わるため、構文情報を全再計算する。

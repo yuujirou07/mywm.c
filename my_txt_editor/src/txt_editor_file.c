@@ -765,6 +765,7 @@ const wchar_t *now_open_path_name(struct dir_table *path,enum flags flags){
             free(saved_path);
             return NULL;
         }
+
         memcpy(saved_path,path->path_name,path_size + 1);
 
         free(now_open_path.path_name);
@@ -807,6 +808,8 @@ int check_dir_mem(struct dir_table *dir_table,int size){
     memset(dir_table,0,(size_t)size * sizeof(*dir_table));
 
     const wchar_t *path = now_open_path_name(NULL,get);
+
+    
     if(path == NULL){
         error_log("can not get now open path name");
         return -1;
