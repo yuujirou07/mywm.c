@@ -457,7 +457,15 @@ int main(int argc, char *argv[])
         set_complete_str(&state,state.edit_input_complete_data.
                 comp_world_candidacy_part_data.complete_world_candidacy_part_str,1);
 
-    
+        // refresh中に端末カーソルが途中位置で点滅しないよう、一度隠してから戻す。
+        bool is_cur_hide = false;
+        if(input_context.state->cursor.is_cur_show){
+            my_cur_set(&state,false);
+            is_cur_hide = true;
+            refresh();
+        }
+
+        
         update_screen(&input_context);
         if(editor_get_screen_state(&state) == edit_screen || 
             editor_get_screen_state(&state) == filetree_screen){
@@ -469,13 +477,6 @@ int main(int argc, char *argv[])
             set_cur_pos(&state);
         }
 
-        // refresh中に端末カーソルが途中位置で点滅しないよう、一度隠してから戻す。
-        bool is_cur_hide = false;
-        if(input_context.state->cursor.is_cur_show){
-            my_cur_set(&state,false);
-            is_cur_hide = true;
-            refresh();
-        }
         refresh();
 
         if(is_cur_hide){
